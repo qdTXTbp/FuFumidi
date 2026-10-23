@@ -42,7 +42,7 @@ function close() { state.ui.changelogOpen = false; }
 </template>
 
 <style scoped>
-.cl-mask { position: fixed; inset: 0; background: rgba(10,10,10,0.4); display: flex; align-items: center; justify-content: center; z-index: 990; }
+.cl-mask { position: fixed; inset: 0; background: rgba(10,10,10,0.4); display: flex; align-items: center; justify-content: center; z-index: calc(var(--z-overlay) - 1); }
 .cl-card { width: min(480px, 92vw); max-height: min(72vh, 640px); background: var(--canvas); border-radius: var(--r-lg);
   box-shadow: 0 24px 64px rgba(16,24,40,0.24); display: flex; flex-direction: column; overflow: hidden; }
 .cl-head { display: flex; align-items: center; gap: var(--sp-3); padding: 14px 16px 10px; }

@@ -38,7 +38,7 @@ const caf = (h) => (typeof cancelAnimationFrame === 'function'
  *   否则中段会被两头各乘一次（200ms 淡入 + 200ms 淡出铺在 22ms 的短音频上，
  *   中段只剩 0.25 倍）。这里按比例收缩到恰好相接。
  */
-function applyFades(buf, fadeInMs, fadeOutMs) {
+export function applyFades(buf, fadeInMs, fadeOutMs) {
   const sr = buf.sampleRate;
   const n = buf.length;
   let inN = Math.min(n, Math.max(0, Math.round((fadeInMs || 0) / 1000 * sr)));

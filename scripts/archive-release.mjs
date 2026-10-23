@@ -31,6 +31,10 @@ const plan = [
   { from: path.join(ROOT, 'scripts', 'release-notes-v' + ver + '.md'), to: 'RELEASE-NOTES-' + ver + '.md' },
 ];
 
+// P1-8：update-manifest.json 是可选产物（旧版本 Release 没有）；存在就一起归档
+const manifestFrom = path.join(rel, 'update-manifest.json');
+if (fs.existsSync(manifestFrom)) plan.push({ from: manifestFrom, to: 'update-manifest.json' });
+
 const missing = plan.filter(p => !fs.existsSync(p.from));
 if (missing.length) { console.error('缺少产物：\n  ' + missing.map(m => m.from).join('\n  ')); process.exit(3); }
 fs.mkdirSync(outDir, { recursive: true });

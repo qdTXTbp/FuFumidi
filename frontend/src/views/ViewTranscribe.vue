@@ -4,14 +4,18 @@ import { themeColor } from '../core/palette.js';
 import { ref, reactive, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 import Icon from '../components/Icon.vue';
 import { useAppStore } from '../stores/app';
+import { usePlaylistStore } from '../stores/playlist';
 import { clamp, esc, fmtTime } from '../core/util.js';
 import { t } from '../core/i18n.js';
+import { playDoneChime } from '../core/sfx.js';
 import NumSlider from '../components/NumSlider.vue';
 
 const app = useAppStore();
+const playlist = usePlaylistStore();
 const toast = (m, t) => app.toast(m, t);
 // 转录结果属于后台产物：正在播放时只入库，不抢切当前曲目（避免打断播放）
-const importFiles = (items) => app.importFiles(items, undefined, { keepPlaying: true });
+// target：队列指定的歌单 id | 'all'（只进全部曲目）| undefined（跟随当前歌单）
+const importFiles = (items, target) => app.importFiles(items, target, { keepPlaying: true });
 const setView = (v) => app.setView(v);
 
 const bridge = window.fuBridge;
@@ -21,7 +25,7 @@ const isDesktop = !!(bridge && bridge.convert);
 const mode = ref('universal');           // universal | piano | separate
 const umodel = ref('basic');             // 通用子模型：basic | muscriptor
 const msSize = ref('medium');            // MuScriptor 规格：small | medium | large
-const pmodel = ref('piano_pt');          // 钢琴子模型：piano_pt | aria | transkun
+const pmodel = ref('piano_pt');          // 钢琴子模型：piano_pt | aria | transkun | hft
 /* ★ Aria-AMT 需要 CUDA（2026-10-17 用户：「Aria-AMT 在转录页标注需要 CUDA」）。
    实测：没有 CUDA 时它直接抛 AssertionError: CUDA device not found，而界面只说「未下载」，
    用户会以为是模型没装。这里把"要不要 CUDA"和"当前有没有 CUDA"都摆到台面上。 */
@@ -37,6 +41,30 @@ void (async () => {
 })();
 const perf = ref('quality');             // quality | balanced | fast
 const perfHint = ref('');
+/* 识别片段长度（秒）：每种模型一次喂给模型识别的音频长度。
+   0 = 跟随模型默认（各模型默认不同：basic-pitch 内置窗约 2s、MuScriptor 5s、
+   piano-transcription 10s、Aria-AMT 30s、Transkun 由模型配置决定）。 */
+const segmentSec = ref(0);
+/* 转录前降噪：默认 off（保持旧输出完全一致）。选项来自引擎 audio_chain：
+   off / light（谱减）/ strong（UVR-DeNoise 模型，需资源中心下载）。
+   2026-10-15 实测降噪在部分素材会增加噪声引起的假音符，所以默认关、并写明代价。 */
+const denoiseMode = ref('off');
+/* 显存策略（硬件相关，存 localStorage，不进参数预设）：
+   auto=默认；low=低显存自动降批（推荐，避免驱动共享内存溢出慢 5–10×）；
+   allow=允许驱动借用系统内存（能跑完但可能明显变慢）。 */
+const memoryMode = ref(localStorage.getItem('fufumidi_memory_mode') || 'auto');
+function setMemoryMode(v) {
+  memoryMode.value = ['auto', 'low', 'allow'].includes(v) ? v : 'auto';
+  try { localStorage.setItem('fufumidi_memory_mode', memoryMode.value); } catch (e) {}
+}
+/** 各模型推荐片段长度（= 训练块长；见各引擎源码/配置） */
+const SEG_RECOMMEND = computed(() => {
+  if (mode.value === 'universal') return umodel.value === 'basic' ? 0 : 5;
+  if (pmodel.value === 'aria') return 30;
+  if (pmodel.value === 'transkun') return 16;
+  if (pmodel.value === 'hft') return 0;
+  return 10;
+});
 const bassBoost = ref(false);            // 低音增强（仅 basic 子模型）：关闭 melodia trick 以保留低音声部
 // 多条弯音曲线（仅 basic 子模型）：basic-pitch 唯一没转发的用户可见参数。
 // 开了以后同一音符可以挂多条弯音（颤音/滑音），**会真的落进导出的 MIDI**。
@@ -53,8 +81,6 @@ const maxFreq = ref(0);                  // 最高音高 Hz（仅 basic，0 = �
 const minFreq = ref(0);                  // 最低音高 Hz（仅 basic，0 = 不限制）：滤掉低频隆隆声/次声
                                          // ★ 2026-10-14：从「低音增强」里独立出来。用户决定**显式控件优先** ——
                                          //   勾「低音增强」只设 no_melodia（不再顺带把 min_freq 钉成 40）。
-const mergeOverlap = ref(true);          // 合并同音高重叠音符（默认开；关掉 = 引擎收 no_merge）
-const velNorm = ref(true);               // 力度归一化（默认开；关掉 = 引擎收 no_velnorm）
 const exportTempo = ref(0);              // 导出 BPM（0 = 用引擎默认 120 / 自动 BPM 优先）
 // ④ 批 B：MuScriptor 生成参数。默认全部保持「不传」—— 不传时上游走贪婪解码，
 // 结果可复现；调了 temperature / cfg_coef 才自动开采样（采样关着时这两个值是空转）。
@@ -62,29 +88,15 @@ const msTemp = ref(1.0);                 // 采样温度（1.0 = 不传）
 const msCfg = ref(1.0);                  // 引导系数（1.0 = 不传）
 const msBeam = ref(1);                   // 束搜索宽度（1 = 不传）
 const msPrelude = ref(true);             // 跨块延音缝合（默认开；关掉才传 false＝不缝合）
-/* 静音分段（长音频提速，**默认关** —— 用户 2026-10-14 定）：在完全空白静音处切段、
-   逐段转录、再合并成一份 MIDI。段与段之间本来就是静音，接缝处只是少一点上下文。
-   实测《原神》线上音乐会 2021（104 分钟）：−60 dBFS 下静音 439.5 s / 7.0%，可省约 7%；
-   静音多的素材（多曲目专辑、含掌声的现场、讲座）收益按比例更大。 */
-const msSegment = ref(false);            // 分段开关（默认关）
-const msSegmentMin = ref(2.0);           // 连续静音多久才值得切（秒）
-// ② 计算精度：默认 fp32（不传）—— bf16 改数值精度、属影响质量的开关，默认关。
-// 实测：CPU（Zen 5/AVX512-BF16）10 分钟素材待复测、15 秒素材 +43%；GPU 上 ≈0%；
-// 长素材（10 分钟/120 块）质量逐项相同，误差不累积。
-const msPrec = ref('fp32');
-// 乐器组约束（仅 MuScriptor）：MuScriptor 是**多乐器**模型，逐音符判定乐器组 —— 不给约束时
-// 它会在同一首歌里改判（实测《甩葱歌》：同一条旋律 24s→organ、33s→synth lead、43s→flutes、
-// 96s→voice），于是同一段旋律每隔几小节换一次音色。
-//   limit —— **硬约束**：只允许勾选的乐器组发声（引擎把其它组的 token 全部禁掉）
-//   none  —— 不干预，模型自由判定（默认）
+// MuScriptor 乐器组：none=不限定（默认）；limit=手动硬约束；probe_segments=按段自动探测并约束
 const msMode = ref('none');
-const msGroups = ref(['voice', 'drums']);          // 限定模式下允许的乐器组
+const msGroups = ref(['voice', 'drums']);
+const msProbeSegSec = ref(60);
 function toggleMsGroup(id) {
   const i = msGroups.value.indexOf(id);
-  if (i >= 0) { if (msGroups.value.length > 1) msGroups.value.splice(i, 1); return; }  // 至少留一组
+  if (i >= 0) { if (msGroups.value.length > 1) msGroups.value.splice(i, 1); return; }
   msGroups.value.push(id);
 }
-// MuScriptor 的全部乐器组（= 模型 tokenizer 的 MT3_FULL_PLUS_GROUP_NAMES，35 组）
 const MS_GROUPS = [
   { id: 'voice', cn: '人声' }, { id: 'acoustic_piano', cn: '钢琴' }, { id: 'electric_piano', cn: '电钢琴' },
   { id: 'acoustic_guitar', cn: '原声吉他' }, { id: 'clean_electric_guitar', cn: '清音电吉他' },
@@ -100,10 +112,15 @@ const MS_GROUPS = [
   { id: 'drums', cn: '鼓' }, { id: 'timpani', cn: '定音鼓' }, { id: 'chromatic_percussion', cn: '色彩打击乐' },
   { id: 'orchestra_hit', cn: '管弦齐奏' },
 ];
-/** 传给引擎的取值：'voice,drums'（手动硬约束）或 'none'（不限定）。
- *  'none' 必须显式送出去，不能靠"不发这个字段"表示不限定 —— 引擎的缺省语义是"不限制"，
- *  但历史上把"没给"当成过 auto，显式送值才不会再出歧义。 */
-const msInstrValue = computed(() => (msMode.value === 'limit' ? msGroups.value.join(',') : 'none'));
+const msInstrValue = computed(() => {
+  if (msMode.value === 'limit') return msGroups.value.join(',');
+  if (msMode.value === 'probe_segments') return 'probe_segments';
+  return 'none';
+});
+// ② 计算精度：默认 fp32（不传）—— bf16 改数值精度、属影响质量的开关，默认关。
+// 实测：CPU（Zen 5/AVX512-BF16）10 分钟素材待复测、15 秒素材 +43%；GPU 上 ≈0%；
+// 长素材（10 分钟/120 块）质量逐项相同，误差不累积。
+const msPrec = ref('fp32');
 const busy = ref(false);
 const done = ref(false);
 const progress = ref(0);
@@ -114,6 +131,9 @@ const logExpanded = ref(false);
 const lastOut = ref('');
 const doneInfo = ref('');
 const gpuInfo = ref('');
+const gpuDetail = ref('');          // 驱动版本 / 共享显存回退支持（P2 驱动检测）
+const umBusy = ref(false);
+const umResult = ref('');          // CUDA 统一内存实验输出（P2 实验，不改变转录）
 
 /* ---------------- 模型下载状态（用于标记哪些模型已安装） ---------------- */
 // key → model:list 返回条目的 id；basic / piano_pt 为内置兜底，始终就绪
@@ -146,16 +166,25 @@ function modelInstalled(key) {
 // 当前激活模型的可读名称（供日志标注）
 function currentModelLabel() {
   if (mode.value === 'separate') return t('HTDemucs 人声分离');
-  if (mode.value === 'universal') return umodel.value === 'muscriptor' ? ('MuScriptor ' + msSize.value.toUpperCase()) : 'Basic Pitch';
+  if (mode.value === 'universal') {
+    if (umodel.value === 'muscriptor') return 'MuScriptor ' + msSize.value.toUpperCase();
+    if (umodel.value === 'yourmt3') return 'YourMT3+';
+    if (umodel.value === 'miros') return 'MIROS';
+    return 'Basic Pitch';
+  }
   // piano
+  if (pmodel.value === 'hft') return 'hFT-Transformer';
   if (pmodel.value === 'piano_pt') return 'piano-transcription';
   return pmodel.value === 'aria' ? 'Aria-AMT' : 'Transkun';
 }
 function currentModelInstalled() {
   const key = mode.value === 'separate' ? 'demucs_htdemucs'
     : mode.value === 'universal'
-      ? (umodel.value === 'muscriptor' ? 'muscriptor_' + msSize.value : 'basic')
-      : (pmodel.value === 'aria' ? 'aria_amt' : pmodel.value === 'piano_pt' ? 'piano_pt' : 'transkun');
+      ? (umodel.value === 'muscriptor' ? 'muscriptor_' + msSize.value
+        : umodel.value === 'yourmt3' ? 'yourmt3'
+          : umodel.value === 'miros' ? 'miros' : 'basic')
+      : (pmodel.value === 'aria' ? 'aria_amt' : pmodel.value === 'piano_pt' ? 'piano_pt'
+        : pmodel.value === 'hft' ? 'hft_transformer' : 'transkun');
   const st = modelInstalled(key);
   return st; // true / false / null
 }
@@ -467,10 +496,9 @@ const pedal = ref(true);
 const drums = ref(false);
 const stemExport = ref(false);
 const stemFormat = ref('wav');
-// ★ 降噪不在转录页暴露：2026-10-15 基准实测两档降噪都会**增加**噪声引起的假音符
-//   （12 dB 素材：1 → 14/39；6 dB 素材：16 → 16/50），所以不摆这个开关。
-//   引擎侧仍支持 denoise_mode（CLI/实验用，见 engine/audio_chain.py），但界面不再发这个键。
-//   「响度平衡」同理：电平统一现在是恒定执行的（见 audio_chain 的 −16 dBFS），不再需要一个开关。
+// 降噪：2026-10-15 实测两档降噪都会增加噪声引起的假音符（12 dB 素材 1 → 14/39），
+// 所以默认关闭；2026-10-18 用户要求补回选项，高级参数里提供 off/light/strong 并写明代价。
+// 电平统一恒定执行（audio_chain 的 −16 dBFS），不设开关。
 const autoBpm = ref(true);   // 默认开启：转写出的 MIDI 按源音频自动测速，播放/导出与原曲速度一致
 
 // 转录队列（**当前激活队列**的条目；多队列见下方「多队列」一节）
@@ -481,6 +509,24 @@ const running = ref(false);
 const paused = ref(false);
 const cancelAll = ref(false);
 const currentJobId = ref(null);
+/* 运行中的队列 id：运行中允许切换**视图**，但正在跑的队列始终是这个 id；
+   顺序转录（chainMode）默认关，用户显式打开后才会一个队列接一个队列跑。 */
+const runningQueueId = ref(0);
+const chainMode = ref(false);
+try { chainMode.value = localStorage.getItem('fufumidi_chain_queues') === '1'; } catch (e) {}
+function setChainMode(v) {
+  chainMode.value = !!v;
+  try { localStorage.setItem('fufumidi_chain_queues', chainMode.value ? '1' : '0'); } catch (e) {}
+}
+let userPinnedQueue = false;     // 运行中用户手动切过视图 → 顺序转录不再自动跟随 */
+function pendingItemsOf(q) { return (q && Array.isArray(q.items) ? q.items : []).filter((i) => i.status === 'pending'); }
+/** 顺序转录的队列顺序：从当前激活队列开始、按列表顺序绕一圈 */
+function queueOrderFrom(activeId) {
+  const list = queues.slice();
+  const i = list.findIndex((q) => q.id === activeId);
+  if (i > 0) return list.slice(i).concat(list.slice(0, i));
+  return list;
+}
 
 // 音频信息 + 波形
 const audioInfo = ref('');
@@ -536,12 +582,15 @@ const showSpeedGroup = computed(() => mode.value === 'universal' && umodel.value
 // 两边名字必须逐字一致，否则网页版「切模型自动套默认」找不到预设。
 const WEB_MODEL_DEFAULTS = () => ({
   basic: 'Basic Pitch · 最优',
+  yourmt3: 'YourMT3+ · 最优',
+  miros: 'MIROS · 最优',
   muscriptor_small: 'MuScriptor · 最优',
   muscriptor_medium: 'MuScriptor · 最优',
   muscriptor_large: 'MuScriptor · 最优',
   piano_pt: '钢琴 · 最优',
   aria: 'Aria-AMT · 最优',
   transkun: 'Transkun · 最优',
+  hft: 'hFT-Transformer · 最优',
   separate: '分离 · 最优',
 });
 
@@ -551,24 +600,29 @@ const WEB_MODEL_DEFAULTS = () => ({
 const WEB_BUILTIN_PRESETS = () => {
   const basic = {
     model: 'basic', onset_threshold: 0.5, frame_threshold: 0.3, minimum_note_length: 128,
-    melodia: true, min_freq: 0, max_freq: 0, merge_overlap: true, vel_norm: true,
+    melodia: true, min_freq: 0, max_freq: 0,
     beat_grid: true, tempo: 0, perf: 'quality',
-    auto_bpm: false,
+    auto_bpm: false, denoise_mode: 'off', segment_sec: 0,
   };
   const piano = {
     onset_threshold: 0.3, frame_threshold: 0.1, min_note_ms: 60, merge_gap_ms: 30,
     include_pedal: true, perf: 'quality',
-    auto_bpm: false,
+    auto_bpm: false, denoise_mode: 'off', segment_sec: 10,
   };
   return [
     { name: 'Basic Pitch · 最优', mode: 'universal', params: { ...basic } },
+    { name: 'YourMT3+ · 最优', mode: 'universal', params: { ...basic,
+      model: 'yourmt3', segment_sec: 0 } },
+    { name: 'MIROS · 最优', mode: 'universal', params: { ...basic,
+      model: 'miros', segment_sec: 0 } },
     { name: 'MuScriptor · 最优', mode: 'universal', params: { ...basic,
-      model: 'muscriptor', model_size: 'medium', muscriptor_instruments: 'none',
+      model: 'muscriptor', model_size: 'medium',
       temperature: 1.0, cfg_coef: 1.0, beam_size: 1, prelude_forcing: true,
-      precision: 'fp32' } },
-    { name: '钢琴 · 最优', mode: 'piano', params: { ...piano, model: 'piano_pt' } },
-    { name: 'Aria-AMT · 最优', mode: 'piano', params: { ...piano, model: 'aria' } },
-    { name: 'Transkun · 最优', mode: 'piano', params: { ...piano, model: 'transkun' } },
+      precision: 'fp32', segment_sec: 5 } },
+    { name: '钢琴 · 最优', mode: 'piano', params: { ...piano, model: 'piano_pt', segment_sec: 10 } },
+    { name: 'Aria-AMT · 最优', mode: 'piano', params: { ...piano, model: 'aria', segment_sec: 30 } },
+    { name: 'Transkun · 最优', mode: 'piano', params: { ...piano, model: 'transkun', segment_sec: 16 } },
+    { name: 'hFT-Transformer · 最优', mode: 'piano', params: { ...piano, model: 'hft', segment_sec: 0 } },
     { name: '分离 · 最优', mode: 'separate', params: {
       onset_threshold: 0.5, frame_threshold: 0.3, minimum_note_length: 128,
       include_drums: true, stem_format: 'wav', perf: 'quality',
@@ -594,10 +648,17 @@ const pendingCount = computed(() => queue.filter(i => i.status === 'pending' || 
 
 /* ---------------- 队列 ---------------- */
 function addPaths(paths) {
+  const q = currentQueue();
   for (const p of (paths || [])) {
     if (!p) continue;
     if (queue.some(i => i.path === p)) continue;
-    queue.push({ id: nextId++, path: p, name: String(p).replace(/^.*[\\/]/, ''), status: 'pending', progress: 0, realPct: 0, duration: 0, out: '', note_count: 0, error: '' });
+    const it = { id: nextId++, path: p, name: String(p).replace(/^.*[\\/]/, ''), status: 'pending', progress: 0, realPct: 0, duration: 0, out: '', note_count: 0, error: '' };
+    queue.push(it);
+    // 运行中往当前视图队列加条目：同时写进队列对象，正在跑的 worker 才能捡到
+    if (q && q.id === runningQueueId.value) {
+      q.items = Array.isArray(q.items) ? q.items : [];
+      if (!q.items.some((x) => x.id === it.id)) q.items.push(it);
+    }
   }
   saveQueue();
 }
@@ -606,11 +667,34 @@ function statusTxt(s) {
 }
 /* ---------------- 多队列 ---------------- */
 const MODEL_SHORT = () => ({
-  basic: 'Basic Pitch', muscriptor_small: 'MuScriptor Small', muscriptor_medium: 'MuScriptor Medium',
+  basic: 'Basic Pitch', yourmt3: 'YourMT3+', miros: 'MIROS', muscriptor_small: 'MuScriptor Small', muscriptor_medium: 'MuScriptor Medium',
   muscriptor_large: 'MuScriptor Large', piano_pt: 'piano-transcription', aria: 'Aria-AMT',
-  transkun: 'Transkun', separate: t('音频处理'),
+  transkun: 'Transkun', hft: 'hFT-Transformer', separate: t('音频处理'),
 });
 function currentQueue() { return queues.find((q) => q.id === activeQid.value) || queues[0] || null; }
+/* 每个队列的「转录产物加入哪个歌单」：
+   ''      = 跟随当前歌单（旧队列/旧版本行为，保持兼容）
+   'all'   = 只进「全部曲目」，不归入任何歌单
+   其它    = 歌单 id */
+function queueTarget(q) { return (q && q.playlistTarget) || ''; }
+function targetName(target) {
+  if (target === 'all') return t('全部曲目');
+  if (!target) return t('跟随当前歌单');
+  const pl = playlist.playlists.find((x) => x.id === target);
+  return pl ? pl.name : t('已删除的歌单');
+}
+function setQueueTarget(ev) {
+  const q = currentQueue();
+  if (!q) return;
+  q.playlistTarget = String(ev && ev.target ? ev.target.value : '');
+  persistQueues();
+}
+/** 真正传给 importFiles 的 target；歌单被删/无效时回退旧行为（跟随当前歌单） */
+function effectiveTarget(q) {
+  const v = queueTarget(q);
+  if (v === 'all' || v === '') return v;
+  return playlist.playlists.some((x) => x.id === v) ? v : '';
+}
 /** 队列摘要 —— 用户要的就是"一眼看出这个队列用什么模型、什么参数跑"。 */
 function queueSummary(q) {
   if (!q) return '';
@@ -654,6 +738,7 @@ function persistQueues() {
     const dump = queues.map((q) => ({
       id: q.id, name: q.name, mode: q.mode, umodel: q.umodel, msSize: q.msSize, pmodel: q.pmodel,
       perf: q.perf, preset: q.preset, modelKey: q.modelKey, params: q.params,
+      playlistTarget: q.playlistTarget || '',
       // 上限 500 条/队列：localStorage 只有几 MB，别让一个超大队列把配额撑爆
       items: ((q.id === activeQid.value ? queue : (q.items || []))).slice(0, 500).map((it) => ({
         id: it.id, path: it.path, name: it.name, duration: it.duration || 0,
@@ -674,7 +759,18 @@ function saveQueue() { snapshotIntoQueue(currentQueue()); persistQueues(); }
 
 function switchQueue(q) {
   if (!q || q.id === activeQid.value) return;
-  if (running.value) { toast(t('队列运行中，请先停止再切换'), 'warn'); return; }
+  if (running.value) {
+    // 运行中允许切换视图：不打断正在跑的队列，也不拿当前界面覆盖运行队列的设置。
+    const cur = currentQueue();
+    if (cur && cur.id !== runningQueueId.value) snapshotIntoQueue(cur);
+    userPinnedQueue = true;
+    activeQid.value = q.id;
+    loadQueueSettings(q);
+    persistQueues();
+    const still = (q.id === runningQueueId.value) ? t('（这就是正在转录的队列）') : t('（后台仍在转录另一个队列，完成后可切回）');
+    toast(t('已切换到队列：') + q.name + still, 'ok');
+    return;
+  }
   snapshotIntoQueue(currentQueue());
   activeQid.value = q.id;
   loadQueueSettings(q);
@@ -682,12 +778,27 @@ function switchQueue(q) {
   toast(t('已切换到队列：') + q.name + t('（模型与参数已同步切换）'), 'ok');
 }
 async function addQueue() {
-  if (running.value) { toast(t('队列运行中，请先停止再新建'), 'warn'); return; }
+  const whileRunning = running.value;
   const name = await app.promptDialog({ title: t('新建队列'), value: t('队列 ') + (queues.length + 1) });
   if (!name || !name.trim()) return;
-  snapshotIntoQueue(currentQueue());
-  const q = { id: queues.reduce((m, x) => Math.max(m, (x.id || 0) + 1), 1), name: name.trim(), items: [] };
+  const old = currentQueue();
+  snapshotIntoQueue(old);            // 只复制快照，不动正在跑的条目
+  const q = {
+    id: queues.reduce((m, x) => Math.max(m, (x.id || 0) + 1), 1),
+    name: name.trim(), items: [],
+    mode: mode.value, umodel: umodel.value, msSize: msSize.value, pmodel: pmodel.value,
+    perf: perf.value, preset: presetSel.value, modelKey: currModelKey(),
+    params: collectPresetParams(),
+    playlistTarget: (old && old.playlistTarget) || '',
+  };
   queues.push(q);
+  if (whileRunning) {
+    // 运行中只“加入队列列表”，不能切过去（切走会清空正在跑的 queue → 这一批条目丢失）。
+    // 当前这一批结束后再切；设置已按当时界面复制，切过去后还能改。
+    persistQueues();
+    toast(t('已新建队列：') + q.name + t('（当前转录结束后可切换）'), 'ok');
+    return;
+  }
   activeQid.value = q.id;
   queue.splice(0, queue.length);     // 新队列从空开始（旧队列的条目已经在它自己身上了）
   snapshotIntoQueue(q);              // 但沿用当前界面的模型/参数 —— 想改直接在界面上改
@@ -962,14 +1073,44 @@ async function probeEngine() {
     }
     if (p && p.gpu) {
       const g = p.gpu;
-      if (g.rocm) gpuInfo.value = 'GPU · AMD (ROCm) ✓';
-      else if (g.cuda) gpuInfo.value = 'GPU · ' + (g.vendor === 'nvidia' ? 'NVIDIA' : 'CUDA') + ' ✓';
-      else if (g.mps) gpuInfo.value = 'GPU · Apple (MPS) ✓';
-      else if (g.torch_directml || g.directml) gpuInfo.value = 'GPU · ' + (g.vendor === 'amd' ? 'AMD' : g.vendor === 'intel' ? 'Intel' : 'DirectML') + ' (DirectML) ✓';
+      let _base = '';
+      if (g.rocm) _base = 'GPU · AMD (ROCm) ✓';
+      else if (g.cuda) _base = 'GPU · ' + (g.vendor === 'nvidia' ? 'NVIDIA' : 'CUDA') + ' ✓';
+      else if (g.mps) _base = 'GPU · Apple (MPS) ✓';
+      else if (g.torch_directml || g.directml) _base = 'GPU · ' + (g.vendor === 'amd' ? 'AMD' : g.vendor === 'intel' ? 'Intel' : 'DirectML') + ' (DirectML) ✓';
+      if (g.vram_total_mb) {
+        const _gb = (x) => (Math.round(x / 102.4) / 10).toFixed(1);
+        _base += ' · 显存 ' + _gb(g.vram_free_mb || 0) + '/' + _gb(g.vram_total_mb) + ' GB 空闲';
+      }
+      gpuInfo.value = _base;
+      const _parts = [];
+      if (g.driver_version) _parts.push(t('驱动 ') + g.driver_version);
+      if (g.sysmem_fallback_supported === true) _parts.push(t('共享显存回退：支持（驱动 ≥536.40；≥546.01 可按应用关闭）'));
+      else if (g.sysmem_fallback_supported === false) _parts.push(t('共享显存回退：不支持（显存不足会直接报 OOM）'));
+      gpuDetail.value = _parts.join(' · ');
     }
   } catch (e) {}
 }
 function selectPerf(p) { perfUserSet = true; perf.value = p; }
+async function runUnifiedMemoryExperiment() {
+  if (!bridge || typeof bridge.gpuUnifiedMemoryExperiment !== 'function') { toast(t('当前版本不支持统一内存实验'), 'warn'); return; }
+  if (umBusy.value) return;
+  umBusy.value = true;
+  umResult.value = '';
+  try {
+    const r = await bridge.gpuUnifiedMemoryExperiment();
+    if (r && r.ok) {
+      umResult.value = t('统一内存：可用 · 分配 ') + (r.alloc_ms || 0) + 'ms · ' + t('主机写入 ') + (r.host_touch_ms || 0) + 'ms · ' + t('同步 ') + (r.sync_ms || 0) + 'ms（仅实验，不改变转录分配器）';
+      toast(t('统一内存实验通过（仅实验，不改变转录）'), 'ok');
+    } else {
+      umResult.value = t('统一内存：不可用：') + ((r && (r.error || r.code)) || '');
+      toast(t('统一内存不可用：') + ((r && (r.error || r.code)) || ''), 'warn');
+    }
+  } catch (e) {
+    umResult.value = t('统一内存：不可用：') + String((e && e.message) || e);
+    toast(t('统一内存实验失败'), 'warn');
+  } finally { umBusy.value = false; }
+}
 
 /* ---------------- 参数预设（**按模型归属**） ---------------- */
 // 用户要求（2026-10-14）：
@@ -985,7 +1126,12 @@ const modelPreset = ref({});     // 模型键 → **用户指定**的预设名
 /** 当前模型的键。★ 必须与 engine/presets.py:MODEL_DEFAULT_PRESET 的键逐字一致。 */
 function currModelKey() {
   if (mode.value === 'separate') return 'separate';
-  if (mode.value === 'universal') return umodel.value === 'muscriptor' ? ('muscriptor_' + msSize.value) : 'basic';
+  if (mode.value === 'universal') {
+    if (umodel.value === 'muscriptor') return 'muscriptor_' + msSize.value;
+    if (umodel.value === 'yourmt3') return 'yourmt3';
+    if (umodel.value === 'miros') return 'miros';
+    return 'basic';
+  }
   return pmodel.value;                                  // piano_pt | aria | transkun
 }
 
@@ -1050,7 +1196,9 @@ function collectPresetParams() {
   const p = {
     perf: perf.value,
     auto_bpm: autoBpm.value,
-    merge_overlap: mergeOverlap.value, vel_norm: velNorm.value, tempo: iv(exportTempo.value),
+    tempo: iv(exportTempo.value),
+    segment_sec: Math.max(0, iv(segmentSec.value)),
+    denoise_mode: denoiseMode.value || 'off',
   };
   if (mode.value === 'universal') {
     Object.assign(p, {
@@ -1065,11 +1213,10 @@ function collectPresetParams() {
     if (umodel.value === 'muscriptor') Object.assign(p, {
       model_size: msSize.value,
       muscriptor_instruments: msInstrValue.value,
+      probe_segment_sec: iv(msProbeSegSec.value),
       temperature: Number(msTemp.value), cfg_coef: Number(msCfg.value),
       beam_size: iv(msBeam.value), prelude_forcing: msPrelude.value,
       precision: msPrec.value,
-      segment_silence: msSegment.value ? 'auto' : 'off',
-      min_silence: iv(msSegmentMin.value),
     });
   } else if (mode.value === 'piano') {
     Object.assign(p, {
@@ -1102,8 +1249,8 @@ function applyPresetParams(p, opts) {
   const num = (k) => parseFloat(pr[k]);
   const numOr = (k, d) => (isNaN(num(k)) ? d : num(k));
   if (!keep && has('model')) {
-    if (pr.model === 'basic' || pr.model === 'muscriptor') umodel.value = pr.model;
-    else if (['piano_pt', 'aria', 'transkun'].indexOf(pr.model) >= 0) pmodel.value = pr.model;
+    if (pr.model === 'basic' || pr.model === 'muscriptor' || pr.model === 'yourmt3' || pr.model === 'miros') umodel.value = pr.model;
+    else if (['piano_pt', 'aria', 'transkun', 'hft'].indexOf(pr.model) >= 0) pmodel.value = pr.model;
   }
   if (!keep && has('model_size') && ['small', 'medium', 'large'].indexOf(pr.model_size) >= 0) msSize.value = pr.model_size;
   // 性能档：用户手动选过就尊重用户的选择（自动套预设不改它）
@@ -1121,14 +1268,12 @@ function applyPresetParams(p, opts) {
   // 电平统一恒定开启（见 collectParams 上方的说明）。
   // ★ 2026-10-15：这里原来还有一行 `if (has('normalize')) normalize.value = ...`，
   //   `normalize` 这个 ref 早已随降噪开关一起删掉 —— 运行时会抛 ReferenceError，
-  //   把本函数后半段（auto_bpm / tempo / 力度归一 / 节拍网格 / 弯音 / 旋律增强）全部吃掉。
+  //   把本函数后半段（auto_bpm / tempo / 节拍网格 / 弯音 / 旋律增强）全部吃掉。
   //   实测在「套用带 normalize 键的预设」时必然触发，故整行删除。
   // 预设未显式指定 auto_bpm 时保留当前值（默认开），避免把自动测速关掉
   if (has('auto_bpm')) autoBpm.value = !!pr.auto_bpm;
   if (has('stem_format') && ['wav', 'flac', 'mp3'].indexOf(pr.stem_format) >= 0) stemFormat.value = pr.stem_format;
   if (has('tempo')) exportTempo.value = Math.max(0, Math.round(numOr('tempo', 0)));
-  if (has('merge_overlap')) mergeOverlap.value = pr.merge_overlap !== false;
-  if (has('vel_norm')) velNorm.value = pr.vel_norm !== false;
   if (has('beat_grid')) beatGrid.value = !!pr.beat_grid;
   if (has('multiple_pitch_bends')) pitchBends.value = !!pr.multiple_pitch_bends;
   // 主旋律强化：新键 melodia，历史预设写 no_melodia（界面上的「低音增强」= 关掉 melodia）
@@ -1145,21 +1290,27 @@ function applyPresetParams(p, opts) {
   const hf = freq('max_freq', 'maximum_frequency');
   if (hf !== null) maxFreq.value = hf;
   // MuScriptor 生成参数
+  if (has('temperature')) msTemp.value = Math.max(0, numOr('temperature', 1.0));
+  if (has('cfg_coef')) msCfg.value = Math.max(0, numOr('cfg_coef', 1.0));
+  if (has('beam_size')) msBeam.value = Math.max(1, Math.round(numOr('beam_size', 1)));
+  if (has('prelude_forcing')) msPrelude.value = pr.prelude_forcing !== false;
   if (has('muscriptor_instruments') && typeof pr.muscriptor_instruments === 'string') {
     const v = pr.muscriptor_instruments.trim();
-    if (!v || v === 'none' || v === 'auto') { msMode.value = 'none'; }
+    if (!v || v === 'none') msMode.value = 'none';
+    else if (v === 'probe_segments' || v === 'segments') msMode.value = 'probe_segments';
     else {
       const groups = v.split(',').map((s) => s.trim()).filter((g) => MS_GROUPS.some((x) => x.id === g));
       if (groups.length) { msGroups.value = groups; msMode.value = 'limit'; }
     }
   }
-  if (has('temperature')) msTemp.value = Math.max(0, numOr('temperature', 1.0));
-  if (has('cfg_coef')) msCfg.value = Math.max(0, numOr('cfg_coef', 1.0));
-  if (has('beam_size')) msBeam.value = Math.max(1, Math.round(numOr('beam_size', 1)));
-  if (has('prelude_forcing')) msPrelude.value = pr.prelude_forcing !== false;
-  if (has('segment_silence')) msSegment.value = !!pr.segment_silence && pr.segment_silence !== 'off';
-  if (has('min_silence')) msSegmentMin.value = Number(pr.min_silence) || 2.0;
+  if (has('probe_segment_sec')) msProbeSegSec.value = clamp(Math.round(numOr('probe_segment_sec', 60)), 20, 120);
   if (has('precision') && ['fp32', 'fp16'].indexOf(pr.precision) >= 0) msPrec.value = pr.precision;
+  // 识别片段长度（0 = 模型默认）；老预设没有这个键时保留当前值
+  if (has('segment_sec')) segmentSec.value = clamp(Math.round(numOr('segment_sec', 0)), 0, 120);
+  // 降噪档位：只认引擎支持的三个值；老预设没有这个键时保持当前值（默认 off）
+  if (has('denoise_mode') && ['off', 'light', 'strong'].indexOf(String(pr.denoise_mode)) >= 0) {
+    denoiseMode.value = String(pr.denoise_mode);
+  }
 }
 
 function applyPreset(name, opts) {
@@ -1325,9 +1476,10 @@ function collectParams() {
     if (umodel.value === 'muscriptor') {
       cfg.model_size = msSize.value;
       cfg.beat_grid = beatGrid.value;
+      cfg.muscriptor_instruments = msInstrValue.value;
+      if (msMode.value === 'probe_segments') cfg.probe_segment_sec = Number(msProbeSegSec.value) || 60;
       // 乐器组约束：'auto' / '人声,鼓' 这样的组名列表 / 空。
       // 注意这条链路有三跳（渲染端 → 主进程 worker 请求体 → 引擎），少任何一跳界面选了都不生效。
-      cfg.muscriptor_instruments = msInstrValue.value;
       // ★ 2026-10-14 更正：这段注释原先描述的是**已被移除**的批量推理行为
       //   （`bca0a55`「移除批量推理功能」）。现在：
       //   · `prelude_forcing` 是**独立开关**（见下面的 msPrelude），与性能档无关；
@@ -1351,20 +1503,20 @@ function collectParams() {
     if (umodel.value === 'basic' && pitchBends.value) cfg.multiple_pitch_bends = true;
     if (umodel.value === 'basic' && maxFreq.value > 0) cfg.max_freq = maxFreq.value;
     if (umodel.value === 'basic' && minFreq.value > 0) cfg.min_freq = minFreq.value;
-    if (!mergeOverlap.value) cfg.no_merge = true;
-    if (!velNorm.value) cfg.no_velnorm = true;
     if (umodel.value === 'muscriptor') {
       if (msTemp.value !== 1.0) cfg.temperature = msTemp.value;
       if (msCfg.value !== 1.0) cfg.cfg_coef = msCfg.value;
       if (msBeam.value > 1) cfg.beam_size = msBeam.value;
       // 开（默认）不传参数 = 引擎默认「缝合延音」；关掉才显式 false = 不缝合
       if (!msPrelude.value) cfg.prelude_forcing = false;
-      // 静音分段：显式传 off（与引擎默认一致，写出来是为了预设/日志里看得见）
-      cfg.segment_silence = msSegment.value ? 'auto' : 'off';
-      if (msSegment.value) cfg.min_silence = Number(msSegmentMin.value) || 2.0;
       if (msPrec.value && msPrec.value !== 'fp32') cfg.precision = msPrec.value;
     }
   }
+  // 识别片段长度：0 = 各模型默认，不传；>0 时所有转录模型共用同一个键（引擎按模型映射）
+  if (mode.value !== 'separate' && Number(segmentSec.value) > 0) cfg.segment_sec = Number(segmentSec.value);
+  // 转录前降噪（默认 off = 旧行为；只有显式选择才发送）
+  if (mode.value !== 'separate' && denoiseMode.value && denoiseMode.value !== 'off') cfg.denoise_mode = denoiseMode.value;
+  if (mode.value !== 'separate' && memoryMode.value) cfg.memory_mode = memoryMode.value;
   if (mode.value === 'separate') {
     cfg.with_drums = drums.value;
     cfg.export_stems = stemExport.value;
@@ -1399,54 +1551,64 @@ async function decodeDuration(it) {
 async function runBatch() {
   if (running.value) return;
   if (!isDesktop) { toast(t('请使用桌面版 FuFumidi 进行转录'), 'warn'); return; }
-  if (!queue.some(i => i.status === 'pending')) {
-    const d = queue.filter(i => i.status === 'done').length;
-    toast(d ? t('队列已完成，可清空后继续添加音频') : t('请先选择音频文件'), d ? 'ok' : 'warn');
+  const activeQ = currentQueue();
+  const chain = !!chainMode.value;
+  let work = [];
+  if (chain) {
+    work = queueOrderFrom(activeQ && activeQ.id).filter((q) => pendingItemsOf(q).length);
+  } else if (activeQ && pendingItemsOf(activeQ).length) {
+    work = [activeQ];
+  }
+  if (!work.length) {
+    const doneN = (activeQ && Array.isArray(activeQ.items) ? activeQ.items : []).filter((i) => i.status === 'done').length;
+    toast(doneN ? t('队列已完成，可清空后继续添加音频') : t('请先选择音频文件'), doneN ? 'ok' : 'warn');
     return;
   }
   running.value = true; paused.value = false; cancelAll.value = false; busy.value = true; done.value = false; progress.value = 3; stage.value = '';
-  try { if (bridge && bridge.setTranscribePause) bridge.setTranscribePause(false); } catch (e) {}   // 清掉上次可能残留的暂停标记
-  // 并行数：1-4（持久化）。GPU 模型显存有限，并行收益差；CPU 模型 2-3 收益明显。
+  userPinnedQueue = false;
+  try { if (bridge && bridge.setTranscribePause) bridge.setTranscribePause(false); } catch (e) {}
   const para = Math.max(1, Math.min(4, parseInt(localStorage.getItem('fufumidi_parallel') || '1', 10) || 1));
-  logLine(t('转录队列：共 ') + pendingCount.value + t(' 首') + (para > 1 ? t('，并行 ') + para + t(' 路') : t('，顺序处理')));
-  const inst = currentModelInstalled();
-  logLine(t('使用模型：') + currentModelLabel() + (inst === true ? t('（已就绪）') : inst === false ? t('（未下载，请到资源中心安装）') : ''));
+  const totals = {
+    total: work.reduce((s, q) => s + pendingItemsOf(q).length, 0),
+    done: 0, err: 0, queueIndex: 0, queueCount: work.length,
+  };
+  logLine(chain
+    ? t('顺序转录：共 ') + work.length + t(' 个队列 / ') + totals.total + t(' 首')
+    : t('转录队列：共 ') + totals.total + t(' 首') + (para > 1 ? t('，并行 ') + para + t(' 路') : t('，顺序处理')));
+  let runQ = null;
+  let runItems = [];
   const t0 = Date.now();
   clearInterval(trTimer);
   trTimer = setInterval(() => {
-    // 暂停期间冻结计时（引擎停住了，'已用/剩余'再涨就是骗人）
     if (paused.value) {
-      const left = queue.filter(i => i.status === 'pending').length;
-      stage.value = t('已暂停') + (left ? ' · ' + t('已暂停：还剩 {n} 首').replace('{n}', String(left)) : '');
+      const left = runItems.filter((i) => i.status === 'pending').length;
+      stage.value = t('已暂停') + (left ? ' · ' + t('已暂停：还剩 {n} 首').replace('{n}', String(left)) : '') + (chain ? ' · ' + t('队列 ') + totals.queueIndex + '/' + totals.queueCount : '');
       return;
     }
-    const el = (Date.now() - t0) / 1000;
-    const doneN = queue.filter(i => i.status === 'done').length;
-    const errN = queue.filter(i => i.status === 'error').length;
-    const total = Math.max(1, queue.length);
-    const cur = queue.find(i => i.status === 'running');
-    // 当前项进度：未完成时按已用时间/预估时长估算（平滑推进而非停在 3% 突跳到 100%）
+    const doneN = runItems.filter((i) => i.status === 'done').length;
+    const errN = runItems.filter((i) => i.status === 'error').length;
+    const cur = runItems.find((i) => i.status === 'running');
     let curP = 0;
     if (cur) {
-      if (cur.realPct > 0) curP = Math.min(99, cur.realPct);   // 引擎真实分块进度优先（替代时间估算）
+      if (cur.realPct > 0) curP = Math.min(99, cur.realPct);
       else if (cur.progress >= 100) curP = 100;
       else if (cur.progress > 0) curP = cur.progress;
       else if (cur.startedAt && cur.estMs) curP = Math.min(95, Math.round((Date.now() - cur.startedAt) / cur.estMs * 100));
-      if (curP > 0 && curP < 100) cur.progress = curP; // 同步到队列行内进度条
-      // 统一进度信息（对齐音频处理面板）：百分比 + 已用时间 + 剩余时间
+      if (curP > 0 && curP < 100) cur.progress = curP;
       const elS = (Date.now() - (cur.startedAt || Date.now())) / 1000;
       const estS = ((cur.estMs || estSec() * 1000 || 60000)) / 1000;
       const remains = Math.max(0, Math.round(estS - elS));
-      // 百分比已由上方进度条呈现，此处只显示时间信息（原先重复显示「转录中 3%」且估算值长期不变）
-      stage.value = t('已用 ') + fmtTime(elS) + (remains > 0 ? ' · ' + t('剩余约 ') + fmtTime(remains) : '');
+      stage.value = (chain ? t('队列 ') + totals.queueIndex + '/' + totals.queueCount + ' · ' : '')
+        + t('已用 ') + fmtTime(elS) + (remains > 0 ? ' · ' + t('剩余约 ') + fmtTime(remains) : '');
     }
-    progress.value = Math.max(3, Math.min(95, Math.round(((doneN + errN) + curP / 100) / total * 100)));
-    if (!cur) stage.value = t('完成 ') + doneN + ' / ' + total + (errN ? t(' · 失败 ') + errN : '') + ' · ' + fmtTime(el);
+    const _allDone = Math.max(1, totals.total);
+    progress.value = Math.max(3, Math.min(95, Math.round(((totals.done + totals.err) + curP / 100) / _allDone * 100)));
+    if (!cur) stage.value = t('完成 ') + (totals.done + totals.err) + ' / ' + totals.total + (totals.err ? t(' · 失败 ') + totals.err : '') + ' · ' + fmtTime((Date.now() - t0) / 1000);
   }, 500);
 
   const runningJobIds = new Set();
   try { window.__fufumidiRunningJobs = runningJobIds; } catch (e) {}
-  const processOne = async (it) => {
+  const processOne = async (it, cfgBase, target) => {
     it.status = 'running'; it.progress = 0; it.realPct = 0; it.error = '';
     it.startedAt = Date.now();
     await decodeDuration(it);
@@ -1455,53 +1617,84 @@ async function runBatch() {
     runningJobIds.add(jid); currentJobId.value = jid;
     logLine('→ ' + it.name);
     try {
-      const cfg = collectParams();
-      cfg.audio = it.path; cfg.id = jid; cfg.out = null; cfg.mode = mode.value; cfg.perf = perf.value;
-      cfg.__slots = para; // 主进程按此开多 worker 槽位（GPU 自动降 1）
+      const cfg = Object.assign({}, cfgBase);
+      cfg.audio = it.path; cfg.id = jid; cfg.out = null;
+      cfg.mode = (runQ && runQ.mode) || mode.value;
+      cfg.perf = (runQ && runQ.perf) || perf.value;
+      cfg.__slots = para;
       const res = await bridge.convert(cfg);
       if (cancelAll.value) it.status = 'canceled';
       else if (res && res.ok && res.out) {
         it.status = 'done'; it.progress = 100; it.out = res.out; it.note_count = res.note_count || 0;
+        totals.done += 1;
         try {
           const bytes = await bridge.readBinary(res.out);
-          if (bytes) { await importFiles([{ name: String(res.out).replace(/^.*[\\/]/, ''), bytes }]); }
+          if (bytes) { await importFiles([{ name: String(res.out).replace(/^.*[\\/]/, ''), bytes }], target); }
         } catch (e) {}
       } else {
         it.status = 'error'; it.error = (res && res.error) || (res ? 'code ' + res.code : '');
+        totals.err += 1;
         logLine(it.name + t('：') + it.error, true);
       }
     } catch (e) {
       if (cancelAll.value) it.status = 'canceled';
-      else { it.status = 'error'; it.error = (e && e.message) || String(e); logLine(it.name + t('：') + it.error, true); }
+      else { it.status = 'error'; it.error = (e && e.message) || String(e); totals.err += 1; logLine(it.name + t('：') + it.error, true); }
     }
     runningJobIds.delete(jid);
     const rest = [...runningJobIds];
     currentJobId.value = rest.length ? rest[rest.length - 1] : null;
-    saveQueue();
+    persistQueues();
   };
-  const worker = async () => {
-    while (true) {
-      if (cancelAll.value) break;
-      const it = queue.find(i => i.status === 'pending');
-      if (!it) break;
-      // ★ 暂停：先不启动下一首（分块引擎此时正被引擎端卡在块与块之间；
-      //   一次调用跑完的引擎到这儿才停）。继续 = 这个循环自然往下走，**不重算**。
-      while (paused.value && !cancelAll.value) await new Promise(r => setTimeout(r, 200));
-      if (cancelAll.value) break;
-      await processOne(it);
+  const runQueue = async (q, qi) => {
+    runQ = q; runningQueueId.value = q.id; totals.queueIndex = qi + 1;
+    if (!userPinnedQueue) { activeQid.value = q.id; loadQueueSettings(q); }
+    // 取这个队列自己的参数快照：如果用户把视图切到了别的队列，临时加载本队列设置取完再切回
+    let cfgBase;
+    if (activeQid.value === q.id) {
+      cfgBase = collectParams();
+    } else {
+      const prevId = activeQid.value; const prevQ = currentQueue();
+      loadQueueSettings(q);
+      cfgBase = collectParams();
+      if (prevQ) { activeQid.value = prevId; loadQueueSettings(prevQ); }
     }
+    if (activeQid.value === q.id) q.items = queue.slice();
+    q.items = Array.isArray(q.items) ? q.items : [];
+    runItems = q.items;
+    const target = effectiveTarget(q);
+    const targetLabel = targetName(target);
+    logLine(t('开始队列：') + q.name + (chain ? '（' + totals.queueIndex + '/' + totals.queueCount + '）' : '') + t(' · 产物：') + targetLabel);
+    const worker = async () => {
+      while (true) {
+        if (cancelAll.value) break;
+        const it = (q.items || []).find((x) => x.status === 'pending');
+        if (!it) break;
+        while (paused.value && !cancelAll.value) await new Promise((r) => setTimeout(r, 200));
+        if (cancelAll.value) break;
+        await processOne(it, cfgBase, target);
+      }
+    };
+    await Promise.all(Array.from({ length: para }, () => worker()));
+    if (activeQid.value === q.id) queue.splice(0, queue.length, ...(q.items || []));
+    persistQueues();
+    // 暂停时不要启动下一个队列（继续按钮会解除暂停）
+    while (paused.value && !cancelAll.value) await new Promise((r) => setTimeout(r, 200));
   };
-  await Promise.all(Array.from({ length: para }, () => worker()));
-  running.value = false; busy.value = false;
+  for (let qi = 0; qi < work.length; qi++) {
+    if (cancelAll.value) break;
+    await runQueue(work[qi], qi);
+  }
+  running.value = false; busy.value = false; runningQueueId.value = 0;
   clearInterval(trTimer);
-  const dN = queue.filter(i => i.status === 'done').length;
-  const eN = queue.filter(i => i.status === 'error').length;
-  progress.value = dN && !eN ? 100 : (dN ? Math.round(dN / Math.max(1, queue.length) * 100) : progress.value);
+  if (runQ && activeQid.value === runQ.id) queue.splice(0, queue.length, ...(runQ.items || []));
+  persistQueues();
+  const dN = totals.done; const eN = totals.err;
+  progress.value = dN && !eN ? 100 : (dN ? Math.round(dN / Math.max(1, totals.total) * 100) : progress.value);
   if (dN && !eN) {
-    const last = queue.filter(i => i.status === 'done').pop();
+    const last = runItems.filter((i) => i.status === 'done').pop();
     if (last) { lastOut.value = last.out; doneInfo.value = t('成功 ') + dN + t(' 首') + (last.note_count != null ? ' · ' + last.note_count + t(' 个音符') : ''); logLine(doneInfo.value); }
     done.value = true;
-    toast(t('批量转录完成：成功 ') + dN + t(' 首（已完成曲目已加入歌单）'), 'ok');
+    toast(chain ? t('顺序转录完成：成功 ') + dN + t(' 首（各队列产物已按各自歌单加入）') : t('批量转录完成：成功 ') + dN + t(' 首'), 'ok');
   } else if (dN) {
     logLine(t('[失败] ') + eN + t(' 首失败，可在队列中点击「重试」。'), true);
     toast(t('批量转录完成：成功 ') + dN + t(' 首，失败 ') + eN + t(' 首'), 'warn');
@@ -1510,14 +1703,20 @@ async function runBatch() {
     toast(t('转录失败'), 'warn');
   }
   if (cancelAll.value && !paused.value) logLine(t('已取消转录队列…'), true);
-  // 长音频·质量档提示：串行档在长音频上明显慢于 GPU 批量档，完成后给出可操作建议
-  if (dN && !eN && perf.value === 'quality' && mode.value === 'universal' && umodel.value === 'muscriptor') {
-  }
+  if (!cancelAll.value && (dN || eN)) playDoneChime(eN > 0);
 }
 async function startTranscribe() {
   if (busy.value) return;
+  const chain = !!chainMode.value;
+  const activeQ = currentQueue();
+  const activePending = activeQ ? pendingItemsOf(activeQ).length : 0;
+  const pending = chain ? queues.reduce((s, q) => s + pendingItemsOf(q).length, 0) : activePending;
+  if (!pending) { toast(t('请先选择音频文件'), 'warn'); return; }
   const est = estSec();
-  const msg = t('确认开始转录？\n文件：') + queue.find(i => i.status === 'pending')?.name + t('\n模式：') + (MODE_NAMES()[mode.value] || mode.value) + t('\n质量：') + (PERF_NAMES()[perf.value] || perf.value) + (est ? t('\n预计耗时：约 ') + fmtTime(est) : '');
+  const first = activeQ && pendingItemsOf(activeQ)[0] ? pendingItemsOf(activeQ)[0].name : '';
+  const msg = chain
+    ? t('确认开始转录？') + '\n' + t('顺序转录全部队列：') + queues.filter((q) => pendingItemsOf(q).length).length + t(' 个队列，共 ') + pending + t(' 首')
+    : t('确认开始转录？\n文件：') + first + t('\n模式：') + (MODE_NAMES()[mode.value] || mode.value) + t('\n质量：') + (PERF_NAMES()[perf.value] || perf.value) + (est ? t('\n预计耗时：约 ') + fmtTime(est) : '');
   const ok = await app.confirmDialog({ title: t('开始转录'), msg, okText: t('开始') });
   if (!ok) return;
   runBatch();
@@ -1533,8 +1732,11 @@ function pauseBatch() {
   //  · MuScriptor 卡在 5 秒块之间、basic-pitch 卡在取窗之间 → 当场停住，继续时从原处接着跑；
   //  · 钢琴 piano_pt 卡在我们自己的分批前向之间 → 手里这一批算完就停（秒级），同样不重算；
   //  · Aria-AMT / Transkun 是外部工具、一次调用跑完整首 → 这一首跑完再停（下一首不再启动）。
-  const pianoFast = mode.value === 'piano' && pmodel.value === 'piano_pt';
-  const midFile = mode.value !== 'piano' || pianoFast;
+  const _rq = queues.find((q) => q.id === runningQueueId.value) || currentQueue();
+  const _rmode = (_rq && _rq.mode) || mode.value;
+  const _rpmodel = (_rq && _rq.pmodel) || pmodel.value;
+  const pianoFast = _rmode === 'piano' && _rpmodel === 'piano_pt';
+  const midFile = _rmode !== 'piano' || pianoFast;
   stage.value = t('已暂停');
   logLine(pianoFast
     ? t('已暂停：当前这首算完手里这一批就停住，点「继续」接着跑')
@@ -1674,8 +1876,24 @@ onMounted(() => {
       sepStage.value = t('分块处理 ') + pct + '% · ' + t('已用 ') + fmtTime(el) + (eta > 0 ? ' · ' + t('剩余约 ') + fmtTime(eta) : '');
     });
   }
+  // E2E/调试钩子：只暴露队列操作，不改变正常交互；用于无文件对话框验证
+  // 「运行中切换队列」「顺序转录」两条真实流程（见 scripts/e2e/cases/transcribe-queue-chain.mjs）。
+  try {
+    window.__fufumidiTranscribe = {
+      addPaths,
+      runBatch,
+      switchQueue,
+      setChainMode,
+      state: () => ({
+        running: running.value, paused: paused.value, runningQueueId: runningQueueId.value,
+        activeQid: activeQid.value, chainMode: chainMode.value,
+        queues: queues.map((q) => ({ id: q.id, name: q.name, playlistTarget: q.playlistTarget || '', items: (q.items || []).map((i) => ({ id: i.id, name: i.name, status: i.status, note_count: i.note_count || 0 })) })),
+      }),
+    };
+  } catch (e) {}
 });
 onBeforeUnmount(() => {
+  try { delete window.__fufumidiTranscribe; } catch (e) {}
   try { window.removeEventListener('keydown', onDocKeydown); } catch (e) {}
   if (trTimer) clearInterval(trTimer);
   if (offLog) offLog();
@@ -1695,6 +1913,7 @@ onBeforeUnmount(() => {
         <div class="page-sub">{{ t('音频转 MIDI · 本地 Python 引擎 · 离线完成') }}</div>
       </div>
       <span v-if="gpuInfo" class="tag accent">{{ gpuInfo }}</span>
+      <span v-if="gpuDetail" class="tag" data-guide="gpu-detail" :title="gpuDetail">{{ gpuDetail }}</span>
       <button class="btn sm ghost" @click="state.ui.settingsTab = 'gpu'; state.ui.settingsOpen = true">{{ t('GPU 加速') }}</button>
       <span class="tag" :class="isDesktop ? '' : 'warn-tag'">{{ isDesktop ? t('桌面引擎就绪') : t('请使用桌面版') }}</span>
     </div>
@@ -1749,13 +1968,25 @@ onBeforeUnmount(() => {
         <button v-for="q in queues" :key="q.id" class="fu-ctl fu-ctl--sm tr-pill" :class="{ active: q.id === activeQid }"
                 :title="t('切换到这个队列（模型与参数一起切）') + ' · ' + queueSummary(q)"
                 @click="switchQueue(q)">
-          {{ q.name }}<i v-if="queueCount(q)" class="tr-q-n">{{ queueCount(q) }}</i>
+          {{ q.name }}<i v-if="q.id === runningQueueId" class="tr-q-run" :title="t('正在转录')">▶</i><i v-if="queueCount(q)" class="tr-q-n">{{ queueCount(q) }}</i>
         </button>
         <button class="btn sm ghost" @click="addQueue"><Icon name="plus" :size="13" />{{ t('新建队列') }}</button>
         <button class="btn sm ghost" :disabled="!currentQueue()" @click="renameQueue(currentQueue())">{{ t('重命名') }}</button>
         <button class="btn sm ghost" :disabled="!currentQueue()" @click="duplicateQueue(currentQueue())">{{ t('复制') }}</button>
         <button class="btn sm ghost danger" :disabled="queues.length <= 1 || !currentQueue()" @click="removeQueue(currentQueue())">{{ t('删除队列') }}</button>
-        <span class="fb-hint" v-if="currentQueue()">{{ t('本队列：') }}{{ queueSummary(currentQueue()) }}</span>
+        <label class="tr-chain" data-guide="chain-queues" :title="t('打开后按队列顺序：一个队列跑完自动接着跑下一个（默认关）')">
+          <input type="checkbox" :checked="chainMode" :disabled="running" @change="setChainMode($event.target.checked)">
+          <span>{{ t('依次转录全部队列') }}</span>
+        </label>
+        <label class="tr-queue-target" data-guide="queue-playlist" :title="t('这个队列的转录产物完成后加入哪个歌单')">
+          <span>{{ t('产物歌单') }}</span>
+          <select class="select-input" :value="queueTarget(currentQueue())" :disabled="running || busy" @change="setQueueTarget">
+            <option value="">{{ t('跟随当前歌单') }}</option>
+            <option value="all">{{ t('仅加入全部曲目') }}</option>
+            <option v-for="pl in playlist.playlists" :key="pl.id" :value="pl.id">{{ pl.name }}</option>
+          </select>
+        </label>
+        <span class="fb-hint" v-if="currentQueue()">{{ t('本队列：') }}{{ queueSummary(currentQueue()) }} · {{ targetName(queueTarget(currentQueue())) }}</span>
       </div>
       <div v-if="queue.length" class="tr-batch-list">
         <div class="tr-batch-item" v-for="it in sortedQueue" :key="it.id"
@@ -1800,6 +2031,8 @@ onBeforeUnmount(() => {
         <div class="fu-ctl tr-pills">
           <button class="fu-ctl tr-pill" :class="{ active: umodel === 'basic' }" @click="umodel = 'basic'">{{ t('Basic Pitch · 内置兜底') }}<i v-if="modelInstalled('basic') !== null" class="fu-badge ms-badge" :class="modelInstalled('basic') ? 'ok' : 'miss'">{{ modelInstalled('basic') ? t('已下载') : t('未下载') }}</i></button>
           <button class="fu-ctl tr-pill" :class="{ active: umodel === 'muscriptor' }" @click="umodel = 'muscriptor'">MuScriptor<i v-if="currentModelInstalled() !== null" class="fu-badge ms-badge" :class="currentModelInstalled() ? 'ok' : 'miss'">{{ currentModelInstalled() ? t('已下载') : t('未下载') }}</i></button>
+          <button class="fu-ctl tr-pill" :class="{ active: umodel === 'yourmt3' }" @click="umodel = 'yourmt3'">YourMT3+<i v-if="modelInstalled('yourmt3') !== null" class="fu-badge ms-badge" :class="modelInstalled('yourmt3') ? 'ok' : 'miss'">{{ modelInstalled('yourmt3') ? t('已下载') : t('未下载') }}</i></button>
+          <button class="fu-ctl tr-pill" :class="{ active: umodel === 'miros' }" @click="umodel = 'miros'">MIROS<i v-if="modelInstalled('miros') !== null" class="fu-badge ms-badge" :class="modelInstalled('miros') ? 'ok' : 'miss'">{{ modelInstalled('miros') ? t('已下载') : t('未下载') }}</i></button>
         </div>
         <div v-if="umodel === 'muscriptor'" class="fu-ctl tr-pills">
           <button class="fu-ctl tr-pill" :class="{ active: msSize === 'small' }" @click="msSize = 'small'">Small · 100M<i v-if="modelInstalled('muscriptor_small') !== null" class="fu-badge ms-badge" :class="modelInstalled('muscriptor_small') ? 'ok' : 'miss'">{{ modelInstalled('muscriptor_small') ? t('已下载') : t('未下载') }}</i></button>
@@ -1807,6 +2040,8 @@ onBeforeUnmount(() => {
           <button class="fu-ctl tr-pill" :class="{ active: msSize === 'large' }" @click="msSize = 'large'">Large · 1.3B<i v-if="modelInstalled('muscriptor_large') !== null" class="fu-badge ms-badge" :class="modelInstalled('muscriptor_large') ? 'ok' : 'miss'">{{ modelInstalled('muscriptor_large') ? t('已下载') : t('未下载') }}</i></button>
         </div>
         <div class="tr-perf-hint" v-if="umodel === 'muscriptor'">{{ t('未下载时请到资源中心 → 模型文件 按规格下载') }}</div>
+        <div class="tr-perf-hint" v-if="umodel === 'yourmt3'">{{ t('YourMT3+ 需先到资源中心下载运行时+权重（约 400 MB）') }}</div>
+        <div class="tr-perf-hint" v-if="umodel === 'miros'">{{ t('MIROS 需先到资源中心下载运行时+权重（约 6 GB）') }}</div>
       </div>
 
       <!-- 钢琴子模型：piano-transcription / Aria-AMT / Transkun -->
@@ -1816,8 +2051,9 @@ onBeforeUnmount(() => {
           <button class="fu-ctl tr-pill" :class="{ active: pmodel === 'piano_pt' }" @click="pmodel = 'piano_pt'">{{ t('piano-transcription · 内置') }}<i v-if="modelInstalled('piano_pt') !== null" class="fu-badge ms-badge" :class="modelInstalled('piano_pt') ? 'ok' : 'miss'">{{ modelInstalled('piano_pt') ? t('已下载') : t('未下载') }}</i></button>
           <button class="fu-ctl tr-pill" :class="{ active: pmodel === 'aria' }" @click="pmodel = 'aria'">Aria-AMT<b class="tr-cuda" :title="t('Aria-AMT 需要 CUDA（NVIDIA 显卡 + CUDA 加速包）；没有 CUDA 时它无法转录')">{{ t('需 CUDA') }}</b><i v-if="modelInstalled('aria_amt') !== null" class="fu-badge ms-badge" :class="modelInstalled('aria_amt') ? 'ok' : 'miss'">{{ modelInstalled('aria_amt') ? t('已下载') : t('未下载') }}</i></button>
           <button class="fu-ctl tr-pill" :class="{ active: pmodel === 'transkun' }" @click="pmodel = 'transkun'">Transkun<i v-if="modelInstalled('transkun') !== null" class="fu-badge ms-badge" :class="modelInstalled('transkun') ? 'ok' : 'miss'">{{ modelInstalled('transkun') ? t('已下载') : t('未下载') }}</i></button>
+          <button class="fu-ctl tr-pill" :class="{ active: pmodel === 'hft' }" @click="pmodel = 'hft'">hFT-Transformer<i v-if="modelInstalled('hft_transformer') !== null" class="fu-badge ms-badge" :class="modelInstalled('hft_transformer') ? 'ok' : 'miss'">{{ modelInstalled('hft_transformer') ? t('已下载') : t('未下载') }}</i></button>
         </div>
-        <div class="tr-perf-hint" v-if="pmodel !== 'piano_pt'">{{ t('Aria-AMT / Transkun 需先到资源中心安装对应模型') }}</div>
+        <div class="tr-perf-hint" v-if="pmodel !== 'piano_pt'">{{ t('Aria-AMT / Transkun / hFT 需先到资源中心安装对应模型') }}</div>
         <div class="tr-perf-hint tr-warn" v-if="pmodel === 'aria' && !cudaReady">{{ t('当前没有可用的 CUDA（需 NVIDIA 显卡 + 已安装的 CUDA 加速包）。Aria-AMT 会报「CUDA device not found」——改用 piano-transcription 或 Transkun 可以正常转录。') }}</div>
       </div>
 
@@ -2009,20 +2245,50 @@ onBeforeUnmount(() => {
             <NumSlider v-model="minNote" :min="10" :max="300" :step="1" />
             <!-- ★ 钢琴模型的碎音护栏（engine_pt._sane_min_note_ms）：10ms 等于关掉过滤器，
                  实测 30 秒样例 71 → 8037 个音符、3 分钟样例 47967 个 / 517 秒。 -->
-            <div v-if="mode === 'piano'" class="tr-slider-hint">{{ t('钢琴模型：低于 30ms 的碎音会被丢弃（引擎按 30ms 处理）') }}</div>
+
+          </div>
+          <div class="tr-slider" v-if="mode !== 'separate'" data-guide="segment-sec">
+            <label>{{ t('识别片段长度') }}<b>{{ segmentSec > 0 ? segmentSec + 's' : t('模型默认') }} · {{ t('推荐') }}{{ SEG_RECOMMEND > 0 ? ' ' + SEG_RECOMMEND + 's' : ' ' + t('不分段') }}</b></label>
+            <NumSlider v-model="segmentSec" :min="0" :max="60" :step="1" unit="s" />
+
+          </div>
+          <div class="tr-switch" v-if="mode !== 'separate'" data-guide="memory-mode">
+            <label>
+              <span><b>{{ t('显存策略') }}</b></span>
+              <select class="select-input" :value="memoryMode" @change="setMemoryMode($event.target.value)" style="width:auto;padding:2px 6px;font-size:var(--fs-xs)">
+                <option value="auto">{{ t('自动（默认）') }}</option>
+                <option value="low">{{ t('低显存模式（推荐）') }}</option>
+                <option value="allow">{{ t('允许借用系统内存') }}</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="tr-switch" v-if="mode !== 'separate'" data-guide="denoise-mode">
+            <label>
+              <span><b>{{ t('转录前降噪') }}</b></span>
+              <select class="select-input" v-model="denoiseMode" style="width:auto;padding:2px 6px;font-size:var(--fs-xs)">
+                <option value="off">{{ t('关闭（默认）') }}</option>
+                <option value="light">{{ t('轻降噪（谱减）') }}</option>
+                <option value="strong">{{ t('强降噪（UVR 模型）') }}</option>
+              </select>
+            </label>
+          </div>
+          <div v-if="mode !== 'separate'" class="tr-slider" data-guide="unified-memory">
+            <button class="btn sm ghost" :disabled="umBusy" @click="runUnifiedMemoryExperiment">{{ umBusy ? t('实验中…') : t('运行统一内存实验（CUDA Managed Memory）') }}</button>
+            <small v-if="umResult">{{ umResult }}</small>
           </div>
           <div class="tr-slider" v-if="mode === 'piano'">
             <label>{{ t('音符合并间隔') }}<b>{{ mergeGap }}ms</b></label>
             <NumSlider v-model="mergeGap" :min="0" :max="200" :step="1" />
           </div>
           <div class="tr-switch" v-if="mode === 'piano'">
-            <label><span><b>{{ t('包含踏板事件') }}</b><small>{{ t('还原延音踏板') }}</small></span><input type="checkbox" v-model="pedal"></label>
+            <label><span><b>{{ t('包含踏板事件') }}</b></span><input type="checkbox" v-model="pedal"></label>
           </div>
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'basic'">
-            <label><span><b>{{ t('多条弯音曲线') }}</b><small>{{ t('同一音符可挂多条弯音（颤音 / 滑音），会落进导出的 MIDI。只对有滑音的人声 / 弦乐有用；钢琴、鼓这类只会多出大量无用事件') }}</small></span><input type="checkbox" v-model="pitchBends"></label>
+            <label><span><b>{{ t('多条弯音曲线') }}</b></span><input type="checkbox" v-model="pitchBends"></label>
           </div>
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'basic'">
-            <label><span><b>{{ t('低音增强') }}</b><small>{{ t('弱化主旋律强化，保留贝斯 / 低音声部（旋律密集时更不易丢低音）') }}</small></span><input type="checkbox" v-model="bassBoost"></label>
+            <label><span><b>{{ t('低音增强') }}</b></span><input type="checkbox" v-model="bassBoost"></label>
           </div>
           <!-- WP1-5：分组标题按用户要求改为「质量组 / 速度组」，旧的按作用域分组作废 -->
           <!-- ④ 批 A：模型选项（引擎早就有，只是界面没入口） -->
@@ -2032,7 +2298,7 @@ onBeforeUnmount(() => {
                引擎侧 _apply_auto_bpm 会把整份 MIDI（含每个音符的 tick）一起换到测出来的
                速度上、绝对秒数不变 —— 所以隐藏不是「少给一个选项」，它们本来就是同一个值。 -->
           <div class="tr-switch" v-if="mode !== 'separate'">
-            <label><span><b>{{ t('自动检测 BPM') }}</b><small>{{ t('作为导出速度') }}</small></span><input type="checkbox" v-model="autoBpm"></label>
+            <label><span><b>{{ t('自动检测 BPM') }}</b></span><input type="checkbox" v-model="autoBpm"></label>
           </div>
           <div class="tr-slider" v-if="mode === 'universal' && !autoBpm">
             <label>{{ t('导出速度') }}<b>{{ exportTempo > 0 ? exportTempo + ' BPM' : t('默认 120 BPM') }}</b></label>
@@ -2045,50 +2311,39 @@ onBeforeUnmount(() => {
           <div class="tr-slider" v-if="mode === 'universal' && umodel === 'basic'">
             <label>{{ t('最低音高') }}<b>{{ minFreq > 0 ? minFreq + ' Hz' : t('不限制') }}</b></label>
             <NumSlider v-model="minFreq" :min="0" :max="2000" :step="5" />
-            <small>{{ t('滤掉低于此频率的成分（低频隆隆声/次声）。低音声部被吞时先试 40 Hz；0 = 不限制') }}</small>
-          </div>
-          <div class="tr-switch" v-if="mode === 'universal'">
-            <label><span><b>{{ t('合并重叠音符') }}</b><small>{{ t('合并同音高重叠音符；关闭后更贴近模型原始判定，但同一音高的重复触发会变多') }}</small></span><input type="checkbox" v-model="mergeOverlap"></label>
-          </div>
-          <div class="tr-switch" v-if="mode === 'universal'">
-            <label><span><b>{{ t('力度归一化') }}</b><small>{{ t('把力度拉齐到统一强度；关闭后保留模型给出的原始力度') }}</small></span><input type="checkbox" v-model="velNorm"></label>
+
           </div>
           <!-- WP1-5：同上；MuScriptor 的采样类参数留在质量组，束搜索/精度归速度组 -->
           <!-- ④ 批 B：MuScriptor 生成参数（都属「影响质量」，默认保持原行为） -->
           <div class="tr-slider" v-if="mode === 'universal' && umodel === 'muscriptor'">
             <label>{{ t('采样温度') }}<b>{{ msTemp.toFixed(1) }}</b></label>
             <NumSlider v-model="msTemp" :min="0.1" :max="2" :step="0.1" />
-            <small>{{ t('调高＝更随机、更有可能跳出重复；默认 1.0 走贪婪解码，结果可复现') }}</small>
+
           </div>
           <div class="tr-slider" v-if="mode === 'universal' && umodel === 'muscriptor'">
             <label>{{ t('引导系数') }}<b>{{ msCfg.toFixed(1) }}</b></label>
             <NumSlider v-model="msCfg" :min="1" :max="5" :step="0.1" />
-            <small>{{ t('调高＝更贴近提示但更容易重复；默认 1.0 = 关闭引导') }}</small>
+
           </div>
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
-            <label><span><b>{{ t('跨块延音缝合') }}</b><small>{{ t('解码后把 5 秒分块边界两侧同音高、同音色的延音缝回一个长音：延音不断，而模型不再被强制拖着走 —— 从根上消除僵尸长音。关掉＝不缝合，边界处延音可能断（默认开）') }}</small></span><input type="checkbox" v-model="msPrelude"></label>
+            <label><span><b>{{ t('跨块延音缝合') }}</b></span><input type="checkbox" v-model="msPrelude"></label>
           </div>
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
-            <label><span><b>{{ t('跳过静音分段（长音频加速）') }}</b><small>{{ t('在完全空白静音处切段，逐段转录后拼成一份 MIDI；默认关') }}</small></span><input type="checkbox" v-model="msSegment"></label>
-          </div>
-          <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor' && msSegment">
-            <div class="ms-range-row"><NumSlider v-model="msSegmentMin" :min="1" :max="10" :step="0.5" unit="s" :aria-label="t('最短静音段')" /></div>
-            <small>{{ t('最短静音段') }}</small>
-          </div>
-          <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
-            <label><span><b>{{ t('节拍网格检测') }}</b><small>{{ t('对齐音符时值；未下载或失败时自动跳过，不影响转录（装了模型默认开）') }}</small></span><input type="checkbox" v-model="beatGrid" @change="beatGridUserSet = true"></label>
+            <label><span><b>{{ t('节拍网格检测') }}</b></span><input type="checkbox" v-model="beatGrid" @change="beatGridUserSet = true"></label>
           </div>
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
             <label>
-              <span>
-                <b>{{ t('乐器组') }}</b>
-                <small>{{ t('MuScriptor 逐段判定乐器，同一段旋律可能被写成好几种音色。不限定 = 模型自己决定用哪些乐器；限定乐器组 = 只允许勾选的组发声（模型侧硬约束）') }}</small>
-              </span>
-              <select v-model="msMode">
-                <option value="none">{{ t('不限定（模型自由判定）') }}</option>
-                <option value="limit">{{ t('限定乐器组（硬约束）') }}</option>
+              <span><b>{{ t('乐器组') }}</b></span>
+              <select v-model="msMode" class="select-input" style="width:auto;padding:2px 6px;font-size:var(--fs-xs)">
+                <option value="none">{{ t('不限定') }}</option>
+                <option value="limit">{{ t('限定乐器组') }}</option>
+                <option value="probe_segments">{{ t('自动探测（分段）') }}</option>
               </select>
             </label>
+          </div>
+          <div v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'probe_segments'" class="tr-slider">
+            <label>{{ t('探测段长') }}<b>{{ msProbeSegSec }}s</b></label>
+            <NumSlider v-model="msProbeSegSec" :min="20" :max="120" :step="10" unit="s" :aria-label="t('探测段长')" />
           </div>
           <div class="tr-switch" style="display:block" v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'limit'">
             <div style="display:flex;flex-wrap:wrap;gap:var(--sp-2);max-height:150px;overflow:auto;padding:2px 0">
@@ -2096,13 +2351,12 @@ onBeforeUnmount(() => {
                       :class="{ active: msGroups.includes(g.id) }" :title="g.id"
                       @click="toggleMsGroup(g.id)">{{ t(g.cn) }}</button>
             </div>
-            <small style="display:block;margin-top:6px">{{ t('已选 {n} 组：模型只会输出这些乐器（可多选，例如 人声 + 鼓）').replace('{n}', String(msGroups.length)) }}</small>
           </div>
           <div class="tr-switch" v-if="mode === 'separate'">
-            <label><span><b>{{ t('输出鼓组节奏轨') }}</b><small>{{ t('同时转录鼓点 / 打击乐节奏') }}</small></span><input type="checkbox" v-model="drums"></label>
+            <label><span><b>{{ t('输出鼓组节奏轨') }}</b></span><input type="checkbox" v-model="drums"></label>
           </div>
           <div class="tr-switch" v-if="mode === 'separate'">
-            <label><span><b>{{ t('导出分离音频分轨') }}</b><small>{{ t('人声 / 贝斯 / 其它乐器 / 鼓') }}</small></span>
+            <label><span><b>{{ t('导出分离音频分轨') }}</b></span>
               <span style="display:flex;align-items:center;gap:var(--sp-2)"><input type="checkbox" v-model="stemExport">
               <select v-if="stemExport" class="select-input" v-model="stemFormat" style="width:74px;padding:2px 6px;font-size:var(--fs-xs)">
                 <option value="wav">WAV</option><option value="flac">FLAC</option><option value="m4a">M4A</option>
@@ -2113,10 +2367,10 @@ onBeforeUnmount(() => {
                结论是负面的（12 dB 素材假音符 1 → 14（谱减法）/ 39（去噪模型）；6 dB 素材 16 → 16 / 50），
                所以不在这里摆一个"看起来能救、实测反而更糟"的开关 —— 这是用户明确要防的那类选项。
                要降噪请走「音频处理」：那里能先听效果再决定要不要拿去转录。 -->
-          <div class="tr-slider-hint" style="margin-top:8px">{{ t('噪声大？转录前先去「音频处理」用去噪模型过一遍（能先试听）；实测在转录页做降噪不会减少噪声引起的假音符，反而可能更多。') }}</div>
-        <div class="tr-slider-hint">{{ t('模型没有配置也能用：首次选用时引擎会从权重本身推出结构，生成后跑一次前向校验（只生成一次，之后走缓存）。') }}</div>
+
+
           <!-- 电平统一：恒定开启，所以不再做成开关（做成开关就等于又造一个"可能没作用"的选项）。 -->
-          <div class="tr-slider-hint" style="margin-top:8px">{{ t('输入电平统一：送入引擎前恒定归一到 −16 dBFS（实测素材电平差 6 dB，音符数会从 69 变 249，所以不再交给开关）') }}</div>
+
 
           <!-- WP1-5：速度组。全表里只有这两项是为「省时间 / 省显存」存在的，
                其余都会改变识别或导出结果，所以都在上面的质量组里。
@@ -2126,13 +2380,13 @@ onBeforeUnmount(() => {
           <div class="tr-slider" v-if="mode === 'universal' && umodel === 'muscriptor'">
             <label>{{ t('束搜索宽度') }}<b>{{ msBeam }}</b></label>
             <NumSlider v-model="msBeam" :min="1" :max="5" :step="1" />
-            <small>{{ t('同时保留多条候选再挑最好；越大越慢，默认 1 = 关闭') }}</small>
+
           </div>
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
             <label>
               <span>
                 <b>{{ t('计算精度') }}</b>
-                <small>{{ t('实测在 10 分钟 / 120 块的长素材上，bf16 与 fp32 耗时相同（CPU 569s vs 569s、显卡 119s vs 119s），输出逐项一致。所以它不是一个提速档 —— 保留仅为降低显存/内存占用。默认 fp32') }}</small>
+
               </span>
               <select v-model="msPrec">
                 <option value="fp32">{{ t('fp32（默认，最稳）') }}</option>
@@ -2162,101 +2416,62 @@ onBeforeUnmount(() => {
 
       <!-- 任务模板已移除（2026-10-14）："记住一套设置"改由**队列**承担 ——
            每个队列自带模型与参数，切队列即切设置（用户要求）。 -->
-      <div v-if="mode !== 'separate'">
 
-      <!-- 摘要 + 开始 -->
-      <div v-if="queue.some(i => i.status === 'pending' || i.status === 'error')" class="tr-sum">
-        {{ t('即将转录：') }}<b>{{ queue.find(i => i.status === 'pending' || i.status === 'error')?.name || '—' }}</b> · {{ t('引擎：') }}<b>{{ MODE_NAMES()[mode] }}</b> · {{ t('预计耗时：') }}<b>{{ sumTime || '—' }}</b>
-      </div>
-      <div class="tr-par" style="display:flex;align-items:center;gap:var(--sp-2);margin-top:12px">
-        <span style="font-size:var(--fs-md);color:var(--steel)">{{ t('并行数') }}</span>
-        <select style="background:var(--surface);color:var(--ink);border:1px solid var(--hairline);border-radius:var(--r-md);padding:4px 8px;font-size:var(--fs-md)" :value="parallelN" @change="setParallel(parseInt($event.target.value, 10) || 1)">
-          <option v-for="n in 4" :key="n" :value="n">{{ n }}</option>
-        </select>
-        <span style="font-size:var(--fs-sm);color:var(--stone)">{{ t('多文件同时转录；GPU 模型建议保持 1') }}</span>
-      </div>
-      <button class="btn primary big" style="width:100%;justify-content:center;margin-top:14px" data-guide="start-transcribe" @click="startTranscribe" :disabled="busy || !isDesktop || !queue.length">
-        <Icon name="transcribe" :size="16" />{{ busy ? t('转录中…') : t('开始转录') }}
-      </button>
-      <div v-if="busy || paused" class="row" style="gap:var(--sp-2);margin-top:8px">
-        <button v-if="busy && !paused" class="btn ghost" style="flex:1;justify-content:center" @click="pauseBatch"><Icon name="pause" :size="14" /> {{ t('暂停') }}</button>
-        <button v-else class="btn" style="flex:1;justify-content:center" @click="resumeBatch"><Icon name="play" :size="14" /> {{ t('继续') }}</button>
-        <button v-if="busy" class="btn ghost" style="flex:1;justify-content:center" @click="cancelTranscribe"><Icon name="stop" :size="14" /> {{ t('取消转录') }}</button>
-      </div>
-
-      <Transition name="fade">
-      <div v-if="busy || done" class="tr-progress">
-        <div class="pfill" :style="{ transform: 'scaleX(' + ((progress) / 100) + ')' }"></div><span>{{ progress }}%</span>
-      </div>
-      </Transition>
-      <div v-if="stage" class="tr-stage muted small">{{ stage }}</div>
-      <Transition name="fade">
-      <div v-if="done" class="tr-done">
-        <button class="btn sm" @click="setView('play')"><Icon name="play2" :size="13" /> {{ t('打开播放') }}</button>
-        <button class="btn sm ghost" @click="openOutput"><Icon name="folder" :size="13" /> {{ t('打开输出文件夹') }}</button>
-        <span class="muted small">{{ doneInfo }}</span>
-      </div>
-      </Transition>
-
-      <!-- 运行日志 -->
-      <Transition name="fade">
-      <div v-if="logs.length" class="tr-log">
-        <div class="tr-log-head">
-          <span class="log-title">{{ t('运行日志') }}</span><span class="log-count">{{ logs.length }}{{ t(' 行') }}</span>
-          <span style="flex:1"></span>
-          <button class="icon-btn" :title="t('清空')" @click="clearLog"><Icon name="trash" :size="13" /></button>
-          <button class="icon-btn" :title="t('展开/收起')" @click="logExpanded = !logExpanded"><Icon name="chevron" :size="13" /></button>
-        </div>
-        <div class="tr-log-scroll" :class="{ collapsed: !logExpanded }">
-          <div v-for="(l, i) in logs" :key="i" :class="{ err: l.isErr }">{{ l.txt }}</div>
-        </div>
-      </div>
-      </Transition>
-      </div>
       </div>
       </Transition>
     </div>
 
-    <!-- 智能修正 -->
-    <div v-if="mode !== 'separate'" class="card tr-card" style="border-top:1px dashed var(--border)">
-      <div class="fb-label" style="font-weight:700">{{ t('智能修正') }}</div>
-      <div class="fb-hint">{{ t('对齐起音 · 还原力度 · 声部平衡 · 清理杂音') }}</div>
-      <div class="tr-rf-row">
-        <span class="muted small" style="min-width:44px">{{ t('原音频') }}</span>
-        <button class="btn sm" @click="pickRfAudio"><Icon name="music" :size="13" /> {{ t('选择音频') }}</button>
-        <span class="muted small rf-path">{{ rf.audio ? rf.audio.replace(/^.*[\\/]/, '') : '—' }}</span>
-      </div>
-      <div class="tr-rf-row">
-        <span class="muted small" style="min-width:44px">{{ t('原 MIDI') }}</span>
-        <button class="btn sm" @click="pickRfMidi"><Icon name="kbd" :size="13" /> {{ t('选择 MIDI') }}</button>
-        <span class="muted small rf-path">{{ rf.midi ? rf.midi.replace(/^.*[\\/]/, '') : '—' }}</span>
-      </div>
-      <div class="fb-label">{{ t('修正模式') }}</div>
-      <div class="fu-ctl tr-pills">
-        <button class="fu-ctl tr-pill" :class="{ active: rf.mode === 'auto' }" @click="rf.mode = 'auto'">{{ t('自动') }}</button>
-        <button class="fu-ctl tr-pill" :class="{ active: rf.mode === 'piano' }" @click="rf.mode = 'piano'">{{ t('钢琴') }}</button>
-        <button class="fu-ctl tr-pill" :class="{ active: rf.mode === 'vocal' }" @click="rf.mode = 'vocal'">{{ t('人声') }}</button>
-      </div>
-      <div class="tr-switch" style="margin-top:8px">
-        <label><span><b>{{ t('声部平衡') }}</b><small>{{ t('抬主奏/人声 · 压配乐') }}</small></span><input type="checkbox" v-model="rf.stem"></label>
-      </div>
-      <button class="btn primary big" style="width:100%;justify-content:center;margin-top:12px" @click="startRefine" :disabled="rf.busy || !rf.midi || !rf.audio">
-        <Icon name="spark" :size="15" />{{ rf.busy ? t('修正中…') : t('开始智能修正') }}
-      </button>
-      <div v-if="rf.busy || rf.info" class="tr-progress">
-        <div class="pfill" :style="{ transform: 'scaleX(' + (((rf.busy ? 60 : 100)) / 100) + ')' }"></div><span>{{ rf.busy ? '…' : t('完成') }}</span>
-      </div>
-      <div v-if="rf.info" class="tr-done">
-        <button class="btn sm" @click="openRefineResult"><Icon name="play2" :size="13" /> {{ t('打开修正结果') }}</button>
-        <span class="muted small">{{ rf.info }}</span>
-      </div>
-      <div v-if="rf.logs.length" class="tr-log">
-        <div class="tr-log-head"><span class="log-title">{{ t('修正日志') }}</span><span class="log-count">{{ rf.logs.length }}{{ t(' 行') }}</span><span style="flex:1"></span><button class="icon-btn" @click="rf.logs = []"><Icon name="trash" :size="13" /></button></div>
-        <div class="tr-log-scroll">
-          <div v-for="(l, i) in rf.logs" :key="i" :class="{ err: l.isErr }">{{ l.txt }}</div>
+    <aside v-if="mode !== 'separate'" class="card tr-card tr-run-panel">
+  <div class="fb-label">{{ t('运行') }}</div>
+  <!-- 摘要 + 开始 -->
+        <div v-if="queue.some(i => i.status === 'pending' || i.status === 'error')" class="tr-sum">
+          {{ t('即将转录：') }}<b>{{ queue.find(i => i.status === 'pending' || i.status === 'error')?.name || '—' }}</b> · {{ t('引擎：') }}<b>{{ MODE_NAMES()[mode] }}</b> · {{ t('预计耗时：') }}<b>{{ sumTime || '—' }}</b>
         </div>
-      </div>
-    </div>
+        <div class="tr-par" style="display:flex;align-items:center;gap:var(--sp-2);margin-top:12px">
+          <span style="font-size:var(--fs-md);color:var(--steel)">{{ t('并行数') }}</span>
+          <select style="background:var(--surface);color:var(--ink);border:1px solid var(--hairline);border-radius:var(--r-md);padding:4px 8px;font-size:var(--fs-md)" :value="parallelN" @change="setParallel(parseInt($event.target.value, 10) || 1)">
+            <option v-for="n in 4" :key="n" :value="n">{{ n }}</option>
+          </select>
+          <span style="font-size:var(--fs-sm);color:var(--stone)">{{ t('多文件同时转录；GPU 模型建议保持 1') }}</span>
+        </div>
+        <button class="btn primary big" style="width:100%;justify-content:center;margin-top:14px" data-guide="start-transcribe" @click="startTranscribe" :disabled="busy || !isDesktop || !queue.length">
+          <Icon name="transcribe" :size="16" />{{ busy ? t('转录中…') : t('开始转录') }}
+        </button>
+        <div v-if="busy || paused" class="row" style="gap:var(--sp-2);margin-top:8px">
+          <button v-if="busy && !paused" class="btn ghost" style="flex:1;justify-content:center" @click="pauseBatch"><Icon name="pause" :size="14" /> {{ t('暂停') }}</button>
+          <button v-else class="btn" style="flex:1;justify-content:center" @click="resumeBatch"><Icon name="play" :size="14" /> {{ t('继续') }}</button>
+          <button v-if="busy" class="btn ghost" style="flex:1;justify-content:center" @click="cancelTranscribe"><Icon name="stop" :size="14" /> {{ t('取消转录') }}</button>
+        </div>
+  
+        <Transition name="fade">
+        <div v-if="busy || done" class="tr-progress">
+          <div class="pfill" :style="{ transform: 'scaleX(' + ((progress) / 100) + ')' }"></div><span>{{ progress }}%</span>
+        </div>
+        </Transition>
+        <div v-if="stage" class="tr-stage muted small">{{ stage }}</div>
+        <Transition name="fade">
+        <div v-if="done" class="tr-done">
+          <button class="btn sm" @click="setView('play')"><Icon name="play2" :size="13" /> {{ t('打开播放') }}</button>
+          <button class="btn sm ghost" @click="openOutput"><Icon name="folder" :size="13" /> {{ t('打开输出文件夹') }}</button>
+          <span class="muted small">{{ doneInfo }}</span>
+        </div>
+        </Transition>
+  
+        <!-- 运行日志 -->
+        <Transition name="fade">
+        <div v-if="logs.length" class="tr-log">
+          <div class="tr-log-head">
+            <span class="log-title">{{ t('运行日志') }}</span><span class="log-count">{{ logs.length }}{{ t(' 行') }}</span>
+            <span style="flex:1"></span>
+            <button class="icon-btn" :title="t('清空')" @click="clearLog"><Icon name="trash" :size="13" /></button>
+            <button class="icon-btn" :title="t('展开/收起')" @click="logExpanded = !logExpanded"><Icon name="chevron" :size="13" /></button>
+          </div>
+          <div class="tr-log-scroll" :class="{ collapsed: !logExpanded }">
+            <div v-for="(l, i) in logs" :key="i" :class="{ err: l.isErr }">{{ l.txt }}</div>
+          </div>
+        </div>
+        </Transition>
+    </aside>
 
     <!-- 预设管理 -->
     <Transition name="ov">
@@ -2288,7 +2503,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.tr-view { max-width: 900px; padding: var(--page-pad-y) var(--page-pad-x) var(--page-pad-b); }
+.tr-view { overflow-x: hidden; max-width: 900px; padding: var(--page-pad-y) var(--page-pad-x) var(--page-pad-b); }
 .warn-tag { color: var(--amber); border-color: rgba(245, 158, 11, 0.4); background: rgba(245, 158, 11, 0.1); }
 .tr-drop-card { padding: 16px; display: flex; flex-direction: column; gap: var(--sp-3); }
 .tr-drop { display: flex; align-items: center; gap: var(--sp-4); padding: 22px; border: 1.5px dashed var(--border-strong); border-radius: var(--r-lg); background: var(--canvas); cursor: pointer; transition: border-color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out), transform var(--motion-base) var(--ease-out), box-shadow var(--motion-base) var(--ease-out); }
@@ -2303,7 +2518,7 @@ onBeforeUnmount(() => {
 .fb-label { font-size: var(--fs-md); font-weight: 600; color: var(--ink); }
 .fb-hint { font-size: var(--fs-xs); color: var(--stone); margin-top: 1px; }
 .tr-batch-ctls { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
-.tr-batch-list { border: 1px solid var(--hairline); border-radius: var(--r-md); background: var(--canvas); overflow: hidden; }
+.tr-batch-list { border: 1px solid var(--hairline); border-radius: var(--r-md); background: var(--canvas); overflow-y: auto; overflow-x: hidden; max-height: min(48vh, 420px); scrollbar-width: thin; scrollbar-gutter: stable; }
 .tr-batch-item { display: flex; align-items: center; gap: var(--sp-2); padding: 6px 10px; border-bottom: 1px solid var(--hairline-soft); font-size: var(--fs-sm); }
 .tr-batch-item:last-child { border-bottom: none; }
 .tb-name { flex: 1; min-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
@@ -2378,6 +2593,11 @@ onBeforeUnmount(() => {
 .tr-queues { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; margin: 0 0 8px; }
 .tr-queues .tr-pill { padding: 2px var(--sp-2); font-size: var(--fs-xs); }   /* 与 .fu-ctl--sm 同值 */
 .tr-queues .tr-q-n { font-style: normal; margin-left: 6px; font-size: var(--fs-xs); opacity: .72; }
+.tr-chain { display: inline-flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-xs); color: var(--stone); cursor: pointer; }
+.tr-chain input { accent-color: var(--accent); }
+.tr-q-run { font-style: normal; margin-left: 4px; color: var(--accent); font-size: var(--fs-xs); }
+.tr-queue-target { display: inline-flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-xs); color: var(--stone); }
+.tr-queue-target select { max-width: 160px; padding: 2px 6px; font-size: var(--fs-xs); }
 .tr-sum { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; background: var(--surface-soft); border-radius: var(--r-md); padding: 10px 14px; font-size: var(--fs-sm); color: var(--slate); }
 .tr-sum b { color: var(--ink); font-weight: 600; }
 .tr-progress { position: relative; display: flex; align-items: center; justify-content: flex-end; height: 20px; background: var(--surface-soft); border-radius: var(--r-pill); overflow: hidden; margin-top: 8px; }
@@ -2476,4 +2696,62 @@ onBeforeUnmount(() => {
   font-size: var(--fs-xs); font-weight: 600; color: var(--t-warn);
   border: 1px solid color-mix(in srgb, var(--t-warn) 45%, var(--line)); background: color-mix(in srgb, var(--t-warn) 12%, transparent); }
 .tr-perf-hint.tr-warn { color: var(--t-warn); }
+
+/* 品牌化布局：宽屏下把“素材/队列”和“引擎/参数”分成两栏，窄屏保持单列。
+   只改视觉位置，不改任何 v-if / 事件 / 数据流；窄窗口或小屏回原顺序。 */
+
+.tr-runbar { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-2) var(--sp-3); margin-bottom: var(--sp-3); position: sticky; top: var(--sp-2); z-index: 25; backdrop-filter: var(--glass-blur); background: color-mix(in srgb, var(--surface) 92%, transparent); }
+.tr-runbar-main { display: flex; align-items: baseline; gap: var(--sp-2); min-width: 0; }
+.tr-runbar-main b { font-size: var(--fs-sm); color: var(--text); }
+.tr-runbar-main span { font-size: var(--fs-xs); color: var(--text3); font-family: var(--font-num); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tr-runbar .btn { margin-left: auto; }
+.tr-runbar-hint { font-size: var(--fs-xs); color: var(--text3); }
+@media (max-width: 760px) { .tr-runbar-hint { display: none; } .tr-runbar { position: static; } }
+
+@media (min-width: 1200px) {
+  /* 宽屏也不强行三栏：左侧队列常驻，右侧主流程单列（引擎 → 高级参数 → 运行）。
+     参数面板需要足够的横向空间，用户不必在窄栏里操作。 */
+  .tr-view {
+    display: grid;
+    grid-template-columns: minmax(360px, 400px) minmax(0, 1fr);
+    grid-template-rows: auto;
+    gap: var(--sp-3);
+    align-items: start;
+    max-width: 1500px;
+    padding-left: var(--sp-4);
+    padding-right: var(--sp-4);
+  }
+  .tr-view > .tr-drop-card {
+    grid-column: 1;
+    grid-row: 1;
+    margin-top: 0;
+    position: sticky;
+    top: 0;
+    max-height: calc(100vh - var(--topbar-h) - var(--playerbar-h) - var(--sp-6));
+    overflow-y: auto;
+  }
+  .tr-view > .tr-card {
+    grid-column: 2;
+    grid-row: auto;
+    margin-top: 0;
+    min-width: 0;
+  }
+  .tr-view > .tr-engine { grid-column: 2; grid-row: 1; }
+  .tr-view > .tr-run-panel {
+    grid-column: 2;
+    grid-row: 2;
+    position: static;
+    margin-top: 0;
+    max-height: none;
+    overflow: visible;
+    overflow-x: clip;
+    min-width: 0;
+  }
+  .tr-batch-item { padding: 8px 10px; min-height: 38px; }
+  .tr-batch-item .tb-name { min-width: 0; }
+  .tr-batch-item .tb-bar { width: 64px; }
+  .tr-view > .tr-run-panel * { min-width: 0; }
+  .tr-view > .tr-run-panel .btn { max-width: 100%; white-space: normal; }
+}
+.tr-run-panel { position: static; margin-top: 0; }
 </style>

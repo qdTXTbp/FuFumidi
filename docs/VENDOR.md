@@ -16,6 +16,8 @@
 | `frontend/public/vendor/js-synth/libfluidsynth-2.4.6-with-libsndfile.js` | 2,371,528 | `8f0cc693731da2d02f13e921` | js-synthesizer 附带的 libfluidsynth 2.4.6 构建（带 libsndfile） | 2.4.6 |
 | `frontend/public/vendor/js-synth/fu-seq-clock.js` | 4,251 | `0a2658fb31608df568aa86b3` | **本项目自有**（AudioWorklet 音序时钟） | — |
 | `renderer/vendor/soundfonts/GeneralUser.sf2` | 31,281,186 | `f45b6b4a68b6bf3d792fcbb6` | GeneralUser GS（S. Christian Collins） | v1.471（许可证 v2.0，见同目录 `GeneralUser.LICENSE.txt`） |
+| `resources/models/audio-tagger/model.int8.onnx` | 27,038,066 | `69304b8a1b96bbe6b7d16c24` | [k2-fsa/sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) 的 audio-tagging 模型（zipformer-small，AudioSet 527 类，int8 ONNX） | 2024-04-15 发布包；CPU 推理，用于自动乐器组探测（方案 B） |
+| `resources/models/audio-tagger/class_labels_indices.csv` | 14,675 | — | 同上（AudioSet 标签表） | 同上 |
 | `engine/singing/openutau/classic/data/mel.onnx` | 85,404 | `1493ffc868c6fb8b66104e2c` | [stakira/OpenUtau](https://github.com/stakira/OpenUtau)（源路径 `OpenUtau.Core/Classic/Data/mel.onnx`） | 上游 commit `4d26fa51a62effe586e5be036eb46fbe8d550a1b`（2025-11-28「update worldline-r2 model」） |
 | `engine/singing/openutau/native/**` | 4.8 MB（6 个平台） | 逐文件映射见 `native/README.md` | [stakira/OpenUtau](https://github.com/stakira/OpenUtau)（MIT） | commit **`04c4e61005`**（2026-09-27，PR #2468 Rebuild Worldline）—— 2026-10-13 用 blob 比对确定 |
 
@@ -99,3 +101,12 @@ https://data.jsdelivr.com/v1/packages/npm/verovio@<版本>?structure=flat
 - 分层、契约、落点：`docs/FOUNDATION.md`。
 - 依赖声明的正确姿势（Python 侧）：`engine/requirements-bundle.txt` 的注释说明了哪些是显式声明、哪些曾是隐式依赖。
 
+
+
+## hFT-Transformer（vendored，MIT）
+
+- 用途：钢琴专用可选引擎（engine/engine_hft.py）。
+- 上游：https://github.com/sony/hFT-Transformer （MIT，Copyright (c) 2023 Sony Group Corporation）。
+- vendored 文件：`engine/hft_model.py`（模型定义，原 `model/model_spec2midi.py`）、`engine/hft_amt.py`（推理/特征/写 MIDI，原 `model/amt.py`）。
+- 权重不随包：资源中心 `hft_transformer` 下载 `checkpoint.zip`（20,540,269 B，SHA-256 `BB3C88758E4802E6B3881CCB6DC7927417FB43F76980DF3739AB2BBC418D70C5`），解包后 `checkpoint/MAESTRO-V3/model_016_003.pkl`。
+- 推理：CPU，模型 5.5M 参数；无踏板检测。

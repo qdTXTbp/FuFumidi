@@ -48,6 +48,79 @@ def available():
         return False
 
 
+
+def _segment_predict_midi(wav_path, segment_sec, do_predict, log_cb=None):
+    """basic-pitch 的「识别片段长度」：按固定秒数切片逐段推理，再合并成一份 PrettyMIDI。
+
+    basic-pitch 的 ONNX 模型输入窗是固定的（约 2 秒，43844 样本），改窗会直接
+    InvalidArgument；所以这里在**音频层**切：每段独立 predict，把音符时间平移回全局时间轴。
+    段间留 0.5s（至少 100ms）重叠，只保留每段核心区起音，减少接缝处重复/截断。
+    """
+    import os
+    import tempfile
+    import numpy as np
+    import soundfile as sf
+    import pretty_midi
+
+    audio, sr = sf.read(wav_path, always_2d=False)
+    if getattr(audio, "ndim", 1) > 1:
+        audio = audio.mean(axis=1)
+    n = len(audio)
+    total_sec = n / float(sr)
+    seg = int(round(float(segment_sec) * sr))
+    if seg <= 0 or n <= seg * 1.5:
+        return None
+    overlap = max(1, min(int(0.5 * sr), seg // 10))
+    step = max(1, seg - overlap)
+    starts = list(range(0, max(1, n - seg + 1), step))
+    if starts[-1] + seg < n:
+        starts.append(max(0, n - seg))
+    merged = pretty_midi.PrettyMIDI()
+    inst = pretty_midi.Instrument(program=0, name="Basic Pitch")
+    seen = set()
+    tmp_paths = []
+    try:
+        for i, st in enumerate(starts):
+            en = min(n, st + seg)
+            fd, tmp = tempfile.mkstemp(prefix="fufumidi-basic-seg-", suffix=".wav")
+            os.close(fd)
+            tmp_paths.append(tmp)
+            sf.write(tmp, audio[st:en], sr)
+            _mo, midi, _notes = do_predict(tmp)
+            off = st / float(sr)
+            guard = overlap / float(sr) / 2.0
+            for mi in midi.instruments:
+                for note in mi.notes:
+                    gs = off + float(note.start)
+                    ge = off + float(note.end)
+                    local_start = float(note.start)
+                    local_end = float(note.end)
+                    if i > 0 and local_start < guard:
+                        continue
+                    if i < len(starts) - 1 and local_start > (seg / float(sr) - guard):
+                        continue
+                    key = (round(gs, 2), int(note.pitch))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    inst.notes.append(pretty_midi.Note(
+                        velocity=int(note.velocity), pitch=int(note.pitch),
+                        start=gs, end=max(gs + 0.01, min(ge, total_sec))))
+            if log_cb:
+                try:
+                    log_cb("分段识别：%d/%d（%.1fs/段）" % (i + 1, len(starts), float(segment_sec)))
+                except Exception:
+                    pass
+        merged.instruments.append(inst)
+        return merged
+    finally:
+        for t in tmp_paths:
+            try:
+                os.remove(t)
+            except OSError:
+                pass
+
+
 def transcribe_basic(audio_path, output_midi,
                      onset_threshold=0.5,
                      frame_threshold=0.3,
@@ -112,18 +185,38 @@ def transcribe_basic(audio_path, output_midi,
                 _log(log_cb, f"智能预处理 · 检测到 BPM = {detected}")
                 midi_tempo = float(detected)
         _log(log_cb, f"推理识别中（basic-pitch 通用模型）…")
-        _model_output, midi_data, note_events = predict(
-            wav,
-            make_basic_model(num_threads),
-            onset_threshold=float(onset_threshold),
-            frame_threshold=float(frame_threshold),
-            minimum_note_length=float(minimum_note_length),
-            minimum_frequency=_none_or(minimum_frequency),
-            maximum_frequency=_none_or(maximum_frequency),
-            melodia_trick=bool(melodia_trick),
-            multiple_pitch_bends=bool(multiple_pitch_bends),
-            midi_tempo=float(midi_tempo),
-        )
+        _model = make_basic_model(num_threads)
+
+        def _do_predict(path):
+            return predict(
+                path,
+                _model,
+                onset_threshold=float(onset_threshold),
+                frame_threshold=float(frame_threshold),
+                minimum_note_length=float(minimum_note_length),
+                minimum_frequency=_none_or(minimum_frequency),
+                maximum_frequency=_none_or(maximum_frequency),
+                melodia_trick=bool(melodia_trick),
+                multiple_pitch_bends=bool(multiple_pitch_bends),
+                midi_tempo=float(midi_tempo),
+            )
+
+        # 识别片段长度：>0 时按秒切片逐段 predict 再合并（basic-pitch 模型窗固定，
+        # 只能在音频层切）。0/不传 = 旧行为：一次 predict 跑完整首。
+        _seg_sec = 0.0
+        try:
+            import segment_options as _so
+            _seg_sec = _so.normalize_segment_sec(kwargs.get("segment_sec"))
+        except Exception:
+            _seg_sec = 0.0
+        _seg_midi = _segment_predict_midi(wav, _seg_sec, _do_predict, log_cb) if _seg_sec else None
+        if _seg_midi is not None:
+            _log(log_cb, "识别片段长度：%.1fs（basic-pitch 分段后合并）" % _seg_sec)
+            midi_data = _seg_midi
+            note_events = []
+            _model_output = None
+        else:
+            _model_output, midi_data, note_events = _do_predict(wav)
         # 后处理：合并同音高碎片 / 力度归一化（可开关）
         try:
             from midi_post import apply_post

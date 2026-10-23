@@ -4,7 +4,7 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
 import Icon from '../components/Icon.vue';
 import { useAppStore } from '../stores/app';
 import { useSettingsStore } from '../stores/settings';
-import { setActiveSoundfontRef } from '../audio.js';
+import { setActiveSoundfontRef, tryDefaultGm } from '../audio.js';
 import { t } from '../core/i18n.js';
 import { orderList, isPinned, togglePin, saveOrder, mergeSubsetOrder } from '../core/usermeta.js';
 
@@ -19,6 +19,7 @@ const sfDir = ref('');
 const loading = ref(false);
 const busySf = ref(false);          // 大音色加载遮罩（解析需短暂占用主线程）
 const activePath = ref('internal');   // 当前启用的音色来源（'internal' 或 SF2 路径）
+const defaultGm = ref(true);           // P0-5：启动时自动加载内置 GM 音色（设置 default_gm）
 const prog = reactive({});            // 下载进度 { id: { percent, active, error } }
 let offProg = null;
 const previewBuf = reactive({});      // 预览按钮忙碌态
@@ -144,6 +145,7 @@ async function loadActive() {
   try {
     const s = await settings.load() || {};
     activePath.value = (s && s.active_soundfont) || 'internal';
+    defaultGm.value = (s && s.default_gm) !== false;
   } catch (e) {}
 }
 
@@ -185,10 +187,19 @@ async function enable(item) {
   }
 }
 
-function enableInternal() {
-  setActiveSoundfontRef('internal').then(() => settings.save({ active_soundfont: 'internal' }));
+async function enableInternal() {
+  setActiveSoundfontRef('internal').then(() => settings.save({ active_soundfont: 'internal', default_gm: false }));
   activePath.value = 'internal';
-  toast(t('已使用默认合成器'), 'ok');
+  defaultGm.value = false;
+  toast(t('已使用默认合成器（并关闭内置 GM 自动加载）'), 'ok');
+}
+/** P0-5：开关默认 GM 自动加载（下次音频初始化/首播生效） */
+async function toggleDefaultGm() {
+  defaultGm.value = !defaultGm.value;
+  await settings.save({ default_gm: defaultGm.value });
+  // 打开时立即试一次（不等下次首播）；加载失败会静默保持内置合成器
+  if (defaultGm.value) void tryDefaultGm();
+  toast(defaultGm.value ? t('已开启内置 GM 自动加载（下次首播生效）') : t('已关闭内置 GM 自动加载'), 'ok');
 }
 
 async function download(item) {
@@ -371,6 +382,10 @@ onBeforeUnmount(() => { if (offProg) { try { offProg(); } catch (e) {} offProg =
         <button class="btn sm" @click="openDir" :disabled="!sfDir">{{ t('打开音色目录') }}</button>
         <button class="btn sm primary" @click="importLocal">{{ t('导入 .sf2 音色') }}</button>
       </div>
+      <label class="sf-defgm" :title="t('首次播放时后台加载内置 GeneralUser GS（29.8MB），不阻塞首屏；关掉则始终用默认合成器。')">
+        <input type="checkbox" :checked="defaultGm" :disabled="!bridge" @change="toggleDefaultGm" />
+        <span>{{ t('启动时自动加载内置 GM 音色（推荐）') }}</span>
+      </label>
       <div class="sf-hint" v-if="!bridge">{{ t('网页版暂不支持音色工坊内置下载，请使用桌面版体验完整功能。') }}</div>
     </div>
 
@@ -489,6 +504,9 @@ onBeforeUnmount(() => { if (offProg) { try { offProg(); } catch (e) {} offProg =
 </template>
 
 <style scoped>
+/* P0-5 默认 GM 自动加载开关（只用 token，别写死颜色/字号） */
+.sf-defgm { display: flex; align-items: center; gap: var(--sp-2); margin-top: var(--sp-2); font-size: var(--fs-sm); opacity: .85; cursor: pointer; user-select: none; }
+.sf-defgm input { accent-color: var(--brand); cursor: pointer; }
 .sf-card { padding: 18px 20px; margin-bottom: 14px; }
 .sf-head { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-md); font-weight: 700; color: var(--ink); margin-bottom: 12px; letter-spacing: -0.2px; }
 .sf-head em.sf-sub { font-style: normal; font-size: var(--fs-sm); font-weight: 500; color: var(--stone); margin-left: 2px; }

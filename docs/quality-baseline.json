@@ -1,0 +1,56 @@
+{
+  "format": "fufumidi-quality-baseline",
+  "version": 1,
+  "updatedAt": "2026-10-17T18:16:19.127Z",
+  "tolerance": 0.02,
+  "metrics": [
+    "noteF1",
+    "onsetF1",
+    "pedalF1"
+  ],
+  "note": "identity 应恒为 1.0；perturbed 是同一套扰动下的指标实现体检值。真实转录模型的基线用 --pred-dir 跑出来后单独记录（不要覆盖默认基线）。",
+  "cases": {
+    "case1_melody": {
+      "identityNoteF1": 1,
+      "identityOnsetF1": 1,
+      "identityPedalF1": 1,
+      "perturbedNoteF1": 0.6667,
+      "perturbedOnsetF1": 0.8571
+    },
+    "case2_chords": {
+      "identityNoteF1": 1,
+      "identityOnsetF1": 1,
+      "identityPedalF1": 1,
+      "perturbedNoteF1": 0.6667,
+      "perturbedOnsetF1": 0.8889
+    },
+    "case3_fast": {
+      "identityNoteF1": 1,
+      "identityOnsetF1": 1,
+      "identityPedalF1": 1,
+      "perturbedNoteF1": 0.5818,
+      "perturbedOnsetF1": 0.8
+    },
+    "case4_pedal": {
+      "identityNoteF1": 1,
+      "identityOnsetF1": 1,
+      "identityPedalF1": 1,
+      "perturbedNoteF1": 0.6667,
+      "perturbedOnsetF1": 0.8
+    },
+    "case5_wide": {
+      "identityNoteF1": 1,
+      "identityOnsetF1": 1,
+      "identityPedalF1": 1,
+      "perturbedNoteF1": 0.6667,
+      "perturbedOnsetF1": 0.7778
+    },
+    "case6_dynamics": {
+      "identityNoteF1": 1,
+      "identityOnsetF1": 1,
+      "identityPedalF1": 1,
+      "perturbedNoteF1": 0.625,
+      "perturbedOnsetF1": 0.75
+    }
+  }
+}

@@ -3218,7 +3218,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
              background: var(--canvas); }
 .sing-nav { display: flex; align-items: center; gap: var(--sp-2); padding: 8px 14px; flex: none;
             border-bottom: 1px solid var(--border); background: var(--canvas); }
-.sing-nav .sp { flex: 1; }
+.sing-nav .sp { display: none; }
 .sn-tab { display: inline-flex; align-items: center; gap: var(--sp-2); padding: 6px 13px; cursor: pointer;
           border: 1px solid var(--border); border-radius: var(--r-pill); background: var(--surface);
           color: var(--steel); font-size: var(--fs-md); }
@@ -3306,7 +3306,7 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .trk-item.on { border-color: var(--brand); background: var(--brand-soft); }
 .trk-row1 { display: flex; align-items: center; gap: var(--sp-1); margin-bottom: 4px; }
 .trk-row2 { display: flex; align-items: center; gap: var(--sp-2); margin-top: 4px; }
-.trk-item .nm { flex: 1; min-width: 0; }
+.trk-item .nm { flex: 1; min-width: 0; font-family: var(--font-ui); font-size: var(--fs-sm); }
 .trk-item .pth { width: 100%; min-width: 0; font-size: var(--fs-sm); height: 24px; }
 .trk-item .pth { width: 100%; font-size: var(--fs-xs); }
 .trk-item .eng { font-size: var(--fs-xs); padding: 1px 3px; border-radius: var(--r-sm);

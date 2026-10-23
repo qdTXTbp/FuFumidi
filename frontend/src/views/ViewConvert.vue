@@ -15,6 +15,16 @@ import { drawVizWaterfallPost } from '../core/viz/index.js';
 import { paintVizBg, drawVizSpectrum, drawVizScope, drawVizChord, rmsAt, smoothEnergy, smoothEnergyDt, activeNotesAt, VIZ_REF_H, VIZ_REF_DPR } from '../core/viz.js';
 import { playVoice, presetFromMode } from '../core/synth.js';
 import { renderSongWithSf2 } from '../core/sf2render.js';
+// P0-4b：导出的编码/DSP/选项映射（纯模块，有单测）
+import { encodeWav, measureLufs, measurePeakDb, applyLimiter, normalizeLoudness } from '../core/export_audio.js';
+import { EXPORT_FORMATS, LOUDNESS_TARGETS, formatInfo, normalizeExportOptions, exportOptionsToSettings, buildExportMeta, estimateFileBytes } from '../core/export_options.js';
+// P1-1c：按编排片段导出
+import { clipsRenderJobs, readArrangeFromSong } from '../core/arrange.js';
+// P2-1：离线插件节点（在渲染后、响度处理前应用）
+import { applyPluginChain } from '../core/plugin_node.js';
+// P2-5：DAW 互通（DAWproject：模型 → project.xml/metadata.xml → 主进程写 ZIP）
+import { songToDawprojectModel, makeDawprojectFiles } from '../core/dawproject.js';
+import { timelineOfSong } from '../core/timeline.js';
 import NumSlider from '../components/NumSlider.vue';
 
 const tempo = ref(1);
@@ -25,6 +35,29 @@ const range = ref('full');
 const busy = ref(false);
 const progress = ref(0);
 const done = ref(false);
+
+/* P0-4b 导出质量选项：格式/位深、dither、响度目标、总线限幅、分轨 */
+const bridge = window.fuBridge;
+const exp = reactive(Object.assign(normalizeExportOptions({}), { stemsZip: true }));
+const arrangeExport = ref(false);   // P1-1c：按「视图 → 编排」的片段排布离线渲染
+const hasArrange = computed(() => {
+  const s = song.value;
+  try { const st = s && readArrangeFromSong(s); return !!(st && st.clips && st.clips.length); } catch (e) { return false; }
+});
+onMounted(async () => {
+  try {
+    const s = (bridge && bridge.getSettings) ? await bridge.getSettings() : {};
+    Object.assign(exp, normalizeExportOptions({
+      format: s && s['export.audio.format'],
+      dither: s && s['export.audio.dither'],
+      loudness: s && s['export.audio.loudness'],
+    plugins: s && s['export.audio.plugins'],
+    }));
+  } catch (e) { /* 读不到设置就用默认 wav24 */ }
+});
+watch(() => [exp.format, exp.dither, exp.loudness], () => {
+  try { if (bridge && bridge.saveSettings) bridge.saveSettings(exportOptionsToSettings(exp)).catch(() => {}); } catch (e) {}
+});
 
 const song = computed(() => (currentSong.value && currentSong.value.song) || null);
 const totalNotes = computed(() => song.value ? song.value.tracks.reduce((a, tr) => a + tr.notes.length, 0) : 0);
@@ -43,7 +76,9 @@ const estSize = computed(() => {
   const s = song.value;
   if (!s) return '—';
   const sec = s.totalSec / (tempo.value || 1);
-  const bytes = sec * (rate.value || 44100) * 2;
+  // 按实际位深与是否分轨估算（16bit 立体声 44.1k 约 10.1MB/分钟）
+  const perFile = estimateFileBytes(sec, rate.value || 44100, exp.format);
+  const bytes = perFile * (exp.stems ? Math.max(1, (s.tracks || []).length) : 1);
   const kb = bytes / 1024;
   return kb >= 1048576 ? (kb / 1048576).toFixed(1) + ' MB' : Math.round(kb) + ' KB';
 });
@@ -171,12 +206,24 @@ async function renderAudio() {
   if (!s) { toast(t('请先载入 MIDI 文件'), 'warn'); return; }
   if (busy.value) return;
   busy.value = true; done.value = false; progress.value = 0;
+  const g = clamp(gain.value / 100, 0, 2);
   try {
-    const buf = await renderAudioBuffer(s, { rate: rate.value, scale: tempo.value, mode: preset.value, onProgress: (p) => { progress.value = Math.round(p * 50); } });
-    const g = clamp(gain.value / 100, 0, 2);
-    await downloadWav(buf, s.name, g);
-    progress.value = 100; done.value = true;
-    toast(t('音频已导出'));
+    if (arrangeExport.value && hasArrange.value) {
+      const ab = await renderArrangeToBuffer(s, g);
+      if (!ab) { toast(t('编排时间线里还没有片段'), 'warn'); return; }
+      progress.value = 92;
+      await exportRendered(ab, s.name + '_arrange', 1);
+      progress.value = 100; done.value = true;
+      toast(t('已按编排片段导出'));
+    } else if (exp.stems) {
+      await renderStems(s, g);
+    } else {
+      const buf = await renderAudioBuffer(s, { rate: rate.value, scale: tempo.value, mode: preset.value, onProgress: (p) => { progress.value = Math.round(p * 90); } });
+      progress.value = 92;
+      await exportRendered(buf, s.name + '_render', g);
+      progress.value = 100; done.value = true;
+      toast(t('音频已导出'));
+    }
   } catch (e) {
     toast(t('渲染失败：') + String(e.message || e), 'warn');
   } finally { busy.value = false; }
@@ -198,22 +245,194 @@ function mixRendered(rendered, sr, totalLen) {
   return out;
 }
 
-async function downloadWav(buf, name, g) {
-  const bytes = await audioBufferToWavBytesAsync(buf, (p) => { progress.value = Math.max(progress.value, Math.round(p * 100)); }, g);
-  const bridge = window.fuBridge;
-  if (bridge && bridge.saveBinary) {
-    // 直接传 Uint8Array（结构化克隆），避免 Array.from 生成数千万元素数组导致内存暴涨
-    const r = await bridge.saveBinary({ name: name + '_render.wav', data: bytes });
-    if (r && r.ok) toast(t('已保存到：') + r.path, 'ok');
-    else if (!(r && r.canceled)) toast(t('保存失败：') + ((r && r.error) || ''), 'warn');
-    return;
+/**
+ * P0-4b：把离线渲染好的 AudioBuffer 编码并落盘。
+ * 链路：增益 →（响度归一 + 限幅）→ WAV 编码（位深/dither）→ bridge.exportAudio（主进程原子写 + manifest）。
+ * 网页端没有 bridge.exportAudio 时退回 blob 下载。
+ */
+async function encodeRendered(buf, baseName, gainMul) {
+  const sr = buf.sampleRate;
+  const chs = [];
+  for (let c = 0; c < buf.numberOfChannels; c++) {
+    const src = buf.getChannelData(c);
+    const a = new Float32Array(src.length);
+    for (let i = 0; i < src.length; i++) a[i] = src[i] * gainMul;
+    chs.push(a);
+  }
+  const fi = formatInfo(exp.format);
+  let out = chs;
+  let report = null;
+  // P2-1：插件链在响度归一化**之前**跑（否则压缩器会破坏已校准的 LUFS）
+  let pluginReport = null;
+  if (Array.isArray(exp.plugins) && exp.plugins.length) {
+    try {
+      const pr = applyPluginChain(out, sr, exp.plugins);
+      out = pr.channels;
+      pluginReport = pr.report;
+    } catch (e) { console.warn('[export] 插件链失败，跳过：', (e && e.message) || e); }
+  }
+  if (exp.loudness !== 'off') {
+    const n = normalizeLoudness(chs, sr, { targetLufs: Number(exp.loudness), ceilingDb: -1, limiter: exp.limiter !== false });
+    out = n.channels;
+    report = n.report;
+  } else if (exp.limiter !== false) {
+    const lim = applyLimiter(chs, sr, { ceilingDb: -1 });
+    out = lim.channels;
+    report = { outputLufs: measureLufs(out, sr), outputPeakDb: measurePeakDb(out), targetLufs: null, reductionDb: lim.reductionDb };
+  }
+  // P1-7：WAV 写入 BWF bext + LIST INFO 元数据（溯源：软件 / 曲名 / 生成日期时间）
+  const now = new Date();
+  const p2 = (n) => String(n).padStart(2, '0');
+  const wavMeta = {
+    originator: 'FuFumidi',
+    originatorReference: 'FuFumidi',
+    description: (song.value && song.value.name) || baseName,
+    software: 'FuFumidi',
+    title: (song.value && song.value.name) || baseName,
+    artist: 'FuFumidi',
+    date: now.getFullYear() + '-' + p2(now.getMonth() + 1) + '-' + p2(now.getDate()),
+    originationDate: now.getFullYear() + '-' + p2(now.getMonth() + 1) + '-' + p2(now.getDate()),
+    originationTime: p2(now.getHours()) + ':' + p2(now.getMinutes()) + ':' + p2(now.getSeconds()),
+    timeReference: 0,
+  };
+  void pluginReport;
+  const bytes = encodeWav(out, sr, { bitDepth: fi.bitDepth, dither: exp.dither && fi.bitDepth === 16, metadata: wavMeta });
+  const peakDb = report ? report.outputPeakDb : measurePeakDb(out);
+  const lufs = report ? report.outputLufs : measureLufs(out, sr);
+  const meta = buildExportMeta({
+    name: baseName, format: exp.format, sampleRate: sr, channels: out.length,
+    durationSec: (out[0] ? out[0].length : 0) / sr,
+    lufs, peakDb, targetLufs: exp.loudness === 'off' ? null : Number(exp.loudness),
+    sourceName: (song.value && song.value.name) || '',
+  });
+  return { bytes, meta, fi };
+}
+
+/** 把 encodeRendered 的结果落盘（桌面走主进程原子写；网页退回 blob 下载）。 */
+async function saveEncoded(enc) {
+  const { bytes, meta, fi } = enc;
+  if (bridge && bridge.exportAudio) {
+    const r = await bridge.exportAudio(Object.assign({ bytes }, meta));
+    if (r && r.ok) { toast(t('已保存到：') + r.path, 'ok'); return true; }
+    if (!(r && r.canceled)) { toast(t('保存失败：') + ((r && r.error) || ''), 'warn'); return false; }
+    return false;
   }
   const blob = new Blob([bytes], { type: 'audio/wav' });
   const a = document.createElement('a');
-  a.download = name + '_render.wav';
+  a.download = meta.name + '.' + fi.ext;
   a.href = URL.createObjectURL(blob);
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  return true;
+}
+
+/** 编码并落盘（普通音频导出路径） */
+async function exportRendered(buf, baseName, gainMul) {
+  return saveEncoded(await encodeRendered(buf, baseName, gainMul));
+}
+
+/**
+ * P1-1c 按编排片段导出：按 clipsRenderJobs 的顺序，逐个从原曲区间离线渲染，再按 placeSec
+ * 贴到 master 时间线上（overlap 相加），最后走与普通导出同一条编码/落盘链路。
+ */
+async function renderArrangeToBuffer(s, g) {
+  const st = readArrangeFromSong(s);
+  if (!st || !st.clips.length) return null;
+  const tl = timelineOfSong(s);
+  const { jobs, totalSec } = clipsRenderJobs(st, tl, { scale: tempo.value });
+  if (!jobs.length) return null;
+  const sr = rate.value;
+  const totalLen = Math.max(1, Math.ceil((totalSec + 1.5) * sr));
+  const master = [new Float32Array(totalLen), new Float32Array(totalLen)];
+  for (let i = 0; i < jobs.length; i++) {
+    const j = jobs[i];
+    progress.value = Math.max(2, Math.round((i / jobs.length) * 80));
+    const buf = await renderAudioBuffer(s, {
+      rate: sr, scale: tempo.value, mode: preset.value,
+      startSec: j.sourceStartSec, endSec: j.sourceEndSec,
+    });
+    const off = Math.max(0, Math.round(j.placeSec * sr));
+    const n = Math.min(buf.length, totalLen - off);
+    for (let ch = 0; ch < 2; ch++) {
+      const src = buf.getChannelData(Math.min(ch, buf.numberOfChannels - 1));
+      const dst = master[ch];
+      for (let k = 0; k < n; k++) dst[off + k] += src[k] * g;
+    }
+  }
+  const oc = new (window.OfflineAudioContext || window.webkitOfflineAudioContext)(2, totalLen, sr);
+  const ab = oc.createBuffer(2, totalLen, sr);
+  ab.copyToChannel(master[0], 0);
+  ab.copyToChannel(master[1], 1);
+  return ab;
+}
+
+/** P0-4b/P0-4c 分轨导出：每轨单独离线渲染（其余轨静音）→ 各自一个文件或打包成一个 ZIP */
+async function renderStems(s, gainMul) {
+  const targets = (s.tracks || []).map((tr, i) => ({ tr, i })).filter((x) => x.tr && x.tr.notes && x.tr.notes.length);
+  if (!targets.length) { toast(t('没有可导出的音符'), 'warn'); return 0; }
+  const encoded = [];
+  for (let k = 0; k < targets.length; k++) {
+    const { tr, i } = targets[k];
+    progress.value = Math.max(2, Math.round((k / targets.length) * 90));
+    // 单轨子歌曲：index 归 0（渲染内层按 s.tracks 下标分配增益节点）
+    const sub = Object.assign({}, s, { tracks: [Object.assign({}, tr, { index: 0 })] });
+    const buf = await renderAudioBuffer(sub, { rate: rate.value, scale: tempo.value, mode: preset.value });
+    const name = s.name + '_' + (tr.name || (t('轨道') + (i + 1))) + '_stem';
+    encoded.push(await encodeRendered(buf, name, gainMul));
+  }
+  progress.value = 95;
+  let ok = 0;
+  // P0-4c：桌面版默认打成一个 ZIP（一次保存，文件名可控）；网页端或主进程不支持时逐文件保存
+  if (exp.stemsZip && bridge && typeof bridge.exportStemsZip === 'function') {
+    try {
+      const r = await bridge.exportStemsZip({
+        files: encoded.map((e) => ({ name: e.meta.name + '.' + e.fi.ext, bytes: e.bytes })),
+        suggestedName: s.name + '_stems.zip',
+      });
+      if (r && r.ok) { ok = encoded.length; toast(t('分轨已打包：') + r.path, 'ok'); }
+      else if (!(r && r.canceled)) toast(t('打包分轨失败：') + ((r && r.error) || ''), 'warn');
+    } catch (e) { toast(t('打包分轨失败：') + String((e && e.message) || e), 'warn'); }
+  } else {
+    for (const e of encoded) { if (await saveEncoded(e)) ok++; }
+  }
+  progress.value = 100;
+  done.value = true;
+  toast(t('分轨导出完成：') + ok + t(' 轨'), 'ok');
+  return ok;
+}
+
+/** P2-5：导出 DAWproject（Studio One / Bitwig 等支持该交换格式） */
+async function exportDawproject() {
+  const s = song.value;
+  if (!s) { toast(t('请先载入 MIDI 文件'), 'warn'); return; }
+  try {
+    const model = songToDawprojectModel(s, { title: s.name });
+    if (!model.tracks.length) { toast(t('没有可导出的音符'), 'warn'); return; }
+    const { files } = makeDawprojectFiles(model);
+    if (!bridge || typeof bridge.exportDawproject !== 'function') {
+      toast(t('桌面版才支持导出 DAWproject'), 'warn');
+      return;
+    }
+    const r = await bridge.exportDawproject({ files, suggestedName: (s.name || 'project') + '.dawproject' });
+    if (r && r.ok) toast(t('已导出 DAWproject：') + (r.filePath || ''), 'ok');
+    else if (r && !r.canceled) toast(t('导出 DAWproject 失败：') + ((r && r.error) || ''), 'warn');
+  } catch (e) { toast(t('导出 DAWproject 失败：') + String((e && e.message) || e), 'warn'); }
+}
+
+/** P2-1：VST3 离线渲染（实验）—— 依次选择插件/输入/输出，由主进程调 pedalboard 宿主渲染 */
+async function quickVst3Render() {
+  if (!bridge || !bridge.plugin) { toast(t('桌面版才支持 VST3 离线渲染'), 'warn'); return; }
+  try {
+    const pk = await bridge.plugin.pickFile();
+    if (!pk || !pk.ok) return;
+    const inFile = await bridge.plugin.pickAudio();
+    if (!inFile || !inFile.ok) return;
+    const out = await bridge.plugin.savePath('vst3-render.wav');
+    if (!out || !out.ok) return;
+    const r = await bridge.plugin.renderFile({ plugin: pk.file, input: inFile.file, output: out.file });
+    if (r && r.ok) toast(t('VST3 渲染完成：') + (r.out || '') + ' · ' + r.seconds + 's / ' + r.elapsed + 's', 'ok');
+    else toast(t('VST3 渲染失败：') + ((r && r.error) || ''), 'warn');
+  } catch (e) { toast(t('VST3 渲染失败：') + String((e && e.message) || e), 'warn'); }
 }
 
 /* ==================== 视频 / 可视化导出 ==================== */
@@ -768,6 +987,8 @@ async function renderVideo() {
       <span class="conv-song">{{ song ? song.name : t('未加载曲目') }}</span>
     </div>
 
+    <div class="conv-duo">
+    <div class="conv-col">
     <div class="card conv-form">
       <div class="form-grid">
         <div class="field-row">
@@ -796,6 +1017,38 @@ async function renderVideo() {
             <option value="full">{{ t('整首歌曲') }}</option>
           </select>
         </div>
+        <div class="field-row">
+          <label>{{ t('导出格式') }}</label>
+          <select class="select-input" v-model="exp.format">
+            <option v-for="f in EXPORT_FORMATS" :key="f.id" :value="f.id">{{ f.label }}</option>
+          </select>
+        </div>
+        <div class="field-row">
+          <label>{{ t('响度目标') }}</label>
+          <select class="select-input" v-model="exp.loudness">
+            <option v-for="l in LOUDNESS_TARGETS" :key="l.id" :value="l.id">{{ l.label }}</option>
+          </select>
+        </div>
+        <div class="field-row">
+          <label>{{ t('16bit TPDF dither') }}</label>
+          <input type="checkbox" v-model="exp.dither" :disabled="formatInfo(exp.format).bitDepth !== 16" />
+        </div>
+        <div class="field-row">
+          <label>{{ t('总线限幅（-1 dBFS）') }}</label>
+          <input type="checkbox" v-model="exp.limiter" />
+        </div>
+        <div class="field-row">
+          <label>{{ t('分轨导出（每轨一个文件）') }}</label>
+          <input type="checkbox" v-model="exp.stems" data-guide="export-stems" />
+        </div>
+        <div class="field-row" v-if="exp.stems">
+          <label :title="t('桌面版默认把分轨打成一个 ZIP，只需选一次保存位置')">{{ t('打包为一个 ZIP（推荐）') }}</label>
+          <input type="checkbox" v-model="exp.stemsZip" data-guide="export-stems-zip" />
+        </div>
+        <div class="field-row">
+          <label :title="t('按「视图 → 编排」里放置的片段顺序渲染（需要先编排）')">{{ t('按编排片段导出') }}</label>
+          <input type="checkbox" v-model="arrangeExport" :disabled="!hasArrange" />
+        </div>
         <div class="field-row gain-row">
           <label>{{ t('输出音量') }}<b style="color:var(--brand-coral)">{{ gain }}%</b></label>
           <NumSlider v-model="gain" :min="0" :max="150" class="range" />
@@ -808,7 +1061,13 @@ async function renderVideo() {
       </div>
 
       <button class="btn primary big" @click="renderAudio" :disabled="busy || !song">
-        <Icon name="convert" :size="16" />{{ busy ? t('渲染中…') : t('渲染并导出 WAV') }}
+        <Icon name="convert" :size="16" />{{ busy ? t('渲染中…') : t('渲染并导出音频') }}
+      </button>
+      <button class="btn big" style="margin-left:var(--sp-2)" data-guide="export-dawproject" @click="exportDawproject" :disabled="!song">
+        <Icon name="convert" :size="16" />{{ t('导出 DAWproject') }}
+      </button>
+      <button class="btn big" style="margin-left:var(--sp-2)" data-guide="vst3-render" @click="quickVst3Render" :title="t('可选能力：需自备 pedalboard 宿主与 .vst3 插件')">
+        <Icon name="convert" :size="16" />{{ t('VST3 离线渲染（实验）') }}
       </button>
 
       <Transition name="cv">
@@ -818,10 +1077,12 @@ async function renderVideo() {
         </div>
       </Transition>
       <Transition name="cv">
-        <div v-if="done" class="conv-done-tip">✓ {{ t('渲染完成，WAV 已下载') }}</div>
+        <div v-if="done" class="conv-done-tip">✓ {{ t('渲染完成，音频已导出') }}</div>
       </Transition>
     </div>
 
+    </div>
+    <div class="conv-col">
     <!-- ==================== 视频 / 可视化导出 ==================== -->
     <div class="card conv-form ve-card">
       <div class="ve-head">
@@ -949,12 +1210,14 @@ async function renderVideo() {
         <button v-if="VE.veBusy" class="btn sm danger" @click="VE.veCancel = true">{{ t('取消导出') }}</button>
       </Transition>
     </div>
+    </div>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.convert-view { max-width: 820px; padding: var(--page-pad-y) var(--page-pad-x) var(--page-pad-b); }
-.conv-info-bar { display: flex; flex-wrap: wrap; gap: var(--sp-3); align-items: center; background: var(--canvas); border: 1px solid var(--hairline); border-radius: var(--r-md); padding: 8px 14px; margin-bottom: 12px; font-size: var(--fs-md); color: var(--steel); }
+.convert-view { max-width: 1280px; padding: var(--page-pad-y) var(--page-pad-x) var(--page-pad-b); }
+.conv-info-bar { display: flex; flex-wrap: wrap; gap: var(--sp-3); align-items: center; background: color-mix(in srgb, var(--surface) 42%, transparent); border: 1px solid var(--hairline); border-radius: var(--r-md); padding: 8px 14px; margin-bottom: 12px; font-size: var(--fs-md); color: var(--steel); }
 .conv-song { color: var(--stone); }
 .conv-form { display: flex; flex-direction: column; gap: var(--sp-4); }
 .form-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--sp-4) var(--sp-5); }
@@ -987,7 +1250,7 @@ async function renderVideo() {
 /* 转换页进度/完成提示显隐过渡 */
 .cv-enter-active, .cv-leave-active { transition: opacity var(--motion-base) var(--ease-out), transform var(--motion-base) var(--ease-spring); }
 .cv-enter-from, .cv-leave-to { opacity: 0; transform: translateY(6px); }
-.ve-card { margin-top: 18px; padding: 18px; }
+.ve-card { margin-top: 0; padding: 18px; }
 .ve-head { display: flex; flex-direction: column; gap: var(--sp-1); }
 .ve-head b { font-size: var(--fs-lg); color: var(--ink); }
 .ve-preview-wrap { position: relative; width: 100%; background: var(--surface-soft); border: 1px solid var(--hairline); border-radius: var(--r-md); overflow: hidden; }
@@ -1004,4 +1267,10 @@ async function renderVideo() {
 .ve-opts label { display: inline-flex; align-items: center; gap: var(--sp-1); cursor: pointer; }
 .ve-opts input[type=checkbox] { accent-color: var(--ink); }
 .num-input { width: 100%; padding: 6px 8px; font-size: var(--fs-sm); background: var(--canvas); border: 1px solid var(--hairline); border-radius: var(--r-md); color: var(--ink); outline: none; box-sizing: border-box; }
+
+/* 转换页双栏：音频导出 / 视频导出并排，窄屏回退单栏 */
+.conv-duo { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--sp-3); align-items: stretch; }
+.conv-col { min-width: 0; display: flex; flex-direction: column; gap: var(--sp-3); height: 100%; }
+.conv-col > .conv-form { flex: 1; }
+@media (max-width: 980px) { .conv-duo { grid-template-columns: 1fr; } }
 </style>

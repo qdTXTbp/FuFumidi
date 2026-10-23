@@ -460,7 +460,7 @@ function toggleCrossfade() {
 }
 .pb-pop-row { display: flex; gap: var(--sp-1); align-items: center; }
 .pb-pop-jump { flex: 1; display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border: 0; background: transparent; color: var(--ink); border-radius: var(--r-sm); cursor: pointer; font-size: var(--fs-md); text-align: left; }
-.pb-pop-jump:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.pb-pop-jump:hover { background: color-mix(in srgb, var(--accent-sapphire) 13%, var(--surface)); }
 .pb-pop-del { border: 0; background: transparent; color: var(--stone); cursor: pointer; padding: var(--sp-2); border-radius: var(--r-sm); }
 .pb-pop-del:hover { color: var(--t-err); }
 .pb-pop-empty { padding: var(--sp-2) var(--sp-3); font-size: var(--fs-sm); color: var(--stone); }

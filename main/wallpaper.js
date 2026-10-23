@@ -194,7 +194,7 @@ function registerWallpaperIpc({ ipcMain, app, fs: f, net, runEngineInline, parse
       if (!f.existsSync(video)) return { ok: false, error: 'not found' };
       f.unlinkSync(video);
       try { f.unlinkSync(video + '.ok'); } catch (e) {}   // 完成标记一并删除
-      const thumb = path.join(dir, name.replace(/\.(mp4|webm|mov)$/i, '') + '.jpg');
+      const thumb = path.join(dir, name.replace(/\.(mp4|webm|mov|jpg|jpeg|png|webp|avif|gif)$/i, '') + '.jpg');
       if (f.existsSync(thumb)) f.unlinkSync(thumb);
       return { ok: true };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }

@@ -14,7 +14,11 @@ const routes: RouteRecordRaw[] = [
   { path: '/convert', name: 'convert', component: () => import('./views/ViewConvert.vue') },
   { path: '/music', name: 'music', component: () => import('./views/ViewMusic.vue') },
   { path: '/views', name: 'views', component: () => import('./views/ViewViews.vue') },
+  // 编排时间线（P1-1）：并入「视图」组做页签，旧/外部链接 /arrange 重定向过去
+  { path: '/arrange', redirect: { path: '/views', query: { tab: 'arrange' } } },
   { path: '/transcode', name: 'transcode', component: () => import('./views/ViewTranscode.vue') },
+  // P1-7 关于与许可（从设置-关于进入，也可直接开 #/about）
+  { path: '/about', name: 'about', component: () => import('./views/ViewAbout.vue') },
   { path: '/resources', name: 'resources', component: () => import('./views/ViewResources.vue') },
   { path: '/models', redirect: { path: '/resources', query: { tab: 'model' } } },
   { path: '/soundfonts', redirect: { path: '/resources', query: { tab: 'soundfonts' } } },
@@ -40,6 +44,14 @@ export const router = createRouter({
   history: createWebHashHistory(),
   routes,
   scrollBehavior: () => ({ top: 0 }),
+});
+
+// 旧深链兼容：编辑/歌词归工作台，可视化/乐谱归音乐。
+router.beforeEach((to) => {
+  const tab = String(to.query.tab || '');
+  if (to.path === '/music' && ['edit', 'lyrics'].includes(tab)) return { path: '/views', query: { ...to.query } };
+  if (to.path === '/views' && ['viz', 'score'].includes(tab)) return { path: '/music', query: { ...to.query } };
+  return true;
 });
 
 /* ---------------- 空闲预取重视图（2026-10-17 性能）----------------

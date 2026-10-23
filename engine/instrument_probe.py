@@ -105,8 +105,15 @@ def parse_mode(raw):
         groups = [s.strip() for s in str(raw or "").split(",") if s.strip()]
     if not groups:
         return ("none", [])
-    if len(groups) == 1 and groups[0].lower() in ("auto", "smart", "none", "off", "free", "-"):
+    if len(groups) == 1 and groups[0].lower() in ("none", "off", "free", "-"):
         return ("none", [])
+    # 'probe'：整曲探测后硬约束；
+    # 'probe_segments'：按 30/60s 分段探测、逐段硬约束（实验）。
+    # 旧值 'auto'/'smart' 兼容为整曲 probe。
+    if len(groups) == 1 and groups[0].lower() in ("probe", "auto", "smart"):
+        return ("probe", [])
+    if len(groups) == 1 and groups[0].lower() in ("probe_segments", "segments"):
+        return ("probe_segments", [])
     return ("limit", groups)
 
 

@@ -39,6 +39,9 @@ function clamp(v, lo, hi) {
  * @property {'render'|'playback'} mode  生效时机（见文件头）
  * @property {string[]} engines  哪些引擎的轨道能用（`audio` 表示伴奏轨）
  */
+// P1-13 B3：曲线取值统一由 curve_engine.valueAt 实现（编辑/调教同一套语义）
+import { valueAt } from './curve_engine.js';
+
 export const CURVE_TARGETS = {
   PIT: {
     label: '音高', unit: 'cent', min: -1200, max: 1200, step: 5, def: 0,
@@ -144,25 +147,11 @@ export function curveOf(track, abbr) {
  * 远超范围的值），听感上是莫名其妙的音量跳变。
  */
 export function sampleAt(points, beat, fallback) {
-  const pts = Array.isArray(points) ? points : [];
-  const fb = Number.isFinite(fallback) ? fallback : 0;
-  if (!pts.length) return fb;
-  if (!Number.isFinite(beat)) return fb;
-  // ★ 用 `<` 而不是 `<=`：拍值重合时（用户叠了两个点）要走进下面的插值分支，
-  //   由 `span <= 0` 那条规则取后一个值；用 `<=` 会在这里就返回首值，等于"后写的点被无视"。
-  if (beat < pts[0].beat) return pts[0].value;
-  const last = pts[pts.length - 1];
-  if (beat >= last.beat) return last.value;
-  for (let i = 1; i < pts.length; i++) {
-    const a = pts[i - 1];
-    const b = pts[i];
-    if (beat <= b.beat) {
-      const span = b.beat - a.beat;
-      if (span <= 0) return b.value;         // 重合点：取后一个（后写覆盖先写）
-      return a.value + (b.value - a.value) * ((beat - a.beat) / span);
-    }
-  }
-  return last.value;
+  const fb = Number.isFinite(Number(fallback)) ? Number(fallback) : 0;
+  if (!Number.isFinite(Number(beat))) return fb;
+  // 语义（线性插值 + 两端保持 + 重合点取后写）统一在 curve_engine.valueAt；
+  // 顺带获得"点列表先排序/清洗"，调教侧不必再假设调用方传入的是有序点。
+  return valueAt(points, Number(beat), fb);
 }
 
 /**

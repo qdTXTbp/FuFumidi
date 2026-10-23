@@ -3,10 +3,13 @@
 import { ref, computed, watch, nextTick, onMounted } from 'vue';
 import Icon from './Icon.vue';
 import { useAppStore, VIEWS } from '../stores/app';
+import { useSettingsStore } from '../stores/settings';
+import { visibleViews } from '../core/expert.js';
 import { t } from '../core/i18n.js';
 
 const app = useAppStore();
 const state = app;
+const settingsStore = useSettingsStore();
 const setView = (v) => app.setView(v);
 const importFiles = (items) => app.importFiles(items);
 const importWithPicker = (items) => app.importWithPicker(items);
@@ -27,7 +30,7 @@ function close() { state.ui.paletteOpen = false; }
 /* ---------------- 命令定义 ---------------- */
 function buildCommands() {
   return [
-    ...VIEWS.map(v => ({
+    ...visibleViews(VIEWS, settingsStore.settings).map(v => ({
       group: t('视图'),
       label: t(v.label),
       icon: VIEW_ICONS[v.id] || 'dot',

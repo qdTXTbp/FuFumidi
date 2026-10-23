@@ -77,6 +77,10 @@ function writable(dir) {
 /** 解析数据根目录（结果缓存；app ready 前后调用都安全） */
 function resolveRoot() {
   if (_root) return _root;
+  /* E2E（scripts/e2e）：强制独立数据根，绝不碰用户真实曲库/模型。
+     只有设置了环境变量才生效；正常启动完全不走这条路。 */
+  const e2eRoot = process.env.FUFUMIDI_E2E_DATA_ROOT || '';
+  if (e2eRoot && writable(e2eRoot)) { _root = e2eRoot; _rootReason = 'e2e'; return _root; }
   const preferred = path.join(installRoot(), DIR_NAME);
   const configured = configuredRoot();
   const candidates = [];

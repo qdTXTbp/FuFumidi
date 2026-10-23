@@ -101,9 +101,17 @@ def transcribe_aria(audio_path, output_midi, params=None, log_cb=None,
         before = set(os.listdir(out_dir))
         # 设备为本机 GPU 不可用时，用环境变量强制子进程看不见显卡 ——
         # aria-amt 的 CLI 没有设备开关，这是唯一可靠的「只用 CPU」手段。
-        env = None
+        env = dict(os.environ)
+        # 识别片段长度（秒 → 毫秒）；不设置时包装器不改常量
+        try:
+            import segment_options as _so
+            _ms = _so.aria_len_ms(params.get("segment_sec"))
+            if _ms:
+                env["FUFUMIDI_ARIA_SEGMENT_MS"] = str(int(_ms))
+                _log(log_cb, "Aria-AMT 识别片段长度：%.1fs" % (float(_ms) / 1000.0))
+        except Exception:
+            pass
         if not device.startswith("cuda"):
-            env = dict(os.environ)
             env["CUDA_VISIBLE_DEVICES"] = ""
             env["FUFUMIDI_FORCE_CPU"] = "1"
             try:
@@ -189,6 +197,11 @@ def _aria_cli():
         import amt
         rp = os.path.join(os.path.dirname(os.path.abspath(amt.__file__)), "run.py")
         if os.path.isfile(rp):
+            # ★ 识别片段长度：aria 的 CLI 没有参数，靠 aria_run.py 在启动前改
+            #   amt.inference.transcribe 的 LEN_MS / CHUNK_LEN_MS（见该文件说明）。
+            wrapper = os.path.join(os.path.dirname(os.path.abspath(__file__)), "aria_run.py")
+            if os.path.isfile(wrapper):
+                return [sys.executable, wrapper, rp]
             return [sys.executable, rp]
     except Exception:
         pass

@@ -53,6 +53,69 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       downloadable: true,
       runtime: 'piano',
     },
+    // hFT-Transformer（Sony ISMIR2023，MIT）：22 MB 权重，CPU 可跑；资源中心下载，不随安装包分发
+    hft_transformer: {
+      id: 'hft_transformer',
+      name: 'hFT-Transformer',
+      note: '钢琴转录 · Sony ISMIR2023 · 5.5M 参数 · 约 22 MB · CPU 可跑',
+      kind: 'transcribe',
+      arch: 'hFT-Transformer',
+      use: '钢琴专用：hFT 分层频时 Transformer，MAESTRO 权重；比 piano-transcription 更细的和弦/踏板，CPU 即可运行',
+      dest: 'hft_transformer',
+      url: 'https://github.com/sony/hFT-Transformer/releases/download/ismir2023/checkpoint.zip',
+      unpack: true,
+      unpackMarker: 'checkpoint/MAESTRO-V3/model_016_003.pkl',
+      sha256: 'bb3c88758e4802e6b3881ccb6dc7927417fb43f76980df3739ab2bbc418d70c5',
+      size: 20540269,
+      minSize: 18000000,
+      downloadable: true,
+      runtime: 'piano',
+    },
+    // MIROS（2025 AMT Challenge 冠军）：运行时依赖 + 源码 + MusicFM + 4.0GB 权重，单包下载；不随安装包分发
+    miros: {
+      id: 'miros',
+      name: 'MIROS',
+      note: '通用多乐器转录 · 2025 AMT Challenge 冠军 · 运行时+权重约 5.0 GB',
+      kind: 'transcribe',
+      arch: 'MIROS (MusicFM + YourMT3+)',
+      use: '通用多乐器转录：MIROS 冠军模型，MusicFM 编码器 + YourMT3+ 多通道解码；含独立 Python 运行时',
+      dest: 'miros',
+      type: 'parts',
+      parts: [
+        'https://cnb.cool/FuFuCloud-mirror/Models/-/releases/download/miros-v1/miros-runtime-20261021.z01',
+        'https://cnb.cool/FuFuCloud-mirror/Models/-/releases/download/miros-v1/miros-runtime-20261021.z02',
+        'https://cnb.cool/FuFuCloud-mirror/Models/-/releases/download/miros-v1/miros-runtime-20261021.z03',
+        'https://cnb.cool/FuFuCloud-mirror/Models/-/releases/download/miros-v1/miros-runtime-20261021.z04',
+        'https://cnb.cool/FuFuCloud-mirror/Models/-/releases/download/miros-v1/miros-runtime-20261021.z05',
+        'https://cnb.cool/FuFuCloud-mirror/Models/-/releases/download/miros-v1/miros-runtime-20261021.z06',
+      ],
+      partSizes: [943718400, 943718400, 943718400, 943718400, 943718400, 645912192],
+      unpack: true,
+      unpackMarker: 'site/transformers/__init__.py',
+      sha256: '6ee7a2d2b3181de7a9b26408a6a787ac4c81cc13d227872f7b02d7466487c844',
+      size: 5364504192,
+      minSize: 5000000000,
+      downloadable: true,
+      runtime: 'miros',
+    },
+    // YourMT3+（YPTF+Single）：运行时依赖 + 源码 + 361MB 权重，单包下载；不随安装包分发
+    yourmt3: {
+      id: 'yourmt3',
+      name: 'YourMT3+',
+      note: '通用多乐器转录 · YPTF+Single · 运行时+权重约 433 MB · CPU/GPU 均可',
+      kind: 'transcribe',
+      arch: 'YourMT3+ (YPTF.Single)',
+      use: '通用多乐器转录：YourMT3+ YPTF+Single，强于 Basic Pitch；含独立 Python 运行时，CPU 可跑',
+      dest: 'yourmt3',
+      url: 'https://cnb.cool/FuFuCloud-mirror/Models/-/releases/download/yourmt3-v1/yourmt3-runtime-20261020.zip',
+      unpack: true,
+      unpackMarker: 'amt/logs/2024/ptf_all_cross_rebal5_mirst_xk2_edr005_attend_c_full_plus_b100/checkpoints/model.ckpt',
+      sha256: '82054845789bf380317cd3ab77dedc6622ee969e58216d7b8289691ae8011c46',
+      size: 453848674,
+      minSize: 300000000,
+      downloadable: true,
+      runtime: 'yourmt3',
+    },
     // 通用多乐器转录（Kyutai MuScriptor，默认不随 Release 分发，需到资源中心下载）
     // 注意：MuScriptor 权重经 monologue82/Models 仓库分卷分发（gh.jasonzeng.dev 加速 + 多镜像回退，
     // 25MB part 并行下载 → 合并 → SHA256 校验），无需 HuggingFace 授权。
@@ -405,40 +468,6 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     }
     return items;
   });
-  // 本地导入 GPT-SoVITS 音色：社区音色绝大多数**没有稳定直链**（见 main/gpt-sovits.js 的 EXTERNAL），
-  // 本地导入才是它们的主入口。拷进 <模型目录>/gpt-sovits/voices/<目录名>/，与一键下载两条路并存。
-  ipcMain.handle('model:importGsvVoice', async (_e, directPath) => {
-    try {
-      const { dialog } = require('electron');
-      let src = directPath;
-      if (!src || !fs.existsSync(src)) {
-        const r = await dialog.showOpenDialog({
-          properties: ['openDirectory'],
-          title: '选择 GPT-SoVITS 音色目录（需含 gpt.ckpt 与 sovits.pth）',
-        });
-        if (r.canceled || !r.filePaths || !r.filePaths.length) return { ok: false, canceled: true };
-        src = r.filePaths[0];
-      }
-      if (!fs.statSync(src).isDirectory()) return { ok: false, error: '请选择一个目录（音色包先解压）' };
-      const files = fs.readdirSync(src);
-      const hasCkpt = files.some((f) => /\.ckpt$/i.test(f));
-      const hasPth = files.some((f) => /\.pth$/i.test(f));
-      if (!hasCkpt || !hasPth) {
-        return { ok: false, error: '这个目录里没有同时找到 .ckpt 与 .pth —— 音色包至少要有这两样（参考音可选）' };
-      }
-      const name = path.basename(src).replace(/[\\/:*?"<>|\x00-\x1f]/g, '_') || ('voice_' + Date.now());
-      const destDir = path.join(modelsDir(), 'gpt-sovits', 'voices', name);
-      if (fs.existsSync(destDir)) return { ok: false, error: '已存在同名音色：' + name };
-      fs.mkdirSync(destDir, { recursive: true });
-      let n = 0;
-      for (const f of files) {
-        const s = path.join(src, f);
-        try { if (fs.statSync(s).isFile()) { fs.copyFileSync(s, path.join(destDir, f)); n++; } } catch (e) {}
-      }
-      return { ok: true, name, dir: destDir, files: n };
-    } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
-  });
-
   ipcMain.handle('model:cancel', async (_e, id) => {
     if (id) { _modelCancels.add(id); try { const c = _modelAborts.get(id); if (c) c.abort(); } catch (e) {} }
     return { ok: true };
@@ -993,6 +1022,58 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       const archive = destDir + '.oudep';   // 解包后删掉，不留双份
       try {
         fs.mkdirSync(destDir, { recursive: true });
+        if (spec.parts && spec.parts.length) {
+          // 分片包：CNB/GitHub 单资产上限 2GiB，下载后按顺序拼接再校验/解包
+          const partsDir = destDir + '.parts';
+          fs.mkdirSync(partsDir, { recursive: true });
+          const partPaths = [];
+          for (let i = 0; i < spec.parts.length; i++) {
+            const pp = path.join(partsDir, String(i).padStart(3, '0') + '.part');
+            partPaths.push(pp);
+            const expect = (spec.partSizes && spec.partSizes[i]) || 0;
+            if (fs.existsSync(pp) && (!expect || fs.statSync(pp).size === expect)) continue;
+            await FastDL.downloadFast({
+              urls: [spec.parts[i]],
+              dest: pp,
+              minSize: expect || 0,
+              headers: { 'user-agent': 'FuFumidi' },
+              isUserAbort: guardOf(id),
+              ctrl: uctrl,
+              expectSize: expect || 0,
+              label: (spec.name || id) + ' ' + (i + 1) + '/' + spec.parts.length,
+              onProgress: (p2) => {
+                if (!win || win.isDestroyed()) return;
+                win.webContents.send('model:progress', {
+                  id, received: p2.received || 0, total: p2.total || 0,
+                  percent: p2.percent || 0, done: !!p2.done, speed: p2.speed || 0,
+                  text: (spec.name || id) + ' 分片 ' + (i + 1) + '/' + spec.parts.length,
+                });
+              },
+            });
+          }
+          const outStream = fs.createWriteStream(archive);
+          for (const pp of partPaths) {
+            await new Promise((res, rej) => {
+              const rs = fs.createReadStream(pp);
+              rs.on('error', rej);
+              rs.on('end', res);
+              rs.pipe(outStream, { end: false });
+            });
+          }
+          await new Promise((res, rej) => outStream.end(err => err ? rej(err) : res()));
+          if (spec.sha256) {
+            const hash = await sha256File(archive);
+            if (String(hash).toLowerCase() !== String(spec.sha256).toLowerCase()) {
+              throw new Error('分片拼接后 SHA256 不匹配');
+            }
+          }
+          const zsafe = safeExtractAllTo(archive, destDir);
+          if (!zsafe.ok) throw new Error('压缩包安全校验未通过：' + zsafe.error);
+          try { fs.rmSync(partsDir, { recursive: true, force: true }); } catch (_) {}
+          try { fs.rmSync(archive, { force: true }); } catch (_) {}
+          sendP({ received: spec.size || 0, total: spec.size || 0, percent: 100, done: true });
+          return { ok: true, path: destDir, size: spec.size || 0 };
+        }
         const urls = mirrorUrls(spec);
         if (!urls.length) throw new Error('该模型没有可用的下载地址');
         FastDL.checkDiskSpace(archive, spec.size || spec.minSize || 0);

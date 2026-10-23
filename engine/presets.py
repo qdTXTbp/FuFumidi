@@ -83,12 +83,15 @@ def _migrate_legacy_once():
 #: 切模型时前端查这张表套用默认预设；用户在界面上指定过就写进 model_preset（见 set_model_preset）。
 MODEL_DEFAULT_PRESET = {
     "basic":             "Basic Pitch · 最优",
+    "yourmt3":            "YourMT3+ · 最优",
+    "miros":              "MIROS · 最优",
     "muscriptor_small":  "MuScriptor · 最优",
     "muscriptor_medium": "MuScriptor · 最优",
     "muscriptor_large":  "MuScriptor · 最优",
     "piano_pt":          "钢琴 · 最优",
     "aria":              "Aria-AMT · 最优",
     "transkun":          "Transkun · 最优",
+    "hft":               "hFT-Transformer · 最优",
     "separate":          "分离 · 最优",
 }
 
@@ -139,11 +142,12 @@ def _builtin_presets():
         "minimum_note_length": 128.0,
         "melodia": True,              # 主旋律强化开（关掉 = 界面的「低音增强」）
         "min_freq": 0, "max_freq": 0,  # 0 = 不限制音高范围
-        "merge_overlap": True, "vel_norm": True,   # 合并同音高重叠 / 力度归一化
         "beat_grid": True,            # 节拍网格检测：装了 beat_this 就开
         "tempo": 0,                   # 0 = 引擎默认 120（自动 BPM 优先）
         "perf": "quality",
         "denoise_mode": "off", "auto_bpm": False,
+        # 识别片段长度：Basic Pitch 模型输入固定 2s 窗，外层再切只会增加接缝 → 0 = 不切
+        "segment_sec": 0,
     }
     piano = {
         "onset_threshold": 0.3, "frame_threshold": 0.1,
@@ -151,29 +155,34 @@ def _builtin_presets():
         "include_pedal": True,        # 踏板：钢琴转录的必需信息，绝不默认丢
         "perf": "quality",
         "denoise_mode": "off", "auto_bpm": False,
+        # piano-transcription 训练块长 10s（config.py segment_seconds=10）
+        "segment_sec": 10,
     }
     sep = {k: v for k, v in s.items() if k in
            ("onset_threshold", "frame_threshold", "minimum_note_length", "midi_tempo")}
     return {
         "Basic Pitch · 最优": {"mode": "universal", "params": dict(basic)},
+        "YourMT3+ · 最优": {"mode": "universal", "params": {**basic, "model": "yourmt3", "segment_sec": 0}},
+        "MIROS · 最优": {"mode": "universal", "params": {**basic, "model": "miros", "segment_sec": 0}},
         "MuScriptor · 最优": {
             "mode": "universal",
             "params": {
                 **basic,
                 "model": "muscriptor", "model_size": "medium",
-                "muscriptor_instruments": "none",   # 不干预乐器组判定
                 "temperature": 1.0, "cfg_coef": 1.0, "beam_size": 1,
                 "prelude_forcing": True,
                 "precision": "fp32",
                 "max_note_hold": 0,       # ★ 不截断：僵尸音改由**音频证据**收尾（见 engine_muscriptor 的 _make_pitch_evidence）
                 # ★ 静音分段默认关（用户 2026-10-14 定）：在完全空白静音处切段、逐段转录后
                 #   合并成一份 MIDI，用长音频的静音换时间。开启后接缝处上下文变少，所以不默认开。
-                "segment_silence": "off",
+                # MuScriptor 训练/推理块长 5s；固定训练值最不容易在块边界换音色
+                "segment_sec": 5,
             },
         },
-        "钢琴 · 最优": {"mode": "piano", "params": {**piano, "model": "piano_pt"}},
-        "Aria-AMT · 最优": {"mode": "piano", "params": {**piano, "model": "aria"}},
-        "Transkun · 最优": {"mode": "piano", "params": {**piano, "model": "transkun"}},
+        "钢琴 · 最优": {"mode": "piano", "params": {**piano, "model": "piano_pt", "segment_sec": 10}},
+        "Aria-AMT · 最优": {"mode": "piano", "params": {**piano, "model": "aria", "segment_sec": 30}},
+        "Transkun · 最优": {"mode": "piano", "params": {**piano, "model": "transkun", "segment_sec": 16}},
+        "hFT-Transformer · 最优": {"mode": "piano", "params": {**piano, "model": "hft", "segment_sec": 0}},
         "分离 · 最优": {
             "mode": "separate",
             "params": {

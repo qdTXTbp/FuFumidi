@@ -9,13 +9,14 @@ import { useRoute, useRouter } from 'vue-router';
 import Icon from '../components/Icon.vue';
 import ViewModels from './ViewModels.vue';
 import ViewSoundfonts from './ViewSoundfonts.vue';
+import StoragePanel from '../components/StoragePanel.vue';
 import { useAppStore } from '../stores/app';
 import { useSettingsStore } from '../stores/settings';
 import { t } from '../core/i18n.js';
 
 const route = useRoute();
 const router = useRouter();
-const rcTabs = ['model', 'soundfonts', 'resources'];
+const rcTabs = ['model', 'soundfonts', 'resources', 'storage'];
 const rcTab = ref(rcTabs.includes(String(route.query.tab || '')) ? String(route.query.tab) : 'model'); // 'model' | 'soundfonts' | 'resources'
 function selectRc(id) {
   rcTab.value = id;
@@ -29,6 +30,8 @@ watch(() => route.query.tab, (v) => {
 const app = useAppStore();
 const toast = (m, type) => app.toast(m, type);
 const settingsStore = useSettingsStore();
+// P1-12 专家模式：普通模式隐藏 OMR / GPU 等高级入口（设置 → 功能 → 专家模式）
+const expertMode = computed(() => !!(settingsStore.settings && settingsStore.settings.advanced_mode));
 const bridge = window.fuBridge;
 
 /* ---------------- 检查结果弹窗 ---------------- */
@@ -610,6 +613,7 @@ onBeforeUnmount(() => {
       <button class="rc-tab" :class="{ on: rcTab === 'model' }" @click="selectRc('model')">{{ t('模型管理') }}</button>
       <button class="rc-tab" :class="{ on: rcTab === 'soundfonts' }" @click="selectRc('soundfonts')">{{ t('音色工坊') }}</button>
       <button class="rc-tab" :class="{ on: rcTab === 'resources' }" @click="selectRc('resources')">{{ t('资源管理') }}</button>
+      <button class="rc-tab" :class="{ on: rcTab === 'storage' }" @click="selectRc('storage')" data-guide="rc-storage-tab">{{ t('存储治理') }}</button>
     </div>
 
     <Transition name="group-tab" mode="out-in">
@@ -659,6 +663,10 @@ onBeforeUnmount(() => {
 
     <template v-else-if="rcTab === 'soundfonts'">
       <ViewSoundfonts />
+    </template>
+
+    <template v-else-if="rcTab === 'storage'">
+      <StoragePanel />
     </template>
 
     <template v-else>
@@ -716,7 +724,7 @@ onBeforeUnmount(() => {
 
 
     <!-- ============ GPU 加速 ============ -->
-    <div class="card res-sec">
+    <div v-if="expertMode" class="card res-sec" data-guide="res-gpu">
       <div class="res-sec-head"><Icon name="zap" :size="15" /> {{ t('GPU 加速') }}</div>
       <div class="field-row">
         <div>
@@ -798,7 +806,7 @@ onBeforeUnmount(() => {
          声库属于资源，和模型放在同一处，用户只需要记住一个入口。 -->
 
     <!-- ============ 识谱引擎（变谱页的光学识谱增强包，Plan §6.2） ============ -->
-    <div class="card res-sec" data-guide="res-omr">
+    <div v-if="expertMode" class="card res-sec" data-guide="res-omr">
       <div class="res-sec-head"><Icon name="score" :size="15" /> {{ t('识谱引擎') }}</div>
       <div class="field-row">
         <div>

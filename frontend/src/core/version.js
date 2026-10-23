@@ -10,7 +10,9 @@ export async function getAppVersion() {
       if (v) { _cached = 'v' + String(v).replace(/^v/i, ''); return _cached; }
     }
   } catch (e) { /* 忽略，走回退 */ }
-  _cached = 'v5.0.1';
+  // 构建时由 vite define 注入（__APP_VERSION__ 来自 frontend/package.json，唯一来源）。
+  // 这里以前写死 'v5.0.1'，到 5.2.4 已经误导了三个版本；开发/测试环境无注入时退回 0.0.0。
+  _cached = 'v' + (typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.0.0');
   return _cached;
 }
 

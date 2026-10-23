@@ -12,7 +12,7 @@ const LS_MODE = 'fufumidi_mode';
 const LS_CUSTOM_HUE = 'fufumidi_custom_hue';
 
 export const THEMES = [
-  { id: 'fufu',    name: '芙芙蓝', desc: '芙宁娜 · 蔚蓝深海',   accent: '#4f94e0', accent2: '#8fc0f0', hue: 213 },
+  { id: 'fufu',    name: '海蓝蓝宝石', desc: '芙宁娜 · 深海蓝宝石', accent: '#2f63d4', accent2: '#69c8f0', hue: 216 },
   { id: 'deep',    name: '深空青', desc: 'FuFumidi 默认 · 青绿主色', accent: '#4f94e0', accent2: '#8fc0f0', hue: 174 },
   { id: 'night',   name: '极夜蓝', desc: '冷冽深海蓝',         accent: '#3b82f6', accent2: '#60a5fa', hue: 217 },
   { id: 'aurora',  name: '极光紫', desc: '紫色霓虹',           accent: '#a78bfa', accent2: '#c4b5fd', hue: 258 },

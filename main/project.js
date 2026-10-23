@@ -19,6 +19,7 @@
 const crypto = require('crypto');
 const Paths = require('./paths');
 const { inspectEntries } = require('./zip-safe');
+const autosave = require('./autosave');
 
 /** 与前端 `song_project.js` 的 ASSET_ID_RE 保持一致 */
 const ASSET_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -291,6 +292,9 @@ function registerProjectIpc({ ipcMain, dialog, path, fs, spawnEngine }) {
     }
     return { ok: true, filePath: res.outPath || target, warnings: res.warnings || [] };
   });
+
+  // P0-2：自动保存草稿（temp/autosave）
+  autosave.registerAutosaveIpc({ ipcMain, root: Paths.tempDir() });
 }
 
 module.exports = { registerProjectIpc, cacheDirFor };

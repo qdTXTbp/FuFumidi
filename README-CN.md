@@ -16,9 +16,9 @@ FuFumidi 是一款完全离线的 MIDI 桌面工作站，面向音乐人、编�
 
 应用基于 Electron 桌面壳 + Vue 3 + TypeScript 渲染层 + 内置 Python 转录运行时，并提供可选的原生 Rust 核心以加速曲库的批量操作。所有音频、模型权重与推理都在本地执行，转录与编辑全程不上传任何数据；只有在你自己开启云同步（可选）时，才会把歌单与 MIDI 曲目上传到你自己的云端账号。
 
-当前版本线：**5.0.1**（[发布说明](https://github.com/qdTXTbp/FuFumidi/releases/tag/v5.0.1)，正式版通道；测试版发布在 [beta](https://github.com/qdTXTbp/FuFumidi/releases/tag/beta) 标签下）。
+当前版本线：**6.2.0**（[发布说明](https://github.com/qdTXTbp/FuFumidi/releases/tag/v6.2.0)，正式版通道；测试版发布在 [beta](https://github.com/qdTXTbp/FuFumidi/releases/tag/beta) 标签下）。
 
-5.0.1 要点：**导出的视频终于和界面上的可视化一致**。导出模块过去把输出像素当布局单位，4K 下琴键条塌成 5.6% 高的一条细缝、一屏塞进 18 小节（实时为 4.4）、背景图被放大 3.9 倍，成片与「可视化」页完全不是一幅画；现在导出与导出预览统一按参考逻辑尺寸 960 × 540 绘制，再映射到所请求的输出分辨率。同一轮还修掉另外两个导出缺陷：背景那层随音乐脉动的光晕在成片里从未出现（能量包络自首帧起就是 NaN），以及背景位图每帧重做一次全幅模糊（4K 下单帧 30–35 ms，而实时录制的帧预算是 41.7 ms）—— 现在预先烘焙一次并缓存。默认帧率 24 fps，导出时长上限 120 秒，导出的文件按歌曲名命名（曲名中的 Windows 非法字符与保留设备名由主进程清洗）。5.0.0 的功能集（UTAU 与 DiffSinger 融合工作台、OpenUTAU 式谱面编辑、翻唱工作流）见 [v5.0.0 发布说明](https://github.com/qdTXTbp/FuFumidi/releases/tag/v5.0.0)。
+6.1.7 要点：自动探测现在会把 `program_105` 等未分组 GM 音色按 General MIDI 家族映射到 MuScriptor 现有乐器组（如 `program_105` → `acoustic_guitar`），不再直接丢弃；6.1.6 的过滤仍作为最后防线，避免整首转录报 `unknown instrument name(s)`。6.1.5 加入了**转录批次完成提示音**——全部成功为三声上行，有失败为两声下行，取消不响。本版同时包含 6.1.4 的三个可选引擎：钢琴 **hFT-Transformer**、通用 **YourMT3+** 与 **MIROS**。三者都从资源中心按需下载，安装包保持精简；下载完成后全部本地离线运行。6.1.3 还带来专用 AudioSet 音频标签探测器与可靠回退、拒绝写空 MIDI 的零音符保护、Windows 文件关联图标自愈、同队列模型复用。完整列表见 [6.1.7 发布说明](https://github.com/qdTXTbp/FuFumidi/releases/tag/v6.1.7)。
 
 ### 核心能力
 
@@ -32,9 +32,9 @@ FuFumidi 是一款完全离线的 MIDI 桌面工作站，面向音乐人、编�
 
 ### 亮点
 
-- 安装后 100% 离线。完整安装包内附带 Python 运行时、全部转录模型与 Demucs 人声分离权重。
+- 安装后 100% 离线。完整安装包内附带 Python 运行时、核心转录模型与 Demucs 人声分离权重；可选转录引擎（`YourMT3+`、`MIROS`、`hFT-Transformer`）在资源中心一键下载。
 - 从原始单文件渲染层重构为 Vue 3 + TypeScript + Vite 现代前端。
-- 11 个哈希路由视图，应用内 i18n，10 套内置主题 + 图片提取主色自定义主题，`Ctrl+K` 命令面板，新手引导，主题库，动态壁纸画廊。
+- 五个一级区域（首页 / 音乐 / 工作台 / 创作 / 资源）、哈希路由子页签、四种界面语言、12 套内置主题、自定义强调色与图片主题、`Ctrl+K` 命令面板、6 章新手引导，以及统一静态 + 动态壁纸库。
 - 插件沙箱，第三方代码在独立 worker 中运行。
 - 完整性检验与一键修复。
 - 可选原生 Rust 核心（`rust-core/`）加速批量、CPU 密集的曲库操作。
@@ -42,7 +42,7 @@ FuFumidi 是一款完全离线的 MIDI 桌面工作站，面向音乐人、编�
 
 ### 多语言（i18n）开发守则
 
-项目面向多种人群，界面文案固定支持三种语言：**简体中文 / 繁体中文 / English**。
+项目面向多种人群，界面文案固定支持四种语言：**简体中文 / 繁体中文 / English / 日本語**。
 
 - **新增界面文案必须同时补齐英文**：在 `frontend/src/core/i18n.js` 的 `I18N_MAP` 里给出英文翻译，缺英文即视为该功能未完成。
 - **繁体中文由自动转换覆盖**：简体源文案经 `frontend/src/core/zhHant.js` 自动转为繁体，无需逐条手写；仅当需要「用词而非造字」的差异时，在其 `PHRASE` 表补充。
@@ -74,12 +74,12 @@ FuFumidi 是一款完全离线的 MIDI 桌面工作站，面向音乐人、编�
 
 ## 转录引擎
 
-转录支持三种模式与多个子模型，全部跑在内置 Python 运行时上，权重随包或按本地路径解析。
+转录支持三种模式与多个子模型，全部跑在内置 Python 运行时上；核心模型随安装包附带，可选的 `YourMT3+`、`MIROS`、`hFT-Transformer` 从资源中心下载一次后完全离线运行。
 
 | 模式 | 子模型 | 适用场景 |
 | --- | --- | --- |
-| 通用 | `basic-pitch`（ONNX int8）、`MuScriptor`（small / medium / large） | 多种乐器的复调素材。 |
-| 钢琴 | `piano_pt`、`aria`、`transkun` | 钢琴录音，含踏板检测。 |
+| 通用 | `basic-pitch`（ONNX int8）、`MuScriptor`（small / medium / large）、`YourMT3+`（YPTF+Single）、`MIROS`（2025 AMT Challenge 冠军） | 多种乐器的复调素材。 |
+| 钢琴 | `piano_pt`、`aria`、`transkun`、`hFT-Transformer` | 钢琴录音，含踏板检测。 |
 | 人声分离 | `demucs`（htdemucs） | 先做人声或分轨再转录。 |
 
 视图内的高级参数包括 onset/frame 阈值、最小音符时值、合并间隔、踏板检测、鼓点抽取、降噪、归一化、自动速度检测、分轨导出（WAV），以及可暂停、可取消、可重排的转录队列。

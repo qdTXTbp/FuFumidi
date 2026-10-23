@@ -102,6 +102,17 @@ export interface GpuInfo {
   /** ROCm HIP 版本，如 '7.2.26024-f6f897bd3d' */
   hip_version?: string | null;
   note?: string;
+  /** NVIDIA 驱动版本（nvidia-smi；GPU 增强包未装也可读） */
+  driver_version?: string;
+  /** 显存 MB（nvidia-smi / torch） */
+  vram_total_mb?: number;
+  vram_free_mb?: number;
+  vram_used_mb?: number;
+  /** 驱动是否支持共享显存回退（Windows + 驱动 ≥536.40） */
+  sysmem_fallback_supported?: boolean;
+  /** 是否可在控制面板按应用关闭（驱动 ≥546.01） */
+  sysmem_fallback_controllable?: boolean;
+  sysmem_fallback_note?: string;
 }
 
 export interface EngineProbeResult {
@@ -113,6 +124,21 @@ export interface EngineProbeResult {
   libs?: Record<string, boolean>;
   gpu?: GpuInfo;
   perf?: { recommended?: PerfMode };
+  error?: string;
+  raw?: string;
+}
+
+/** CUDA 统一内存实验（cudaMallocManaged）结果 */
+export interface UnifiedMemoryResult {
+  ok: boolean;
+  code?: string;
+  method?: string;
+  cudart?: string;
+  size_mb?: number;
+  alloc_ms?: number;
+  host_touch_ms?: number;
+  sync_ms?: number;
+  note?: string;
   error?: string;
   raw?: string;
 }
@@ -260,6 +286,10 @@ export interface Settings {
   lang?: 'zh' | 'zh-Hant' | 'en' | '';
   /** UTAU 引擎里的合成路线：'CLASSIC'（默认）| 'WORLDLINE-R' | 'WORLDLINE-R1.1' | 'WORLDLINE-R2' */
   utau_renderer?: string;
+  /** P0-5：首次播放时后台加载随包内置的 GeneralUser GS（默认 true；关掉则始终用内置合成器） */
+  default_gm?: boolean;
+  /** P0-3b：MIDI 键盘录音的输入延迟补偿（ms） */
+  midiInputOffsetMs?: number;
   [key: string]: any;
 }
 
@@ -866,7 +896,179 @@ export interface FeedbackPreview {
   error?: string;
 }
 
+export interface AudioExportRequest {
+  /** 文件名（不含扩展名），主进程会做 Windows 安全化 */
+  name: string;
+  /** 编码好的 WAV 字节 */
+  bytes: Uint8Array | number[];
+  ext?: string;
+  format?: 'wav' | 'wav24' | 'float32' | string;
+  bitDepth?: 16 | 24 | 32;
+  sampleRate?: number;
+  channels?: number;
+  durationSec?: number;
+  lufs?: number;
+  peakDb?: number;
+  targetLufs?: number | null;
+  sourceName?: string;
+  /** 仅测试/自动化用：直接写到该路径，不弹保存框 */
+  targetPath?: string;
+}
+export interface AudioExportResult {
+  ok: boolean;
+  path?: string;
+  manifestPath?: string;
+  manifest?: any;
+  canceled?: boolean;
+  error?: string;
+}
+
+export interface StorageArea {
+  id: string;
+  label: string;
+  path: string;
+  kind: 'safe' | 'asset' | 'protected' | string;
+  safe: boolean;
+  protected: boolean;
+  exists: boolean;
+  bytes: number;
+  files: number;
+}
+export interface StorageReport {
+  areas: StorageArea[];
+  totalBytes: number;
+  updatedAt: number;
+}
+
+export interface TaskItem {
+  id: string;
+  kind: string;
+  title: string;
+  status: 'running' | 'done' | 'error' | 'canceled';
+  progress: number;
+  startedAt: number;
+  endedAt: number | null;
+  result?: any;
+  error?: string;
+  logs?: string[];
+  cancelable?: boolean;
+}
+
+/** P2-1 VST3 离线渲染（宿主自备） */
+export interface PluginInfo { name: string; path: string; format: string }
+export interface PluginStatus { ok: boolean; hostPython: string; plugins: PluginInfo[]; dirs: string[]; error: string }
+export interface PluginRenderResult {
+  ok: boolean;
+  mode?: string;
+  plugin?: string;
+  params?: string[];
+  sampleRate?: number;
+  seconds?: number;
+  peak?: number;
+  rms?: number;
+  out?: string;
+  elapsed?: number;
+  error?: string;
+  log?: string;
+}
+
+/** P0-4c 分轨打包导出 */
+export interface StemZipFile {
+  name: string;
+  bytes: Uint8Array;
+  ext?: string;
+}
+export interface StemZipResult {
+  ok: boolean;
+  canceled?: boolean;
+  error?: string;
+  path?: string;
+  count?: number;
+  bytes?: number;
+}
+
+/** P2-5 DAW 互通：DAWproject 包内文件（project.xml / metadata.xml） */
+export interface DawprojectExportFile {
+  name: string;
+  data: string;
+}
+export interface DawprojectExportResult {
+  ok: boolean;
+  canceled?: boolean;
+  error?: string;
+  filePath?: string;
+  bytes?: number;
+  files?: string[];
+}
+
+/** P2-6 AI 生成（可选、默认关）：本地命令契约由 main/ai-generate.js 执行 */
+export interface AiStatus {
+  enabled: boolean;
+  ready: boolean;
+  code: 'disabled' | 'not-configured' | 'ready';
+  reason: string;
+  kinds: string[];
+}
+export interface AiRequest {
+  kind: 'midi' | 'audio' | 'lyrics';
+  prompt: string;
+  title?: string;
+  seed?: number;
+}
+export interface AiFile {
+  name: string;
+  path: string;
+  kind: string;
+  bytes: number;
+}
+export interface AiGenerateResult {
+  ok: boolean;
+  code?: string;
+  error?: string;
+  jobId?: string;
+  outdir?: string;
+  files?: AiFile[];
+  meta?: { aiGenerated: true; provider: string; model: string; kind: string; createdAt: string; promptHash: string };
+  log?: string;
+}
+
 export interface FuBridge {
+  /** E2E 测试实例标记（scripts/e2e 启动时 FUFUMIDI_E2E=1）：true 时渲染进程会注册最小测试钩子 */
+  e2e?: boolean;
+  /** P2-1：VST3 离线渲染（宿主与插件自备） */
+  plugin?: {
+    status(): Promise<PluginStatus>;
+    list(): Promise<{ ok: boolean; plugins?: PluginInfo[]; error?: string }>;
+    pickDir(): Promise<{ ok: boolean; canceled?: boolean; dir?: string }>;
+    pickFile(): Promise<{ ok: boolean; canceled?: boolean; file?: string }>;
+    pickAudio(): Promise<{ ok: boolean; canceled?: boolean; file?: string }>;
+    savePath(suggested?: string): Promise<{ ok: boolean; canceled?: boolean; file?: string }>;
+    renderFile(payload: { plugin: string; input: string; output: string; params?: Record<string, number>; sampleRate?: number }): Promise<PluginRenderResult>;
+  };
+  /** P0-4c：分轨导出→单个 ZIP */
+  exportStemsZip?(payload: { files: StemZipFile[]; suggestedName?: string; targetPath?: string }): Promise<StemZipResult>;
+  /** P2-5 DAW 互通：导出 DAWproject */
+  exportDawproject?(payload: { files: DawprojectExportFile[]; suggestedName?: string; filePath?: string }): Promise<DawprojectExportResult>;
+  /** P2-6 AI 生成（可选、默认关）：生成文件一律带 AI 标注 */
+  ai?: {
+    status(): Promise<AiStatus>;
+    generate(req: AiRequest): Promise<AiGenerateResult>;
+  };
+  /** P1-9 存储治理：分类占用与安全清理 */
+  storage?: {
+    report(): Promise<StorageReport>;
+    cleanup(payload: { includeAssets?: boolean }): Promise<{ ok: boolean; freedBytes: number; removed: Array<{ id: string; bytes: number; files: number }>; errors: string[] }>;
+  };
+  /** C2 任务中心：长任务列表/取消/事件订阅（离开页面不丢） */
+  tasks?: {
+    list(): Promise<TaskItem[]>;
+    cancel(id: string): Promise<{ ok: boolean; error?: string }>;
+    /** 仅 E2E 实例可用：造一个演示任务验证进度/取消链路 */
+    demo?(opts?: { intervalMs?: number }): Promise<{ id: string }>;
+    onUpdate(cb: (ev: { type: string; tasks: TaskItem[] }) => void): () => void;
+  };
+  /** P0-4 音频导出：字节落盘 + manifest（主进程 main/export.js） */
+  exportAudio(payload: AudioExportRequest): Promise<AudioExportResult>;
   onOpenFile(cb: (bytes: Uint8Array, name: string) => void): () => void;
   /** 沉浸模式：窗口真全屏（收掉原生标题栏）；返回实际状态 */
   setFullScreen(on: boolean): Promise<{ ok: boolean; fullScreen?: boolean; error?: string }>;
@@ -949,8 +1151,6 @@ export interface FuBridge {
   utauFlags(): Promise<{ ok: boolean; engine_version?: string; supported?: { flag: string; default: number | null; min: number | null; max: number | null; desc: string }[]; unsupported?: { flag: string; desc: string }[]; example?: string; error?: string }>;
   utauListVoicebanks(): Promise<{ ok: boolean; list?: { name: string; dir: string }[]; error?: string }>;
   utauImportVoicebankZip(): Promise<{ ok: boolean; canceled?: boolean; name?: string; dir?: string; error?: string }>;
-  /** 本地导入 GPT-SoVITS 音色目录（社区音色多无直链，这是它们的主入口） */
-  modelImportGsvVoice(directPath?: string): Promise<{ ok: boolean; canceled?: boolean; name?: string; dir?: string; files?: number; error?: string }>;
   /** 声库资源中心：可一键安装的开源/免费声库条目 */
   utauVoicebankRegistry(): Promise<{ ok: boolean; dir?: string; list?: VoicebankEntry[]; error?: string }>;
   utauDownloadVoicebank(id: string): Promise<{ ok: boolean; canceled?: boolean; existed?: boolean; name?: string; dir?: string; files?: number; size?: number; error?: string }>;
@@ -962,10 +1162,6 @@ export interface FuBridge {
   coverSingers(): Promise<{ ok: boolean; rvc?: CoverSinger[]; error?: string }>;
   coverPickAudio(): Promise<{ ok?: boolean; canceled?: boolean; path?: string }>;
   coverPickDir(): Promise<{ ok?: boolean; canceled?: boolean; path?: string }>;
-  /** 选 GPT-SoVITS 运行时目录（会记进 <数据根>/gpt-sovits/runtime.json） */
-  coverPickGsvRoot(): Promise<{ ok?: boolean; canceled?: boolean; root?: string; python?: string; error?: string }>;
-  /** 选跑 GPT-SoVITS 的 python.exe（同上，记进 runtime.json） */
-  coverPickGsvPython(): Promise<{ ok?: boolean; canceled?: boolean; python?: string; error?: string }>;
   coverRun(opts: CoverRunOptions): Promise<{ ok: boolean; id?: string; error?: string }>;
   coverCancel(): Promise<GeneralResult & { canceled?: boolean }>;
   coverOpen(p: string): Promise<GeneralResult>;
@@ -1041,6 +1237,8 @@ export interface FuBridge {
   gpuListPackages(): Promise<GeneralResult & { packages?: GpuPackage[] }>;
   gpuImportLocal(p: string | string[], kind: GpuKind): Promise<GeneralResult>;
   gpuStatus(): Promise<GpuStatusResult>;
+  /** P2 实验：验证 cudaMallocManaged 可用性与耗时；不改变转录用分配器 */
+  gpuUnifiedMemoryExperiment(): Promise<UnifiedMemoryResult>;
   gpuUninstall(kind: GpuKind): Promise<GeneralResult>;
   gpuCancelInstall(): Promise<GeneralResult>;
   gpuDownloadPackage(opts: GpuDownloadOptions): Promise<GeneralResult>;
@@ -1179,5 +1377,10 @@ export interface FuBridge {
     exportUstx(payload: UstxExportRequest): Promise<UstxExportResult>;
     /** 分轨导出：伴奏源文件主进程直拷（字节不过 IPC） */
     copyAsset(payload: { src: string; dest: string }): Promise<{ ok: boolean; savedTo?: string; error?: string }>;
+    /** P0-2 自动保存草稿：写数据根 temp/autosave/，返回落盘路径与时间戳 */
+    autosaveWrite(payload: { docId: string; model: any; meta?: any }): Promise<{ ok: boolean; path?: string; ts?: number; bytes?: number; error?: string }>;
+    autosaveList(): Promise<Array<{ docId: string; id: string; ts: number; meta: any; bytes: number; path: string }>>;
+    autosaveRead(docId: string): Promise<{ ok: boolean; docId?: string; ts?: number; meta?: any; data?: any; path?: string; error?: string }>;
+    autosaveClear(docId: string): Promise<{ ok: boolean; removed?: boolean }>;
   };
 }

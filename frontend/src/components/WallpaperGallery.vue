@@ -40,7 +40,7 @@ async function load() {
     if (!bridge || !bridge.wallpaper || !bridge.wallpaper.list) throw new Error('no bridge');
     const r = await bridge.wallpaper.list();
     if (r && r.ok && Array.isArray(r.list)) {
-      list.value = r.list.filter(x => x && x.video);
+      list.value = r.list.filter(x => x && (x.video || x.image));
       if (!list.value.length) error.value = t('壁纸库为空');
     } else {
       error.value = (r && r.error) || t('获取壁纸列表失败');
@@ -68,7 +68,7 @@ async function pick(item, i) {
         // 下载完成：该项状态变为已下载（local），不新增单独条目
         item.local = true;
         item.video = r.path;
-        await setWallpaperPath(r.path);
+        await setWallpaperPath(r.path, 'video');
         toast(wpTarget() === 'viz' ? t('已应用到音符瀑布背景') : t('壁纸已下载并应用'), 'ok');
       } else {
         // 网络受限/被拦截 → 直接应用在线流
@@ -168,7 +168,7 @@ onMounted(load);
       </div>
       <p id="wp-gallery-note" class="ov-note">{{ wpTarget() === 'viz'
         ? t('挑一张动态壁纸当音符瀑布的背景：点缩略图即应用，也可以导入本地视频。')
-        : t('从 GitHub 下载壁纸，点击缩略图即可下载并应用；每次下载一张，需要更多可再次进入。') }}</p>
+        : t('从壁纸库选择动态壁纸，或导入本地图片 / 视频；两种壁纸共用同一个背景层。') }}</p>
 
       <div v-if="loading" class="wp-loading"><span class="spinner"></span>{{ t('正在加载壁纸列表…') }}</div>
       <div v-else-if="error" class="wp-error">
@@ -197,7 +197,7 @@ onMounted(load);
         <span>{{ Math.round(importProgress * 100) }}%</span>
       </div>
 <div class="wp-foot">
-        <button class="btn sm ghost" @click="localImport"><Icon name="import" :size="13" /> {{ t('导入本地视频') }}</button>
+        <button class="btn sm ghost" @click="localImport"><Icon name="import" :size="13" /> {{ t('导入图片 / 视频') }}</button>
         <span class="muted small">{{ t('缩略图来自 GitHub Media 仓库') }}</span>
       </div>
     </div>

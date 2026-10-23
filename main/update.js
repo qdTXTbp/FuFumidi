@@ -5,7 +5,9 @@
 const Paths = require('./paths');
 const DS = require('./download-source');
 const createFastDownload = require('./fast-download');
+const { updaterLooksConfigured } = require('./update_util');
 const ST = require('./update-speedtest');
+const { fetchManifest, verifyManifest } = require('./update_sign');
 
 // ── 更新通道 ────────────────────────────────────────────────────────────────
 // stable：用 GitHub 的 releases/latest 锚点。该端点会自动跳过 prerelease，
@@ -178,6 +180,21 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, 
 
   // 主进程下载完整离线安装包（多镜像回退 + 进度 + 大小校验）。
   // 关键：下载只写临时目录，失败/中断不影响当前安装——绝不边下边改已安装文件
+  /** 更新包签名清单候选地址（CNB latest/beta + GitHub latest/beta + 镜像） */
+  function updateManifestUrls(channel) {
+    const ch = normChannel(channel);
+    const gh = ch === 'beta'
+      ? 'https://github.com/' + GH_REPO + '/releases/download/beta/update-manifest.json'
+      : 'https://github.com/' + GH_REPO + '/releases/latest/download/update-manifest.json';
+    const cnb = ch === 'beta'
+      ? DS.cnbTagUrl('beta', 'update-manifest.json')
+      : DS.cnbLatestUrl('update-manifest.json');
+    return [cnb, ...DS.githubMirrorCandidates(gh)];
+  }
+  function currentChannel() {
+    try { return normChannel(readSettings && readSettings() && readSettings().update_channel); } catch (e) { return 'stable'; }
+  }
+
   async function downloadInstallPackage(url, win) {
     // 按下载源偏好排序：国内优先 → CNB 打头；全球优先 → GitHub（含镜像）打头。
     // githubMirrorCandidates 对非 GitHub 地址原样返回，避免把 CNB 地址套上 gh 镜像前缀。
@@ -206,7 +223,27 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, 
         onProgress: (p) => { if (!p.done) sendUpdateProgress(win, p.received || 0, p.total || 0, false); },
       });
       sendUpdateProgress(win, r.size, r.size, true);
-      return { ok: true, path: dest, size: r.size, segments: r.segments };
+      // P1-8：下载完成后先验签再允许启动更新器。
+      // 兼容策略：Release 没有 update-manifest.json（旧版本）时跳过并告警；
+      // 一旦清单存在，验签失败就删除安装包并拒绝更新（不提供"忽略"开关）。
+      let verified = false;
+      try {
+        const manifest = await fetchManifest(updateManifestUrls(currentChannel()), net);
+        if (manifest) {
+          const v = await verifyManifest({ filePath: dest, manifest: manifest });
+          if (!v.ok) {
+            try { fs.unlinkSync(dest); } catch (e) {}
+            return { ok: false, error: '安装包签名校验失败：' + v.error, verified: false };
+          }
+          verified = true;
+          console.log('[update] 安装包签名验证通过：v' + v.version + ' · ' + v.sha256);
+        } else {
+          console.warn('[update] Release 未提供 update-manifest.json，本次跳过签名校验（旧版本兼容）');
+        }
+      } catch (e) {
+        console.warn('[update] 签名校验异常，跳过：' + String((e && e.message) || e));
+      }
+      return { ok: true, path: dest, size: r.size, segments: r.segments, verified: verified };
     } catch (e) {
       return { ok: false, error: String((e && e.message) || e) };
     }
@@ -350,6 +387,36 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, 
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
 
+  /** 配置好的更新器资产地址（随 Release 上传的 FuFumidi.update.exe） */
+  function updaterUrls(channel) {
+    const ch = normChannel(channel);
+    const cnb = ch === 'beta' ? DS.cnbTagUrl('beta', 'FuFumidi.update.exe') : DS.cnbLatestUrl('FuFumidi.update.exe');
+    const gh = 'https://github.com/' + GH_REPO + '/releases/' + (ch === 'beta' ? 'download/beta' : 'latest/download') + '/FuFumidi.update.exe';
+    return [cnb, ...DS.githubMirrorCandidates(gh)];
+  }
+  /** 已安装更新器未嵌入配置时：下载 Release 里带配置的更新器到 temp，返回其路径 */
+  async function downloadConfiguredUpdater(channel) {
+    let dest = path.join(Paths.tempDir(), 'fufumidi-update', 'FuFumidi.update.exe');
+    try { fs.mkdirSync(path.dirname(dest), { recursive: true }); }
+    catch (_) {
+      dest = path.join(app.getPath('temp'), 'fufumidi-update', 'FuFumidi.update.exe');
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+    }
+    const mirrors = [...new Set(updaterUrls(channel))].filter(Boolean);
+    const r = await FastDL.downloadFast({
+      urls: mirrors,
+      dest,
+      minSize: 4 * 1024 * 1024,
+      headers: { 'user-agent': 'FuFumidi' },
+      label: 'FuFumidi.update.exe',
+    });
+    if (r && r.size && updaterLooksConfigured(fs.readFileSync(dest))) {
+      try { fs.chmodSync(dest, 0o755); } catch (_) {}
+      return { ok: true, path: dest, size: r.size };
+    }
+    return { ok: false, error: '下载到的更新器仍未嵌入应用配置（大小 ' + (r && r.size) + '）' };
+  }
+
   // 增量更新流程（kachina 更新器方案，见 UPDATING.md）：
   //  1) 更新器内嵌源配置（ghfast 等镜像，指向 releases/latest/download/FuFumidi.Install.exe）
   //     —— 由更新器自行差分下载（Range 请求）并显示进度，主进程不做整包预下载
@@ -361,10 +428,27 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, 
     try {
       const { spawn } = require('child_process');
       const updaterDir = app.isPackaged ? path.dirname(process.execPath) : path.join(app.getAppPath(), 'release', 'win-unpacked');
-      const updaterPath = path.join(updaterDir, 'FuFumidi.update.exe');
+      let updaterPath = path.join(updaterDir, 'FuFumidi.update.exe');
       const mainExe = path.join(updaterDir, 'FuFumidi.exe');
       if (!fs.existsSync(updaterPath)) {
         return { ok: false, error: '更新器不存在：' + updaterPath + '（请使用新版便携版 / 重新下载完整安装包）' };
+      }
+      // ★ 旧安装包/手动部署可能留下「未嵌入应用配置」的更新器：它会把安装路径认成
+      //   C:Program FilesKachinaInstaller，点更新直接报「安装包损坏，请重新下载」。
+      //   这里检测并自动改用 Release 里带配置的更新器；下载失败则明确报原因（不再让用户猜）。
+      let stagedUpdater = '';
+      try {
+        if (!updaterLooksConfigured(fs.readFileSync(updaterPath))) {
+          try { fs.appendFileSync(path.join(Paths.tempDir(), 'fufumidi-restart.log'), new Date().toTimeString().slice(0, 8) + ' [main] installed updater lacks embedded config; fetching configured one\n'); } catch (_) {}
+          const got = await downloadConfiguredUpdater(channel);
+          if (!got.ok) {
+            return { ok: false, error: '已安装的更新器未嵌入应用配置，自动获取新版更新器失败：' + (got.error || '未知错误') + '。请下载完整安装包覆盖安装。' };
+          }
+          stagedUpdater = got.path;
+          updaterPath = got.path;
+        }
+      } catch (e) {
+        return { ok: false, error: '检查/修复更新器失败：' + String((e && e.message) || e) };
       }
       // 1) 守护脚本：等更新器退出（完成替换）→ 短暂等待落盘 → 启动新版主程序
       //    独立进程跑，脱离主进程，即便主程序被更新器结束也能继续完成重启

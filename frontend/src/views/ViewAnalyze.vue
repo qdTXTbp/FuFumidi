@@ -2,7 +2,8 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount, onActivated, onDeactivated, nextTick } from 'vue';
 import Icon from '../components/Icon.vue';
 import { useAppStore } from '../stores/app';
-import { analyzeSong, barChart, hBarChart, DUR_LABELS } from '../core/analysis.js';
+import { analyzeSong, barChart, hBarChart, DUR_LABELS, detectModulations, detectSegments, keySpecLabel } from '../core/analysis.js';
+import { timelineOfSong, barBeatOf } from '../core/timeline.js';
 
 const app = useAppStore();
 const currentSong = computed(() => app.currentSong);
@@ -14,11 +15,17 @@ import { t } from '../core/i18n.js';
 
 const densityZoom = ref(1);
 const data = ref(null);
+const extra = ref(null);      // P1-2b：转调段 / 段落聚类
+let tlRef = null;
 // 本视图被 <KeepAlive> 缓存：离开后实例仍在、DOM 已脱离文档，
 // 此时若继续算统计/画图，document.getElementById 会拿到 null 并抛错
 const active = ref(true);
 let resizeHandler = null;
 let analyzeTimer = null;
+
+function barOf(tick) {
+  try { return tlRef ? barBeatOf(tlRef, Math.max(0, Math.round(tick || 0))).bar + 1 : 1; } catch (e) { return 1; }
+}
 
 function cssVar(name, fb) {
   try {
@@ -37,6 +44,17 @@ function collect() {
     if (!active.value) return;   // 视图已切走：DOM 不在文档中，算完也没处画
     try { data.value = analyzeSong(song); }
     catch (e) { data.value = null; }
+    // P1-2b：转调滑窗（大曲目限制）+ 段落聚类。失败不影响主统计。
+    try {
+      tlRef = timelineOfSong(song);
+      const notes = [];
+      for (const tr of song.tracks) for (const n of tr.notes) notes.push(n);
+      const mods = notes.length <= 40000
+        ? detectModulations(notes, { tpb: song.tpb, windowBeats: 32, hopBeats: 16, minNotes: 8, threshold: 0.03 })
+        : [];
+      const segs = detectSegments(song, { minBars: 2 });
+      extra.value = { mods, segs, skipped: notes.length > 40000 };
+    } catch (e) { extra.value = { mods: [], segs: [], skipped: false }; }
   }, 30);
 }
 
@@ -252,6 +270,29 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
+      <!-- P1-2b：转调与段落 -->
+      <div class="az-card card" v-if="extra && (extra.mods.length || extra.segs.length)">
+        <h4><Icon name="chart" :size="14" /> {{ t('转调与调性') }}</h4>
+        <div class="mod-list" v-if="extra.mods.length">
+          <div class="mod-row" v-for="(m, i) in extra.mods" :key="'m' + i">
+            <b>{{ keySpecLabel(m) }}</b>
+            <span>{{ barOf(m.startTick) }}–{{ barOf(m.endTick) }} {{ t('小节') }}</span>
+            <span class="muted">{{ t('相关度') }} {{ m.score }}</span>
+          </div>
+        </div>
+        <div v-else class="muted small">{{ extra.skipped ? t('曲目过大，已跳过转调滑窗') : t('未检测到转调') }}</div>
+      </div>
+      <div class="az-card card" v-if="extra && extra.segs.length">
+        <h4><Icon name="chart" :size="14" /> {{ t('段落结构') }}</h4>
+        <div class="seg-list">
+          <div class="seg-row" v-for="(sg, i) in extra.segs" :key="'s' + i">
+            <b>{{ sg.label || t('段落') }} {{ i + 1 }}</b>
+            <span>{{ sg.startBar }}–{{ sg.endBar }} {{ t('小节') }}</span>
+            <span class="muted">{{ sg.chords.slice(0, 8).map((c) => c.name).join(' ') }}</span>
+          </div>
+        </div>
+      </div>
+
       <div class="az-card card">
         <h4><Icon name="music" :size="14" /> {{ t('最常用和弦（按小节统计）') }}</h4>
         <div class="chord-chips">
@@ -315,6 +356,11 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+/* P1-2b 转调 / 段落列表（只用 token） */
+.mod-list, .seg-list { display: flex; flex-direction: column; gap: var(--sp-1); }
+.mod-row, .seg-row { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-1) 0; border-top: 1px solid var(--hairline); }
+.mod-row b, .seg-row b { min-width: 88px; }
+.mod-row .muted, .seg-row .muted { margin-left: auto; }
 .stat-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--sp-3); margin-bottom: 14px; }
 @media (max-width: 1100px) { .stat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 620px) { .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

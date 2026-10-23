@@ -254,7 +254,6 @@ contextBridge.exposeInMainWorld('fuBridge', {
   // 已导入声库列表 / 导入现成声库 zip
   utauListVoicebanks: () => ipcRenderer.invoke('utau:listVoicebanks'),
   utauImportVoicebankZip: (directPath) => ipcRenderer.invoke('utau:importVoicebankZip', directPath),
-  modelImportGsvVoice: (directPath) => ipcRenderer.invoke('model:importGsvVoice', directPath),
   // 声库资源中心：可一键安装的开源/免费声库清单、下载安装、取消
   utauVoicebankRegistry: () => ipcRenderer.invoke('utau:voicebankRegistry'),
   utauDownloadVoicebank: (id) => ipcRenderer.invoke('utau:downloadVoicebank', id),
@@ -314,6 +313,7 @@ contextBridge.exposeInMainWorld('fuBridge', {
   gpuListPackages: () => ipcRenderer.invoke('gpu:listPackages'),
   gpuImportLocal: (p, kind) => ipcRenderer.invoke('gpu:importLocal', p, kind),
   gpuStatus: () => ipcRenderer.invoke('gpu:status'),
+  gpuUnifiedMemoryExperiment: () => ipcRenderer.invoke('gpu:unifiedMemoryExperiment'),
   gpuUninstall: (kind) => ipcRenderer.invoke('gpu:uninstall', kind),
   gpuCancelInstall: () => ipcRenderer.invoke('gpu:cancelInstall'),
   pickZip: () => ipcRenderer.invoke('dialog:pickZip'),
@@ -366,6 +366,9 @@ contextBridge.exposeInMainWorld('fuBridge', {
       return () => ipcRenderer.removeListener('wallpaper:downloadProgress', listener);
     },
     removeLocal: (name) => ipcRenderer.invoke('wallpaper:removeLocal', name),
+    searchWallhaven: (q, page) => ipcRenderer.invoke('wallpaper:searchWallhaven', q, page),
+    downloadUrl: (url, name) => ipcRenderer.invoke('wallpaper:downloadUrl', url, name),
+    scanFolder: (dir) => ipcRenderer.invoke('wallpaper:scanFolder', dir),
   },
   // 可选 Rust 核心
   rustStatus: () => ipcRenderer.invoke('rust:status'),
@@ -385,6 +388,9 @@ contextBridge.exposeInMainWorld('fuBridge', {
   dbCloudSongDir: () => ipcRenderer.invoke('db:cloud-song:dir'),
   // 应用事件通知（song-loaded / view-changed 等 → 插件事件钩子）
   notify: (ev, payload) => ipcRenderer.send('app:event', ev, payload),
+  // E2E 测试实例标记（scripts/e2e）：只有 FUFUMIDI_E2E=1 时为 true。
+  // 渲染进程据此注册 window.__fufumidiE2E 的最小测试钩子；正常启动不注册任何东西。
+  e2e: process.env.FUFUMIDI_E2E === '1',
   // 歌声工程文件（.fufumidi 自包含包）：只传清单与源路径，音频字节由主进程读盘
   project: {
     save: (payload) => ipcRenderer.invoke('project:save', payload),
@@ -394,7 +400,49 @@ contextBridge.exposeInMainWorld('fuBridge', {
     exportUstx: (payload) => ipcRenderer.invoke('project:exportUstx', payload),
     // 分轨导出：伴奏源文件主进程直拷（字节不过 IPC）
     copyAsset: (payload) => ipcRenderer.invoke('project:copyAsset', payload),
+    // P0-2 自动保存草稿：只写数据根 temp/autosave/，绝不覆盖用户工程文件
+    autosaveWrite: (payload) => ipcRenderer.invoke('autosave:write', payload),
+    autosaveList: () => ipcRenderer.invoke('autosave:list'),
+    autosaveRead: (docId) => ipcRenderer.invoke('autosave:read', docId),
+    autosaveClear: (docId) => ipcRenderer.invoke('autosave:clear', docId),
   },
+  // P2-1 VST3 离线渲染（宿主与插件均为可选、自备）
+  plugin: {
+    status: () => ipcRenderer.invoke('plugin:status'),
+    list: () => ipcRenderer.invoke('plugin:list'),
+    pickDir: () => ipcRenderer.invoke('plugin:pickDir'),
+    pickFile: () => ipcRenderer.invoke('plugin:pickFile'),
+    pickAudio: () => ipcRenderer.invoke('plugin:pickAudio'),
+    savePath: (suggested) => ipcRenderer.invoke('plugin:savePath', suggested),
+    renderFile: (payload) => ipcRenderer.invoke('plugin:renderFile', payload),
+  },
+  // P0-4c 分轨导出：一次写成一个 ZIP
+  exportStemsZip: (payload) => ipcRenderer.invoke('export:stems-zip', payload),
+  // P2-5 DAW 互通：DAWproject 导出（ZIP：project.xml + metadata.xml）
+  exportDawproject: (payload) => ipcRenderer.invoke('dawproject:export', payload),
+  // P2-6 AI 生成（可选、默认关）：产物带 AI 标注；没有本地命令时明确报 not-configured
+  ai: {
+    status: () => ipcRenderer.invoke('ai:status'),
+    generate: (req) => ipcRenderer.invoke('ai:generate', req),
+  },
+  // P1-9 存储治理：分类占用报告 + 安全清理（曲库永不清，资产需显式 includeAssets）
+  storage: {
+    report: () => ipcRenderer.invoke('storage:report'),
+    cleanup: (payload) => ipcRenderer.invoke('storage:cleanup', payload),
+  },
+  // C2 任务中心：长任务登记在主进程（离开页面不丢）；事件 10Hz 合并广播
+  tasks: {
+    list: () => ipcRenderer.invoke('tasks:list'),
+    cancel: (id) => ipcRenderer.invoke('tasks:cancel', id),
+    demo: (opts) => ipcRenderer.invoke('tasks:demo', opts),
+    onUpdate: (cb) => {
+      const fn = (_e, ev) => { try { cb(ev); } catch (e) {} };
+      ipcRenderer.on('task:update', fn);
+      return () => { try { ipcRenderer.removeListener('task:update', fn); } catch (e) {} };
+    },
+  },
+  // P0-4 音频导出：渲染进程编码好 WAV 字节，主进程负责原子落盘 + 写 manifest
+  exportAudio: (payload) => ipcRenderer.invoke('export:audio', payload),
   // ★ 顶层别名：上面这个 copyAsset 挂在 project.* 下，但 singer.ts:1490 是按
   //   `b.copyAsset(...)`（顶层）调的 —— 拿到 undefined，靠 typeof guard 静默降级成
   //   「当前版本不支持伴奏复制」。契约所有者是 preload，所以在这里补顶层入口。

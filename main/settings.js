@@ -19,6 +19,13 @@ const DEFAULT_SETTINGS = {
   output_dir: '',
   guide_done: false,
   advanced_mode: false,
+  /* P2-6 AI 生成（可选、默认关）：本地生成命令由用户自备；
+     默认命令留空 = not-configured，不会联网也不会内置模型。 */
+  'ai.enabled': false,
+  'ai.provider_cmd': '',
+  /* P2-1 VST3 离线渲染宿主：解释器与插件目录都不随包分发，需用户自备（见 docs/plugins.md） */
+  'plugin.host_python': '',
+  'plugin.dirs': [],
   custom_wallpaper: '',
   wallpaper_prompt_done: false,
   wallpaper_enabled: false,
@@ -27,6 +34,16 @@ const DEFAULT_SETTINGS = {
   lang: '',   // 界面语言：''=未设定（首次启动按浏览器语言确定），可选 'zh' | 'zh-Hant' | 'en' | 'ja'
   hf_token: '',   // HuggingFace 访问令牌（用于下载 gated 模型，如 MuScriptor 需授权）
   active_soundfont: 'internal',   // 播放时使用的音色库：'internal'=内置合成器，其余为 SF2 文件绝对路径（音色工坊选择，持久化）
+  /* P0-5：默认 GM 音色懒加载。true = 桌面端首次播放时后台加载随包分发的 GeneralUser GS
+     （renderer/vendor/soundfonts/GeneralUser.sf2，29.8MB），不阻塞首屏；用户在音色工坊显式选过
+     音色或关掉此开关则不再自动加载。 */
+  default_gm: true,
+  /* P0-3b：MIDI 键盘录音的输入延迟补偿（ms，正 = 键盘/驱动比实际发声晚）。延迟校准会用中位数写这里。 */
+  midiInputOffsetMs: 0,
+  /* P0-4 音频导出默认值（导出面板接线后消费；先给默认，避免老设置文件缺键） */
+  'export.audio.format': 'wav24',   // wav16 / wav24 / float32（/ flac 等后续）
+  'export.audio.dither': true,      // 仅 16bit 生效
+  'export.audio.loudness': 'off',   // off / -14 / -16 / -23 LUFS
   data_root: '',  // 数据根目录（模型 / 依赖 / 缓存 / 临时文件的落点）；留空 = 自动（工具目录旁的 FuFumidiData）
   update_channel: 'stable',  // 更新通道：'stable'=正式版（默认），'beta'=测试版（提前收到 X.Y.Z-beta.N / -rc.N）
   download_source: 'auto',   // 下载源：'auto'=自动（优先国内 CNB，失败回退 GitHub），'cnb'=国内优先，'github'=全球优先

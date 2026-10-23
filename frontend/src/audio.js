@@ -3,6 +3,7 @@
 import { Synth } from './core/synth.js';
 import { Player } from './core/player.js';
 import { t } from './core/i18n.js';
+import { pickDefaultSoundfont, shouldLazyLoadDefaultGm } from './core/default_soundfont.js';
 
 let ctx = null;
 let synth = null;
@@ -69,6 +70,8 @@ export function ensureAudio() {
       // 会直接崩在 null 上 —— 表现为「任何一次选曲都失败，必须重启应用」。
       ctx = c; synth = s; player = p;
       if (typeof window !== 'undefined') window.__fufumidiActivePlayer = p;
+      // P0-5：默认 GM 懒加载（后台进行，不阻塞首屏/首播；失败静默保持内置合成器）
+      void maybeLoadDefaultGm(s);
     } catch (e) {
       // 关掉半成品上下文并保持模块变量为 null，让下一次 ensureAudio 能重新尝试
       try { if (c && c.state !== 'closed') c.close(); } catch (_) {}
@@ -97,6 +100,35 @@ export function ensureAudio() {
   }
   if (ctx.state === 'suspended') ctx.resume();
   return { ctx, synth, player };
+}
+
+/**
+ * P0-5：默认 GM 音色懒加载。
+ * 只在「用户没显式选过音色」且设置未关闭时，把随包分发的 GeneralUser GS 装进 synth。
+ * 判定逻辑在 core/default_soundfont.js（有单测）；这里只做副作用。失败不弹窗，保持内置合成器。
+ */
+async function maybeLoadDefaultGm(s) {
+  try {
+    const bridge = window.fuBridge;
+    if (!bridge || !bridge.soundfonts || typeof bridge.soundfonts.list !== 'function') return;
+    // E2E：默认不加载 29.8MB 音色（避免拖慢所有用例）；专项用例可临时开白名单验证真实加载
+    if (bridge.e2e && (() => { try { return localStorage.getItem('fufumidi_e2e_audio') !== '1'; } catch (e) { return true; } })()) return;
+    let explicit = null, flag = null;
+    try { explicit = localStorage.getItem('fufumidi_soundfont'); } catch (e) {}
+    try { flag = localStorage.getItem('fufumidi_default_gm'); } catch (e) {}
+    if (!shouldLazyLoadDefaultGm({ explicitSource: explicit, defaultGmFlag: flag })) return;
+    const list = await bridge.soundfonts.list();
+    const pick = pickDefaultSoundfont(list);
+    if (!pick) return;
+    const r = await s.setSoundfont(pick.path);
+    if (r && r.using === 'sf2') {
+      try {
+        window.__fufumidi_activeSoundfont = pick.path;
+        window.__fufumidi_appliedSoundfont = pick.path;
+        window.__fufumidi_defaultGmApplied = pick.path;
+      } catch (e) {}
+    }
+  } catch (e) { /* 默认 GM 加载失败 → 保持内置合成器 */ }
 }
 
 // 应用音色切换（音色工坊选择后立即生效 + 播放前使用）
@@ -168,7 +200,25 @@ export async function setActiveSoundfontRef(v) {
   return synth.setSoundfont(v || 'internal');
 }
 
+/**
+ * P0-5：手动触发默认 GM 懒加载（音色工坊开关打开时立即试一次；E2E 也走这里验证真链路）。
+ * 返回 Promise<boolean>：true = 已把 GeneralUser 装进 synth。
+ */
+export async function tryDefaultGm() {
+  try {
+    ensureAudio();
+    if (!synth) return false;
+    await maybeLoadDefaultGm(synth);
+    return String((typeof window !== 'undefined' && window.__fufumidi_appliedSoundfont) || '').indexOf('GeneralUser') >= 0;
+  } catch (e) { return false; }
+}
+
 export function getCtx() { return ctx; }
 export function getSynth() { return synth; }
 export function getPlayer() { return player; }
 export function hasAudio() { return !!ctx; }
+
+// 诊断/E2E 钩子：控制台或自动化可手动挑一次默认 GM（与首播自动懒加载同一函数）
+if (typeof window !== 'undefined') {
+  window.__fufumidiTryDefaultGm = () => tryDefaultGm();
+}

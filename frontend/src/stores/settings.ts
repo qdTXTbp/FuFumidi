@@ -44,9 +44,15 @@ export const useSettingsStore = defineStore('settings', {
       const prevApplied = (window as any).__fufumidi_appliedSoundfont;
       (window as any).__fufumidi_activeSoundfont = sf;
       try { localStorage.setItem('fufumidi_soundfont', sf); } catch (e) {}
+      // P0-5：默认 GM 懒加载的同步标记（audio.js 首次 init 时同步直读，规避设置异步加载竞态）
+      try { localStorage.setItem('fufumidi_default_gm', (this.settings as any).default_gm === false ? '0' : '1'); } catch (e) {}
       // 启动竞态自愈：restoreSongs→ensureAudio 可能先于本同步执行（引用未就绪 → 按内置初始化）。
       // 已应用音色与目标不一致时补加载；一致（含任意其他设置保存触发的 save）则跳过，避免 30MB SF2 反复重载。
-      if (prevApplied !== undefined && prevApplied !== sf) {
+      // P0-5：默认 GM 懒加载完成后 applied 会是 GeneralUser 路径，而设置里 active_soundfont 仍是
+      // 'internal'（用户没显式选过）。这种「默认 GM 生效中」不是竞态，不要自愈回内置合成器。
+      const gmDefault = (this.settings as any).default_gm !== false;
+      const appliedIsDefaultGm = !!(gmDefault && prevApplied && prevApplied !== 'internal' && (window as any).__fufumidi_defaultGmApplied === prevApplied);
+      if (prevApplied !== undefined && prevApplied !== sf && !(sf === 'internal' && appliedIsDefaultGm)) {
         import('../audio').then(({ setActiveSoundfontRef }) => { setActiveSoundfontRef(sf).catch(() => {}); }).catch(() => {});
       }
     },

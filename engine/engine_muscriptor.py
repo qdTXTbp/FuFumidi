@@ -9,8 +9,122 @@ MuScriptor 通用多乐器转录引擎（Kyutai + Mirelo）
 """
 import os
 import time
+import re
 
 import pause_gate as _pause_gate_mod
+
+# 队列批量转录的模型复用：worker 进程常驻时，同一模型/设备/精度只加载一次。
+# 只对 CUDA 启用（CPU 上多 worker 各留一份 1.17GB 模型容易爆内存）；
+# 低显存模式强制不缓存（优先保证不 OOM）。
+_MODEL_CACHE = {}
+
+
+
+# MuScriptor tokenizer 允许的 35 个乐器组；探测器偶尔会吐出 program_105 一类的
+# 原始 program 名，直接作为硬约束会把整个任务打挂，必须在这里过滤掉。
+_MUSCRIPTOR_GROUPS = frozenset((
+    "acoustic_piano", "electric_piano", "chromatic_percussion", "organ",
+    "acoustic_guitar", "clean_electric_guitar", "distorted_electric_guitar",
+    "acoustic_bass", "electric_bass", "violin", "viola", "cello", "contrabass",
+    "orchestral_harp", "timpani", "string_ensemble", "synth_strings", "voice",
+    "orchestra_hit", "trumpet", "trombone", "tuba", "french_horn", "brass_section",
+    "soprano_and_alto_sax", "tenor_sax", "baritone_sax", "oboe", "english_horn",
+    "bassoon", "clarinet", "flutes", "synth_lead", "synth_pad", "drums",
+))
+
+
+
+
+# GM program（0–127）→ MuScriptor 现有 35 组的近似映射表。
+# 目的：自动探测/兜底可能返回 program_105 这类未分组 GM token；硬约束接口
+# 不接受原始 program 名，但把这些 token 折叠到最近的合法组可以保留探测意图。
+# 注意这是**近似**映射：例如 104–107（Sitar/Banjo/Shamisen/Koto）→ acoustic_guitar，
+# 112–118（打击乐）→ chromatic_percussion；没有合理近似的 120–127 直接丢弃。
+_GM_PROGRAM_GROUPS = {}
+for _start, _end, _group in (
+    (0, 7, "acoustic_piano"),
+    (8, 15, "chromatic_percussion"),
+    (16, 23, "organ"),
+    (24, 25, "acoustic_guitar"),
+    (26, 28, "clean_electric_guitar"),
+    (29, 31, "distorted_electric_guitar"),
+    (32, 32, "acoustic_bass"),
+    (33, 39, "electric_bass"),
+    (40, 40, "violin"),
+    (41, 41, "viola"),
+    (42, 42, "cello"),
+    (43, 43, "contrabass"),
+    (44, 45, "string_ensemble"),
+    (46, 46, "orchestral_harp"),
+    (47, 47, "timpani"),
+    (48, 51, "string_ensemble"),
+    (52, 54, "voice"),
+    (55, 55, "orchestra_hit"),
+    (56, 56, "trumpet"),
+    (57, 57, "trombone"),
+    (58, 58, "tuba"),
+    (59, 59, "trumpet"),
+    (60, 60, "french_horn"),
+    (61, 63, "brass_section"),
+    (64, 65, "soprano_and_alto_sax"),
+    (66, 66, "tenor_sax"),
+    (67, 67, "baritone_sax"),
+    (68, 68, "oboe"),
+    (69, 69, "english_horn"),
+    (70, 70, "bassoon"),
+    (71, 71, "clarinet"),
+    (72, 79, "flutes"),
+    (80, 87, "synth_lead"),
+    (88, 95, "synth_pad"),
+    (96, 103, "synth_pad"),
+    (104, 107, "acoustic_guitar"),
+    (108, 108, "chromatic_percussion"),
+    (109, 109, "flutes"),
+    (110, 110, "violin"),
+    (111, 111, "oboe"),
+    (112, 118, "chromatic_percussion"),
+    (119, 119, "chromatic_percussion"),
+):
+    for _p in range(_start, _end + 1):
+        _GM_PROGRAM_GROUPS[_p] = _group
+
+
+def _map_program_group(name):
+    m = re.fullmatch(r"program_(\d+)", str(name))
+    if not m:
+        return None
+    return _GM_PROGRAM_GROUPS.get(int(m.group(1)))
+
+
+def _sanitize_groups(groups, log_cb=None, where=""):
+    out = []
+    bad = []
+    mapped = []
+    for g in groups or []:
+        g = str(g)
+        if g in _MUSCRIPTOR_GROUPS:
+            if g not in out:
+                out.append(g)
+            continue
+        target = _map_program_group(g)
+        if target in _MUSCRIPTOR_GROUPS:
+            if g not in mapped:
+                mapped.append(g + "→" + target)
+            if target not in out:
+                out.append(target)
+        elif g not in bad:
+            bad.append(g)
+    if mapped and log_cb:
+        try:
+            log_cb("映射近似乐器组%s：%s" % (("（" + where + "）") if where else "", " / ".join(mapped)))
+        except Exception:
+            pass
+    if bad and log_cb:
+        try:
+            log_cb("忽略无效乐器组%s：%s" % (("（" + where + "）") if where else "", " / ".join(bad)))
+        except Exception:
+            pass
+    return out
 
 
 def _find_local_model(size):
@@ -601,14 +715,55 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
     _dtype = str(params.get("dtype") or "").strip() or None
     if _dtype:
         _log(log_cb, "计算精度：%s（bf16 更快，但数值精度与 fp32 不同）" % _dtype)
+    # 队列里连续多首时复用模型：30 秒素材实测模型加载占每首固定开销的 2–3 秒，
+    # 批量队列里这部分会被重复支付。缓存 key = (权重路径, device, dtype)。
+    _cache_ok = False
     try:
-        model = TranscriptionModel.load_model(load_arg, device=dev, dtype=_dtype)
-    except TypeError:
-        # 老版本 muscriptor 的 load_model 不认 dtype：退回旧签名，别让整次转录失败
-        model = TranscriptionModel.load_model(load_arg, device=dev)
+        import torch as _torch
+        _cache_ok = bool(_torch.cuda.is_available()) and str(params.get("memory_mode") or "") != "low"
     except Exception:
-        model = TranscriptionModel.load_model(load_arg)
+        _cache_ok = False
+    _ckey = (str(load_arg), str(dev), str(_dtype or ""))
+    model = None
+    if _cache_ok and _MODEL_CACHE.get("key") == _ckey and _MODEL_CACHE.get("model") is not None:
+        model = _MODEL_CACHE["model"]
+        _log(log_cb, "复用已加载模型（同一队列后续曲目跳过模型加载）")
+    if model is None:
+        _t_load = time.perf_counter()
+        try:
+            model = TranscriptionModel.load_model(load_arg, device=dev, dtype=_dtype)
+        except TypeError:
+            # 老版本 muscriptor 的 load_model 不认 dtype：退回旧签名，别让整次转录失败
+            model = TranscriptionModel.load_model(load_arg, device=dev)
+        except Exception:
+            model = TranscriptionModel.load_model(load_arg)
+        if _cache_ok:
+            _MODEL_CACHE.clear()
+            _MODEL_CACHE["key"] = _ckey
+            _MODEL_CACHE["model"] = model
+        try:
+            _log(log_cb, "模型加载耗时 %.2fs%s" % (time.perf_counter() - _t_load, "（已缓存供后续曲目复用）" if _cache_ok else ""))
+        except Exception:
+            pass
 
+    # ★ 识别片段长度：MuScriptor 的块长写死在 muscriptor.transcription_model._SEGMENT_DURATION（5s）。
+    #   界面调了值就在这里改模块常量（同一进程只跑一次转录；模型 token 布局不随块长变）。
+    import segment_options as _seg_opt
+    _chunk_sec = _seg_opt.muscriptor_segment_sec(params.get("segment_sec"))
+    if str(params.get("memory_mode") or "") == "low":
+        # MuScriptor 本身是 batch=1 串行；低显存模式下把静音分段临时关掉，
+        # 避免「分段 + 每段各自建证据」在低显存机器上叠内存（速度收益本来也不大）
+        if str(params.get("segment_silence") or "off") != "off":
+            _log(log_cb, "低显存模式：本次关闭静音分段（降低峰值内存）")
+        params = dict(params)
+        params["segment_silence"] = "off"
+    if params.get("segment_sec"):
+        try:
+            import muscriptor.transcription_model as _tm
+            _tm._SEGMENT_DURATION = float(_chunk_sec)
+            _log(log_cb, "识别片段长度：%.1fs（MuScriptor 默认 5s）" % float(_chunk_sec))
+        except Exception as _e:  # noqa: BLE001
+            _log(log_cb, "识别片段长度设置失败，按默认 5s：%s" % _e)
     if model._device and model._device.type == "cuda":
         _log(log_cb, "使用 GPU（CUDA）推理")
     elif model._device and model._device.type == "mps":
@@ -671,6 +826,7 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
     #   做法：按"完全空白静音"切成若干核心段，逐段推理，事件时间加段偏移后合并成一份 MIDI。
     #   为什么不在回放路径做：token 流是按整段音频落盘的，切片对不上。
     _seg_plan = None
+    _per_seg_constraints = None
     _seg_pcm = None
     _seg_sr = 0
     _seg_cfg = {}
@@ -892,7 +1048,7 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                     del open_notes[idx]
                     _cap_stats["closed"] += 1
 
-        def _segmented_events(plan, pcm, sr):
+        def _segmented_events(plan, pcm, sr, constrain_override="__unset__", per_seg_constraints=None):
             """逐段推理并合并事件流（★ 静音分段）。
 
             三条不变量（错了就会丢音/重音，改动前先看这里）：
@@ -907,7 +1063,7 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
             import tempfile as _tf
             segs = plan["segments"]
             pad = float(params.get("segment_pad") or 1.0)
-            chunk_sec = 5.0
+            chunk_sec = _chunk_sec
             per = [max(1, int((e - s) / chunk_sec + 0.999)) for s, e in segs]
             total_chunks = sum(per)
             done_chunks = 0
@@ -932,7 +1088,14 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                     off = a / float(sr)
                     kept = {}
                     dropped = set()
-                    for ev in model.transcribe(seg_wav, instruments=constrain, **_gen_kw):
+                    if constrain_override != "__unset__":
+                        _seg_instruments = constrain_override
+                    elif per_seg_constraints is not None and si < len(per_seg_constraints):
+                        _pg = per_seg_constraints[si] or []
+                        _seg_instruments = _pg if _pg else None
+                    else:
+                        _seg_instruments = constrain
+                    for ev in model.transcribe(seg_wav, instruments=_seg_instruments, **_gen_kw):
                         if _ProgressEvent is not None and isinstance(ev, _ProgressEvent):
                             yield _ProgressEvent(completed=done_chunks + int(getattr(ev, "completed", 0)),
                                                  total=total_chunks)
@@ -1014,8 +1177,226 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         # （python instrument_probe.py 歌曲.flac --json，看模型会把这首歌判成哪些乐器）。
         import instrument_probe
         _mode, _groups = instrument_probe.parse_mode(params.get("muscriptor_instruments"))
+        _groups = _sanitize_groups(_groups, log_cb, "手动/预设")
         constrain = _groups if _mode == "limit" else None
-        if not constrain:
+        if _mode in ("probe", "probe_segments"):
+            # 「音色稳定」预设：先探测主乐器组，再作为硬约束（减少长尾乐器与跨块改判）。
+            _seg_probe_mode = (_mode == "probe_segments")
+            # ★ 探测器**优先用小模型**，不再复用主模型：大模型（large，1.4B）本身很慢，
+            #   拿它做 3×20s 预分析实测要数分钟（RTX 5070 Ti 笔记本上甚至逼近 10 分钟），
+            #   主转录还没开始用户就以为卡死；小模型探测约几秒，且探测结果只用于选组。
+            _probe_model = model
+            _probe_label = "主模型"
+            _probe_tmp = False
+            # ★ 方案 B：优先用**专用音频标签模型**（AudioSet zipformer-small，26MB ONNX，
+            #   CPU 0.3s/10s），不再拿 MuScriptor-small 做 3×20s 预分析。
+            #   它只输出乐器组，不参与 MIDI 生成；置信度不足时宁可不锁定，也不硬塞。
+            _tagger = None
+            try:
+                import audio_tagger as _audio_tagger
+                if _audio_tagger.available():
+                    _tagger = _audio_tagger.default_tagger()
+                    _probe_label = "音频标签模型（AudioSet）"
+                    _log(log_cb, "自动探测使用专用音频标签模型（AudioSet zipformer-small，CPU；不占主模型）")
+            except Exception as _e:  # noqa: BLE001
+                _tagger = None
+                _log(log_cb, "音频标签模型不可用，退回 MuScriptor 探测器：%s" % str(_e)[:120])
+
+            def _load_fallback_probe():
+                """标签模型置信度不足时的兜底探测器：独立 small（失败再用主模型）。"""
+                try:
+                    _p = _find_local_model("small")
+                    if size != "small" and _p:
+                        try:
+                            return TranscriptionModel.load_model(_p, device=dev, dtype=_dtype), True
+                        except TypeError:
+                            return TranscriptionModel.load_model(_p, device=dev), True
+                        except Exception:
+                            return TranscriptionModel.load_model(_p), True
+                except Exception:
+                    pass
+                return model, False
+
+            # 探测器选择（auto）：没有标签模型时，large 主模型用 small 探测器；
+            # medium/small 直接用主模型。环境变量 FUFUMIDI_PROBE_MODEL 可强制覆盖。
+            _probe_pref = os.environ.get("FUFUMIDI_PROBE_MODEL", "auto").strip().lower()
+            _use_small_probe = (_tagger is None and (_probe_pref == "small"
+                               or (_probe_pref != "main" and size == "large")
+                               or (_probe_pref != "main" and _seg_probe_mode)))
+            if _use_small_probe and size != "small":
+                try:
+                    _small_path = _find_local_model("small")
+                    if _small_path:
+                        _t_probe_load = time.perf_counter()
+                        try:
+                            _probe_model = TranscriptionModel.load_model(_small_path, device=dev, dtype=_dtype)
+                        except TypeError:
+                            _probe_model = TranscriptionModel.load_model(_small_path, device=dev)
+                        except Exception:
+                            _probe_model = TranscriptionModel.load_model(_small_path)
+                        _probe_tmp = True
+                        _probe_label = "small（独立探测器）"
+                        _log(log_cb, "自动探测使用独立小模型（small，不消耗主模型推理；加载 %.2fs）"
+                             % (time.perf_counter() - _t_probe_load))
+                except Exception as _e:  # noqa: BLE001
+                    _probe_model = model
+                    _probe_label = "主模型（small 加载失败：%s）" % str(_e)[:80]
+                    _log(log_cb, "小模型探测器不可用，退回主模型探测：%s" % _e)
+            try:
+                _t_probe = time.perf_counter()
+                if _seg_probe_mode:
+                    # ★ 分段探测（实验，方案 B）：固定 30/60s 一段，每段用探测器短推理
+                    #    （默认独立 small）得到该段主乐器组，再按段硬约束；全局保留出现 ≥2 段的组，
+                    #    并与相邻段并集，避免某段漏检把后面才进场的乐器整组关掉。
+                    import segment_probe as _segprobe
+                    import soundfile as _sfp
+                    import tempfile as _tfp
+                    import shutil as _shp
+                    _x, _sr = _sfp.read(wav_tmp, dtype="float32", always_2d=False)
+                    if getattr(_x, "ndim", 1) > 1:
+                        _x = _x.mean(axis=1)
+                    _dur = len(_x) / float(_sr) if _sr else 0.0
+                    _segs = _segprobe.fixed_segments(_dur, params.get("probe_segment_sec") or 60)
+                    _tmpdir = _tfp.mkdtemp(prefix="fuprobe-seg-")
+                    _per_groups = []
+                    _seg_src = []
+                    _fb_model = None
+                    _fb_tmp = False
+                    try:
+                        for _si, (_a, _b) in enumerate(_segs):
+                            _sp = os.path.join(_tmpdir, "seg%02d.wav" % _si)
+                            _sfp.write(_sp, _x[int(_a * _sr):int(_b * _sr)], _sr)
+                            _src = "标签模型"
+                            if _tagger is not None:
+                                _pg, _psc, _prs = _tagger.probe_groups(_sp, min_score=0.05,
+                                                                       max_windows=5)
+                            else:
+                                _pr = instrument_probe.probe(
+                                    _probe_model, _sp, log=log_cb, count=1,
+                                    win=min(20.0, max(5.0, _b - _a)))
+                                _pg = _pr.get("groups") or []
+                                _prs = _pr.get("reason", "")
+                            # 这一段没检出 → 只对这一小段补一次 small 探测；不要拿整曲组套所有段。
+                            if not _pg and _tagger is not None:
+                                try:
+                                    if _fb_model is None:
+                                        _fb_model, _fb_tmp = _load_fallback_probe()
+                                    _fpr = instrument_probe.probe(
+                                        _fb_model, _sp, log=log_cb, count=1,
+                                        win=min(20.0, max(5.0, _b - _a)))
+                                    _pg = _fpr.get("groups") or []
+                                    _src = "small兜底"
+                                    _prs = _fpr.get("reason", "")
+                                except Exception as _e:  # noqa: BLE001
+                                    _prs = "small兜底失败: %s" % str(_e)[:120]
+                            _pg = _sanitize_groups(_pg, log_cb, "分段 %d" % (_si + 1))
+                            _per_groups.append(_pg)
+                            _seg_src.append(_src)
+                            _log(log_cb, "分段探测 %d/%d（%.0f–%.0fs，%s）：%s%s"
+                                 % (_si + 1, len(_segs), _a, _b, _src,
+                                    " / ".join(_pg) if _pg else "（置信度不足/未检出）",
+                                    "" if _pg else ("（%s）" % _prs if _prs else "")))
+                    finally:
+                        if _fb_tmp:
+                            try:
+                                del _fb_model
+                                import gc as _gc_segfb
+                                _gc_segfb.collect()
+                                import torch as _torch_segfb
+                                if _torch_segfb.cuda.is_available():
+                                    _torch_segfb.cuda.empty_cache()
+                            except Exception:
+                                pass
+                        try:
+                            _shp.rmtree(_tmpdir, ignore_errors=True)
+                        except Exception:
+                            pass
+                    _allowed, _keep = _segprobe.build_constraints(_per_groups, max_groups=12)
+                    _allowed = [_sanitize_groups(_g, log_cb, "段约束") for _g in _allowed]
+                    _keep = _sanitize_groups(_keep, log_cb, "稳定组")
+                    # 某段仍空 → 沿用最近的已约束段，保证每段都有明确允许组。
+                    for _i in range(len(_allowed)):
+                        if _allowed[_i]:
+                            continue
+                        for _j in (range(_i - 1, -1, -1), range(_i + 1, len(_allowed))):
+                            _found = None
+                            for _k in _j:
+                                if _allowed[_k]:
+                                    _found = _allowed[_k]
+                                    _log(log_cb, "分段 %d 未检出，沿用段 %d 的乐器组：%s"
+                                         % (_i + 1, _k + 1, " / ".join(_found)))
+                                    break
+                            if _found:
+                                _allowed[_i] = list(_found)
+                                break
+                    if any(_allowed):
+                        _per_seg_constraints = _allowed
+                        _seg_plan = {"duration": _dur, "segments": _segs, "skipped_sec": 0.0}
+                        _seg_pcm, _seg_sr = _x, _sr
+                        constrain = None
+                        _log(log_cb, "分段探测完成（探测器=%s，%.1fs）：%d 段；稳定组=%s；按段约束已启用"
+                             % (_probe_label, time.perf_counter() - _t_probe,
+                                len(_segs), " / ".join(_keep) if _keep else "无（按段/邻段并集）"))
+                    else:
+                        _log(log_cb, "分段探测未得到任何乐器组（探测器=%s，%.1fs），本次不限制"
+                             % (_probe_label, time.perf_counter() - _t_probe))
+                else:
+                    if _tagger is not None:
+                        _groups, _gsc, _prs = _tagger.probe_groups(wav_tmp, min_score=0.05,
+                                                                   max_windows=3)
+                    else:
+                        _pr = instrument_probe.probe(_probe_model, wav_tmp, log=log_cb)
+                        _groups = _pr.get("groups") or []
+                        _prs = _pr.get("reason", "ok")
+                    _probe_secs = time.perf_counter() - _t_probe
+                    if not _groups and _tagger is not None:
+                        _log(log_cb, "音频标签模型置信度不足（%s），尝试 MuScriptor-small 兜底探测…" % (_prs or "低置信度"))
+                        _fb_model, _fb_tmp = _load_fallback_probe()
+                        try:
+                            _fpr = instrument_probe.probe(_fb_model, wav_tmp, log=log_cb)
+                            _groups = _fpr.get("groups") or []
+                            _prs = _fpr.get("reason", "ok")
+                            if _groups:
+                                _probe_label = "MuScriptor-small 兜底"
+                        finally:
+                            if _fb_tmp:
+                                try:
+                                    del _fb_model
+                                    import gc as _gc_fb
+                                    _gc_fb.collect()
+                                    import torch as _torch_fb
+                                    if _torch_fb.cuda.is_available():
+                                        _torch_fb.cuda.empty_cache()
+                                except Exception:
+                                    pass
+                        _probe_secs = time.perf_counter() - _t_probe
+                    if _groups:
+                        _groups = _sanitize_groups(_groups, log_cb, "整曲探测")
+                        constrain = _groups
+                        _log(log_cb, "预分析锁定乐器组（音色稳定，探测器=%s，%.1fs）：" % (_probe_label, _probe_secs)
+                             + " / ".join(_groups) + "（%s）" % _prs)
+                    else:
+                        _log(log_cb, "预分析未得到足够可信的乐器组（探测器=%s，%.1fs，%s），本次不限制"
+                             % (_probe_label, _probe_secs, _prs or "低置信度"))
+            except Exception as _e:  # noqa: BLE001
+                _log(log_cb, "预分析失败，本次不限制：%s" % _e)
+            finally:
+                if _probe_tmp:
+                    try:
+                        del _probe_model
+                        import gc as _gc_probe
+                        _gc_probe.collect()
+                        import torch as _torch_probe
+                        if _torch_probe.cuda.is_available():
+                            _torch_probe.cuda.empty_cache()
+                    except Exception:
+                        pass
+        if _per_seg_constraints is not None:
+            _active = [i + 1 for i, g in enumerate(_per_seg_constraints) if g]
+            _log(log_cb, "分段乐器组约束已启用：第 %s 段（每段允许 %s）"
+                 % (" / ".join(str(i) for i in _active) if _active else "无",
+                    "；".join("段%d=%s" % (i + 1, " / ".join(g)) for i, g in enumerate(_per_seg_constraints) if g)))
+        elif not constrain:
             _log(log_cb, "未限定乐器组：模型自由判定（同一段旋律可能被写成多种音色）")
         if constrain:
             _log(log_cb, "旋律乐器组已锁定：" + " / ".join(constrain) + "（模型不会输出其它乐器）")
@@ -1116,19 +1497,67 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                     #   它是惰性的，所以"卡住"就等于卡在 5 秒块与块之间，继续时从原处接着跑。
                     _install_pause_wrapper(model)
                     if _seg_plan is not None:
-                        events = _segmented_events(_seg_plan, _seg_pcm, _seg_sr)
+                        events = _segmented_events(_seg_plan, _seg_pcm, _seg_sr,
+                                                   per_seg_constraints=_per_seg_constraints)
                     else:
                         events = model.transcribe(wav_tmp, instruments=constrain, **_gen_kw)
                 data = model.events_to_midi_bytes(_events_capped(events), beat_grid=beat_grid)
+                # ★ 0 音符保护：空 MIDI 不是成功结果。
+                #   以前这里会把只有 tempo 的 33B 文件直接写盘/入库（用户看到"转录成功但 MIDI 是空的"）。
+                #   先在内存里数音符：为 0 且用了乐器组约束时，**取消约束重试一次**（有时是探测组
+                #   与这首歌不匹配）；仍为 0 就明确报错，不再静默产出空文件。
+                _n_before = _midi_note_count_bytes(data)
+                if _n_before == 0 and constrain is not None:
+                    _log(log_cb, "识别结果为 0 音符，先取消乐器组约束重试一次（原限制：%s）"
+                         % (" / ".join(constrain) if constrain else "无"))
+                    try:
+                        if _seg_plan is not None:
+                            _retry_events = _segmented_events(_seg_plan, _seg_pcm, _seg_sr, constrain_override=None,
+                                                              per_seg_constraints=None)
+                        else:
+                            _retry_events = model.transcribe(wav_tmp, instruments=None, **_gen_kw)
+                        _retry_data = model.events_to_midi_bytes(_events_capped(_retry_events), beat_grid=beat_grid)
+                        _n_retry = _midi_note_count_bytes(_retry_data)
+                        if _n_retry > 0:
+                            data = _retry_data
+                            _n_before = _n_retry
+                            _log(log_cb, "取消乐器组约束后重试成功：%d 音符" % _n_retry)
+                        else:
+                            _log(log_cb, "取消乐器组约束后重试仍为 0 音符")
+                    except Exception as _re:  # noqa: BLE001
+                        _log(log_cb, "取消约束重试失败：%s" % _re)
+                if _n_before == 0:
+                    try:
+                        import soundfile as _sf_chk
+                        _dur_chk = float(_sf_chk.info(wav_tmp).duration)
+                    except Exception:
+                        _dur_chk = 0.0
+                    raise RuntimeError(
+                        "识别结果为 0 音符（音频 %.1fs，模型 %s，乐器组限制=%s）。"
+                        "常见原因：音频近乎静音/只有噪声、乐器组限制与素材不匹配、或模型未输出事件。"
+                        "已取消乐器组约束重试仍为空，未写入空 MIDI。"
+                        % (_dur_chk, size, " / ".join(constrain) if constrain else "无"))
                 if _stitch and data:
                     try:
-                        _stitched, _st_stats = _stitch_chunk_boundaries(data)
+                        _stitched, _st_stats = _stitch_chunk_boundaries(data, chunk_sec=_chunk_sec)
                         if _st_stats.get("merged"):
                             data = _stitched
                         _log(log_cb, "跨块延音缝合：接合 %d 处（边界两侧同轨同音高），缝合后最长音 %.1fs"
                              % (int(_st_stats.get("merged") or 0), float(_st_stats.get("longest") or 0.0)))
                     except Exception as _e:                 # noqa: BLE001
                         _log(log_cb, "跨块延音缝合跳过（按原样输出）：%s" % _e)
+                # 音色稳定后处理（默认关；MuScriptor 预设默认开）：短命孤立乐器轨并入邻近主导轨
+                if params.get("timbre_stabilize") and data:
+                    try:
+                        import timbre_stabilize as _ts
+                        data2, _ts_stats = _ts.stabilize_midi_bytes(data)
+                        if _ts_stats.get("moved"):
+                            data = data2
+                        _log(log_cb, "音色稳定：并入 %d 个短命轨音符，删除 %d 条孤立轨（轨 %d → %d）"
+                             % (int(_ts_stats.get("moved") or 0), int(_ts_stats.get("removed_tracks") or 0),
+                                int(_ts_stats.get("before_tracks") or 0), int(_ts_stats.get("after_tracks") or 0)))
+                    except Exception as _e:                 # noqa: BLE001
+                        _log(log_cb, "音色稳定后处理跳过（按原样输出）：%s" % _e)
                 if _cap > 0:
                     _log(log_cb, "超长音符上限 %.0fs：强制收尾 %d 个音符"
                                   % (_cap, _cap_stats["closed"]))
@@ -1313,6 +1742,28 @@ def _read_token_dump(path):
                 yield int(o["t"])
 
     return gen(), grid
+
+
+def _midi_note_count_bytes(data):
+    """从内存里的 MIDI 字节数音符（note_on velocity>0）；解析失败返回 -1。
+
+    只用于「0 音符保护」：检查引擎是否在**写盘前**就已经没有音符事件，避免把
+    一个只有 tempo 的空 MIDI 当成成功结果返回给界面。
+    """
+    if not data:
+        return 0
+    try:
+        import io as _io
+        import mido as _mido
+        mf = _mido.MidiFile(file=_io.BytesIO(data))
+        n = 0
+        for track in mf.tracks:
+            for msg in track:
+                if msg.type == "note_on" and getattr(msg, "velocity", 0):
+                    n += 1
+        return n
+    except Exception:
+        return -1
 
 
 def _duration_stats(midi_path):

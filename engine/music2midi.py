@@ -158,6 +158,20 @@ def _resolve_params(args, mode):
     if getattr(args, "denoise_mode", None): p["denoise_mode"] = str(args.denoise_mode)
     if getattr(args, "normalize", False): p["normalize"] = True
     if getattr(args, "auto_bpm", False): p["auto_bpm"] = True
+    # 识别片段长度（所有转录模型共用）：0/空 = 各模型默认
+    _sg = getattr(args, "segment_sec", None)
+    if _sg is not None:
+        try:
+            if float(_sg) > 0:
+                p["segment_sec"] = float(_sg)
+        except (TypeError, ValueError):
+            pass
+    # 显存策略（auto / low / allow）：由主进程传，引擎按模型降批或保持
+    _mm = getattr(args, "memory_mode", None)
+    if _mm in ("auto", "low", "allow"):
+        p["memory_mode"] = str(_mm)
+    if getattr(args, "timbre_stabilize", False): p["timbre_stabilize"] = True
+    if getattr(args, "probe_segment_sec", None): p["probe_segment_sec"] = args.probe_segment_sec
     if getattr(args, "no_merge", False): p["merge_overlap"] = False
     if getattr(args, "no_velnorm", False): p["normalize_vel"] = False
     # 子模型选择：universal → basic / muscriptor；piano → piano_pt / aria / transkun
@@ -456,6 +470,14 @@ def build_parser():
     g.add_argument("--no-velnorm", action="store_true", help="关闭力度归一化")
 
     g = parser.add_argument_group("通用/分离（basic-pitch）参数")
+    g.add_argument("--segment-sec", dest="segment_sec", type=float, default=None,
+                   help="识别片段长度（秒，所有转录模型）：0/不传 = 各模型默认")
+    g.add_argument("--memory-mode", dest="memory_mode", choices=["auto", "low", "allow"], default=None,
+                   help="显存策略：low=低显存自动降批（推荐）/ allow=允许驱动借用系统内存 / auto=默认")
+    g.add_argument("--timbre-stabilize", action="store_true",
+                   help="MuScriptor 音色稳定后处理：把短命孤立乐器轨并入邻近主导轨（默认关；界面预设默认开）")
+    g.add_argument("--probe-segment-sec", type=float, default=None,
+                   help="分段探测的段长（秒，20–120；默认 60）")
     g.add_argument("--min-note-length", type=float, default=None,
                    help="最短音符时长(ms)（默认 128）")
     g.add_argument("--min-freq", "--minimum-frequency", dest="minimum_frequency",
@@ -585,6 +607,11 @@ def cmd_worker():
                 # 引擎会一直用默认 15s。
                 max_note_hold=req.get('max_note_hold'),
                 # ⑤ 静音分段（漏一项界面勾了也到不了引擎）
+                # 识别片段长度：漏这一项时界面滑条调了也到不了引擎
+                segment_sec=req.get('segment_sec'),
+                memory_mode=req.get('memory_mode'),
+                timbre_stabilize=bool(req.get('timbre_stabilize')),
+                probe_segment_sec=req.get('probe_segment_sec'),
                 segment_silence=req.get('segment_silence'),
                 silence_db=req.get('silence_db'),
                 min_silence=req.get('min_silence'),

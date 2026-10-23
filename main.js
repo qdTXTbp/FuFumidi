@@ -56,10 +56,16 @@ const { createRustService } = require('./main/rust');
 const { createDbService } = require('./main/db');
 const { registerLibraryIpc } = require('./main/library');
 const { registerProjectIpc } = require('./main/project');
+const { registerExportIpc } = require('./main/export');
+const { getTaskCenter, registerTaskIpc } = require('./main/taskcenter');
+const { registerStorageIpc } = require('./main/storage');
 const { registerWallpaperIpc } = require('./main/wallpaper');
 const { registerUtauIpc } = require('./main/utau');
 const { registerDiffsingerIpc } = require('./main/diffsinger');
 const { registerCoverIpc } = require('./main/cover');
+const { registerAiIpc } = require('./main/ai-generate');
+const { registerDawprojectIpc } = require('./main/dawproject');
+const { registerPluginIpc } = require('./main/plugin-host');
 const { registerRvcIpc } = require('./main/rvc');
 const { createHotkeys, HOTKEY_ACTIONS } = require('./main/hotkeys');
 const { registerSoundfontWorkshopIpc } = require('./main/soundfonts');
@@ -113,11 +119,14 @@ try {
 const isDev = !app.isPackaged;
 
 // ---------- 单实例锁：保证双击 .mid 打开进同一个窗口 ----------
-const gotLock = app.requestSingleInstanceLock();
+// ★ v6.0.0 E2E（scripts/e2e）：测试要并行起多个实例、且不抢用户正在用的窗口 →
+//   由 FUFUMIDI_E2E=1 跳过单实例锁；正常启动行为完全不变。
+const E2E_MODE = !!process.env.FUFUMIDI_E2E;
+const gotLock = E2E_MODE ? true : app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
-  app.on('second-instance', (_e, argv) => {
+  if (!E2E_MODE) app.on('second-instance', (_e, argv) => {
     const win = BrowserWindow.getAllWindows()[0];
     if (win) { if (win.isMinimized()) win.restore(); win.focus(); }
     openFileFromArgv(argv, (p) => openPath({ BrowserWindow, fs }, p));
@@ -162,6 +171,32 @@ if (!gotLock) {
     registerSettingsIpc({ ipcMain, readSettings, writeSettings, db: DbService });
     // 歌声工程文件（.fufumidi 自包含包）：保存/打开都在这里，音频字节不过 IPC
     registerProjectIpc({ ipcMain, dialog, path, fs, spawnEngine });
+  // C2 TaskCenter：全局长任务中心（进度/取消/离开页面不丢）。先建中心，再把句柄分给各业务模块。
+  const taskCenter = getTaskCenter({
+    emit: (ev) => {
+      for (const w of BrowserWindow.getAllWindows()) {
+        try { w.webContents.send('task:update', ev); } catch (e) {}
+      }
+    },
+  });
+  registerTaskIpc({ ipcMain, center: taskCenter, e2e: process.env.FUFUMIDI_E2E === '1' });
+  // P1-9 存储治理：分类占用 + 安全清理（曲库永远 protected；资产需显式 includeAssets）
+  registerStorageIpc({
+    ipcMain,
+    areas: () => [
+      { id: 'models', dir: Paths.modelsDir() },
+      { id: 'soundfonts', dir: Paths.soundfontsDir() },
+      { id: 'voicebanks', dir: Paths.voicebanksDir() },
+      { id: 'diffsinger', dir: Paths.diffsingerRoot() },
+      { id: 'diffsingerVoicebanks', dir: Paths.diffsingerVoicebanksDir() },
+      { id: 'gpuEnhancements', dir: Paths.gpuEnhanceRoot() },
+      { id: 'cache', dir: Paths.cacheRoot() },
+      { id: 'temp', dir: Paths.tempDir() },
+      { id: 'logs', dir: Paths.logDir() },
+      { id: 'midi', dir: Paths.midiDir() },
+    ],
+  });
+  registerExportIpc({ ipcMain, dialog, app, path, center: taskCenter });
     registerWallpaperIpc({ ipcMain, app, fs, net, runEngineInline, parsePyJson });
     registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, net, spawnEngine, createEngineSession: EngineService.createEngineSession });
     // DiffSinger 模块化集成：默认关闭；启用后才按需下载推理依赖与通用声码器（模块内自检）
@@ -172,6 +207,12 @@ if (!gotLock) {
     // 翻唱工作流（一首歌 → 分离 → 变声 → 混音 → 成品）：引擎是 engine_cover.py，
     // 变声这一步走 engine_rvc.py（导入的 RVC 模型）。
     registerCoverIpc({ ipcMain, BrowserWindow, path, fs, dialog, shell, spawnEngine, engineEnv, readSettings, modelsService: ModelsService });
+  // P2-6 AI 生成（可选、默认关）：只调用用户自备的本地命令；产物强制 AI 标注
+  registerAiIpc({ ipcMain, app, readSettings });
+  // P2-5 DAW 互通：DAWproject 导出（渲染进程出 XML，主进程写 ZIP）
+  registerDawprojectIpc({ ipcMain, dialog, BrowserWindow, app });
+  // P2-1 VST3 离线渲染：宿主解释器由 plugin.host_python 指定（不在安装包内）
+  registerPluginIpc({ ipcMain, app, dialog, BrowserWindow, readSettings, writeSettings, rootDir: __dirname });
     registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, net });
     registerPluginsIpc();
     registerGpuIpc({

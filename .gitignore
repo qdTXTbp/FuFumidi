@@ -74,3 +74,16 @@ _attic/
 # 前端源码目录例外：components/models 是 Vue 组件，不是模型权重（曾被全局 models/ 规则误伤，
 # 导致 ModelCatalog/ItemMetaEditor 从未入库、发布分支编译失败）
 !frontend/src/components/models/
+
+# E2E artifacts (screenshots/app logs, never commit)
+scripts/e2e/artifacts/
+# Dev data root created when running electron .
+FuFumidiData/
+
+# P1-3 质量基准：生成的合成样本与最近一次真实评估
+engine/tests/quality/
+docs/quality-last-run.json
+
+# 专用音频标签模型（方案 B，27MB）：随安装包分发，源码仓库也需要
+!resources/models/audio-tagger/
+!resources/models/audio-tagger/**

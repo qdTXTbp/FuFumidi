@@ -217,16 +217,16 @@ body {
   position: relative;
   z-index: 1;
   display: grid;
-  grid-template-columns: var(--sidebar-w) 1fr;
+  grid-template-columns: 64px var(--sidebar-w) 1fr;
   grid-template-rows: var(--topbar-h) 1fr var(--playerbar-h);
   grid-template-areas:
-    "side top"
-    "side main"
-    "player player";
+    "rail side top"
+    "rail side main"
+    "player player player";
   height: 100%;
   transition: grid-template-columns var(--motion-base) var(--ease-out), grid-template-rows var(--motion-slow) var(--ease-out);
 }
-.app-shell.side-collapsed { grid-template-columns: 0 1fr; }
+.app-shell.side-collapsed { grid-template-columns: 64px 0 1fr; }
 /* 拖动调整侧边栏宽度时禁用网格过渡，避免拖拽卡顿/滞后 */
 .app-shell.resizing { transition: none; }
 /* 拖拽宽度时：列调整光标 + 禁止文本选中 */
@@ -234,7 +234,8 @@ body.resize-col, body.resize-col * { cursor: col-resize !important; user-select:
 .app-shell.no-player { grid-template-rows: var(--topbar-h) 1fr 0; }
 /* 沉浸模式（可视化页进入）：顶栏/侧栏/播放栏三条轨道全部收掉，画面独占整个窗口。
    与 .no-player / .side-collapsed 叠加也以本规则为准（写在后面）。 */
-.app-shell.immersive { grid-template-columns: 0 1fr; grid-template-rows: 0 1fr 0; }
+.app-shell.immersive { grid-template-columns: 0 0 1fr; grid-template-rows: 0 1fr 0; }
+.app-shell.immersive .primary-rail,
 .app-shell.immersive .sidebar,
 .app-shell.immersive .topbar,
 .app-shell.immersive .playerbar { display: none; }
@@ -246,8 +247,8 @@ body.resize-col, body.resize-col * { cursor: col-resize !important; user-select:
   object-fit: cover;
   z-index: 0;
   pointer-events: none;
-  opacity: 0.5;
-  background: var(--canvas);
+  opacity: 1;
+  background: transparent;
   /* GPU 合成：把视频提升为独立合成层，解码帧直接上传 GPU 纹理，
      由 GPU 做缩放/裁剪/混合，避免每帧在主线程 CPU 上光栅化 */
   transform: translateZ(0);
@@ -1881,3 +1882,7 @@ input[type="checkbox"]:active, input[type="radio"]:active { transform: scale(0.8
   transform-origin: left center;
   transition: transform var(--motion-base) var(--ease-out);
 }
+
+/* 输入控件统一 UI 字体：去掉浏览器默认宋体/等宽回退（“未命名轨”等输入框） */
+input, textarea, select, button { font-family: var(--font-ui); }
+input::placeholder, textarea::placeholder { font-family: var(--font-ui); }

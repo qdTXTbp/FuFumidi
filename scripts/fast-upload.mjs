@@ -18,7 +18,7 @@
  */
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, writeFileSync, createReadStream } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 
 const argv = process.argv.slice(2);
@@ -94,15 +94,31 @@ async function ensureRelease() {
     if (!r.ok) throw new Error('建 release 失败 ' + r.status + ' ' + JSON.stringify(r.body).slice(0, 200));
     return r.body;
   }
+  const isPre = /-(beta|alpha|rc)/i.test(tag);
+  const markLatest = async (rel) => {
+    // ★ CNB 的 releases/latest/download 锚点只认 make_latest 标记的 release；
+    //   只建 release 不标记 → latest.yml 仍指向旧版本（2026-10-18 实测踩过）。
+    if (isPre || !rel || !rel.id) return rel;
+    try {
+      const p = await api(`/${repo}/-/releases/${rel.id}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        // ★ CNB 的 make_latest 是**字符串枚举** 'true'|'false'|'legacy'（传布尔会 400）
+        body: JSON.stringify({ make_latest: 'true', prerelease: false, draft: false }),
+      });
+      if (!p.ok) console.warn('[upload] 标记 latest 失败 ' + p.status + '（latest 锚点可能仍指向旧版本）');
+    } catch (e) { console.warn('[upload] 标记 latest 异常：' + String((e && e.message) || e)); }
+    return rel;
+  };
   let r = await api(`/${repo}/-/releases/tags/${tag}`);
-  if (r.ok) return r.body;
+  if (r.ok) return markLatest(r.body);
   r = await api(`/${repo}/-/releases`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ tag_name: tag, name: title || tag, draft: false, prerelease: /-(beta|alpha|rc)/i.test(tag), target_commitish: 'master',
+    body: JSON.stringify({ tag_name: tag, name: title || tag, draft: false, prerelease: isPre, target_commitish: opt('branch') || 'master',
+      make_latest: !isPre ? 'true' : 'false',
       body: notes && existsSync(notes) ? readFileSync(notes, 'utf8') : '' }),
   });
   if (!r.ok) throw new Error('建 CNB release 失败 ' + r.status + ' ' + JSON.stringify(r.body).slice(0, 200));
-  return r.body;
+  return markLatest(r.body);
 }
 
 async function deleteAsset(a) {
@@ -126,7 +142,8 @@ async function putAsset(localPath, name, releaseId, attempt = 1) {
     if (!r.ok) throw new Error('取上传URL失败 ' + r.status);
     uploadUrl = r.body.upload_url; verifyUrl = r.body.verify_url;
   }
-  const body = readFileSync(localPath);
+  // >256MB 走流式，避免 5GB 资产整读进内存；小文件保持原路径
+  const body = size > 256 * 1024 * 1024 ? createReadStream(localPath) : readFileSync(localPath);
   const res = await fetch(uploadUrl, {
     method: channel === 'gh' ? 'POST' : 'PUT',
     headers: { ...(channel === 'gh' ? headers : {}), 'Content-Type': 'application/octet-stream', 'Content-Length': String(size) },

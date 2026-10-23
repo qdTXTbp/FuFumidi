@@ -167,12 +167,97 @@ def cuda_error_hint(kind):
     }.get(kind, '')
 
 
+
+def _driver_tuple(ver):
+    """'617.14' → (617, 14)。便于按驱动版本判断 Sysmem Fallback 支持。"""
+    parts = []
+    for x in str(ver or "").replace(",", ".").split("."):
+        try:
+            parts.append(int(x.strip()))
+        except ValueError:
+            break
+    return tuple(parts[:2]) if parts else (0, 0)
+
+
+def _nvidia_smi_info():
+    """用 nvidia-smi 查询驱动/显存（不依赖 CUDA torch，GPU 增强包未装时也能显示硬件）。
+
+    返回 dict：driver_version / name / vram_total_mb / vram_free_mb；查询失败返回空 dict。
+    """
+    import shutil
+    import subprocess
+    exe = shutil.which("nvidia-smi")
+    if not exe:
+        return {}
+    try:
+        r = subprocess.run(
+            [exe, "--query-gpu=driver_version,name,memory.total,memory.free",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=4,
+        )
+        if r.returncode != 0 or not (r.stdout or "").strip():
+            return {}
+        line = (r.stdout or "").strip().splitlines()[0]
+        parts = [x.strip() for x in line.split(",")]
+        out = {}
+        if len(parts) >= 1 and parts[0]:
+            out["driver_version"] = parts[0]
+        if len(parts) >= 2 and parts[1]:
+            out["name"] = parts[1]
+        if len(parts) >= 3:
+            try:
+                out["vram_total_mb"] = int(float(parts[2]))
+            except ValueError:
+                pass
+        if len(parts) >= 4:
+            try:
+                out["vram_free_mb"] = int(float(parts[3]))
+            except ValueError:
+                pass
+        return out
+    except Exception:
+        return {}
+
+
+def sysmem_fallback_status(driver_version):
+    """Windows + NVIDIA 驱动 ≥ 536.40 才有「共享显存回退」；546.01 起可控制面板按应用关闭。
+
+    返回 {supported, controllable, note}；非 Windows/非 NVIDIA 返回空 dict。
+    """
+    import sys
+    if not sys.platform.startswith("win"):
+        return {}
+    d = _driver_tuple(driver_version)
+    if not d[0]:
+        return {}
+    supported = d >= (536, 40)
+    controllable = d >= (546, 1)
+    note = ""
+    if supported:
+        note = "Windows/NVIDIA 驱动在显存不足时会借用系统内存（共享 GPU 内存），可能慢 5–10 倍"
+        note += ("；驱动 ≥546.01 可在 NVIDIA 控制面板 → 管理 3D 设置 → CUDA – Sysmem Fallback Policy 按应用关闭"
+                 if controllable else "；升级到 546.01+ 可手动关闭该行为")
+    else:
+        note = "驱动较旧，未启用 NVIDIA 共享显存回退（显存不足会直接报 OOM）"
+    return {"supported": bool(supported), "controllable": bool(controllable), "note": note}
+
+
 def _probe():
     gpu = {"available": False, "backend": None, "device": "cpu", "name": None,
            "vendor": None, "recommended_backend": "cpu",
            "cuda": False, "mps": False, "directml": False, "onnx_gpu": False,
            "onnx_provider": "CPUExecutionProvider",
            "rocm": False, "hip_version": None, "xpu": False}
+    # 硬件/驱动信息：nvidia-smi 不依赖 CUDA torch（GPU 增强包没装也能显示）
+    _nv = _nvidia_smi_info()
+    if _nv:
+        gpu.update({k: v for k, v in _nv.items() if k in ("driver_version", "name", "vram_total_mb", "vram_free_mb")})
+        gpu["vram_used_mb"] = max(0, int(gpu.get("vram_total_mb") or 0) - int(gpu.get("vram_free_mb") or 0))
+        _fb = sysmem_fallback_status(gpu.get("driver_version"))
+        if _fb:
+            gpu["sysmem_fallback_supported"] = _fb.get("supported")
+            gpu["sysmem_fallback_controllable"] = _fb.get("controllable")
+            gpu["sysmem_fallback_note"] = _fb.get("note")
     disabled = os.environ.get("FUFUMIDI_DISABLE_GPU") == "1"
     if disabled:
         gpu["disabled"] = True
@@ -276,6 +361,16 @@ def _probe():
                     gpu["name"] = "Apple Silicon (Metal)"
             except Exception:
                 pass
+    except Exception:
+        pass
+    # ---- 显存信息（转录页显示 + 低显存模式判断）----
+    try:
+        if gpu.get("cuda"):
+            import torch as _torch
+            _free, _total = _torch.cuda.mem_get_info(0)
+            gpu["vram_total_mb"] = int(_total // (1024 * 1024))
+            gpu["vram_free_mb"] = int(_free // (1024 * 1024))
+            gpu["vram_used_mb"] = int((_total - _free) // (1024 * 1024))
     except Exception:
         pass
     if gpu.get("xpu"):

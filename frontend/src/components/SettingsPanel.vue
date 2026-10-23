@@ -8,18 +8,23 @@ import { playbackPrefs, playbackSettingsPatch } from '../core/playback_prefs.js'
 import { useCloudStore } from '../stores/cloud';
 import CloudSyncChoiceDialog from './CloudSyncChoiceDialog.vue';
 import { t, setLang, getLang } from '../core/i18n.js';
+// P1-14 B4：设置可搜索（索引是纯逻辑，见 core/settings_index.js）
+import { searchSettings } from '../core/settings_index.js';
 
 const app = useAppStore();
 const state = app;
 const toast = (m, t) => app.toast(m, t);
 // 当前版本号（从主进程读取，与 SideBar 左下角一致）
-const appVersion = ref('v3.1.8');
+const appVersion = ref('');
+// P0-7：构建时间由 vite define 注入（关于页显示版本 + 构建时间，便于用户报问题时定位）
+const buildTime = (typeof __BUILD_TIME__ !== 'undefined') ? String(__BUILD_TIME__).slice(0, 19).replace('T', ' ') : '';
 import { getAppVersion, cmpVersion, getUpdateChannel, setUpdateChannel, normalizeUpdateChannel, getDownloadSource, setDownloadSource, normalizeDownloadSource } from '../core/version.js';
 // 线路测速的呈现层纯函数（格式化 / 按 id 合并流式结果 / 标最快）
 import { pendingRow, markBest, mergeRow, formatLatency, formatSpeed } from '../core/speedtest.js';
 getAppVersion().then(v => { appVersion.value = v; });
 import { THEMES, themeById, applyTheme, saveTheme, loadMode, setMode } from '../core/theme.js';
 import NumSlider from './NumSlider.vue';
+import SoundSettings from './SoundSettings.vue';
 /* 外观三件（字号 / 密度 / 全局缩放）的取值域与落点：与 App.vue 启动时用的是同一份 */
 import {
   applyDisplayPrefs, loadDisplayPrefs, saveFontSize, saveDensity, saveUiScale,
@@ -48,7 +53,7 @@ onMounted(() => cloud.init());
 onMounted(() => { void hkLoad(); window.addEventListener('keydown', hkOnKeydown, true); });
 
 const TABS = computed(() => [
-  { id: 'appearance', label: t('外观'), icon: 'palette' },
+  { id: 'sound', label: t('音效'), icon: 'volume' },
   { id: 'gpu', label: 'GPU', icon: 'zap' },
   { id: 'feature', label: t('功能'), icon: 'folder' },
   { id: 'keys', label: t('快捷键'), icon: 'kbd' },
@@ -56,7 +61,28 @@ const TABS = computed(() => [
   { id: 'update', label: t('更新'), icon: 'download' },
   { id: 'feedback', label: t('反馈'), icon: 'info' },
 ]);
-const tab = ref('appearance');
+const tab = ref('feature');
+
+/* P1-14 B4：设置搜索 —— 输入关键词 → 命中项；点结果切页签并滚到 data-setting 锚点 */
+const searchQuery = ref('');
+const searchHits = computed(() => (searchQuery.value.trim() ? searchSettings(searchQuery.value, 8) : []));
+let setFlashTimer = 0;
+function openAppearancePanel() { state.ui.settingsOpen = false; state.ui.appearanceOpen = true; }
+async function gotoSetting(e) {
+  if (!e) return;
+  searchQuery.value = '';
+  tab.value = e.tab;
+  state.ui.settingsTab = e.tab;
+  await nextTick();
+  try {
+    const el = document.querySelector('[data-setting="' + e.id + '"]');
+    if (!el) return;
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    el.classList.add('set-flash');
+    clearTimeout(setFlashTimer);
+    setFlashTimer = setTimeout(() => el.classList.remove('set-flash'), 1500);
+  } catch (err) {}
+}
 
 // 标签页切换：对设置卡片高度做柔和非线性补间（从旧高度过渡到新内容自然高度）
 const cardRef = ref(null);
@@ -112,6 +138,9 @@ const form = reactive({
   font_size: 'standard', density: 'comfortable', ui_scale: 1, lang: 'zh',
   engine_path: '', engine_mode: 'universal', perf_mode: 'quality', batch_concurrency: 'auto',
   output_dir: '', name_rule: '', watch_dir: '', watch_enabled: false, file_assoc: true,
+  advanced_mode: false,   // P1-12 专家模式（默认关 = 普通模式，隐藏 OMR/翻唱/GPU 入口）
+  ai_enabled: false,      // P2-6 AI 生成（可选、默认关；仅专家模式可见）
+  ai_provider_cmd: '',    // 用户自备的本地生成命令（不内置模型/不联网）
 });
 
 /* ---------------- 更新 ---------------- */
@@ -200,6 +229,9 @@ async function load() {
   form.watch_dir = s.watch_dir || '';
   form.watch_enabled = !!s.watch_enabled;
   form.file_assoc = s.file_assoc !== false;
+  form.advanced_mode = !!s.advanced_mode;
+  form.ai_enabled = s['ai.enabled'] === true;
+  form.ai_provider_cmd = s['ai.provider_cmd'] || '';
   // 更新通道：这里必须用**纯归一化**，不能调 setUpdateChannel ——
   // 后者会把值写回 localStorage 与设置，而 s 可能来自 store 的内存缓存（未必最新），
   // 会把用户刚选的通道反向覆盖成旧值，表现为「选了测试版，重开设置又变回正式版」。
@@ -479,6 +511,7 @@ async function clearUserData() {
           localStorage.removeItem('fufumidi_playmode');
           localStorage.removeItem('fufumidi_fx');
           localStorage.removeItem('fufumidi_soundfont');
+          localStorage.removeItem('fufumidi_default_gm');
         } catch (e) {}
         app.toast(t('用户数据已清除，应用即将重启…'), 'ok');
         setTimeout(() => { try { window.location.reload(); } catch (e) {} }, 800);
@@ -1128,7 +1161,8 @@ function apply() {
     batch_concurrency_manual: form.batch_concurrency !== 'auto',
     output_dir: form.output_dir, name_rule: form.name_rule,
     watch_dir: form.watch_dir, watch_enabled: form.watch_enabled,
-    file_assoc: form.file_assoc,
+    file_assoc: form.file_assoc, advanced_mode: form.advanced_mode,
+    'ai.enabled': form.ai_enabled, 'ai.provider_cmd': form.ai_provider_cmd,
   };
   let saved = false;
   settingsStore.save(payload).then(() => { if (!saved) toast(t('设置已保存')); }).catch(() => toast(t('设置保存失败'), 'error'));
@@ -1145,6 +1179,11 @@ function apply() {
   state.ui.settingsOpen = false;
 }
 function cancel() { state.ui.settingsOpen = false; }
+/** P1-7：打开「关于与许可」页（关掉设置浮层再跳） */
+function openLicenses() {
+  state.ui.settingsOpen = false;
+  try { location.hash = '#/about'; } catch (e) {}
+}
 
 /* ---------------- 生命周期 ---------------- */
 // immediate：设置面板是「打开时才挂载」的，而调用方（如转录页的「GPU 加速」按钮）会先写
@@ -1168,6 +1207,20 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
       <div class="settings-head">
         <Icon name="gear" :size="17" />
         <span class="settings-title">{{ t('应用设置') }}</span>
+        <button class="btn sm ghost" :title="t('打开专门的外观页')" @click="openAppearancePanel"><Icon name="palette" :size="13" /> {{ t('外观') }}</button>
+        <!-- P1-14 B4：设置搜索 -->
+        <div class="settings-search">
+          <Icon name="search" :size="13" />
+          <input v-model="searchQuery" class="settings-search-input" data-guide="settings-search-input"
+                 :placeholder="t('搜索设置项…（如：字号 / 显卡 / 更新）')" />
+          <div v-if="searchQuery.trim()" class="settings-search-results" data-guide="settings-search-results">
+            <button v-for="h in searchHits" :key="h.id" class="settings-search-item" :data-hit="h.id" @click="gotoSetting(h)">
+              <b>{{ t(h.label) }}</b>
+              <span>{{ t(h.hint) }}</span>
+            </button>
+            <div v-if="!searchHits.length" class="settings-search-empty">{{ t('没有找到匹配的设置') }}</div>
+          </div>
+        </div>
       </div>
 
       <div class="settings-tabs" ref="tabsRef">
@@ -1196,9 +1249,10 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
       </div>
 
       <div class="settings-body">
+        <div v-if="tab === 'sound'"><SoundSettings /></div>
         <!-- ============ 外观 ============ -->
         <div v-if="tab === 'appearance'">
-          <div class="field-row">
+          <div class="field-row" data-setting="theme">
             <div>
               <div class="fr-label">{{ t('界面模式') }}</div>
               <div class="fr-hint">{{ t('浅色明亮 · 深色护眼 · 跟随系统按系统偏好自动切换') }}</div>
@@ -1230,7 +1284,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
               <div class="fr-hint">{{ t('从壁纸库下载视频作为背景，或导入本地视频') }}</div>
             </div>
             <div class="fr-ctl">
-              <button class="btn sm" @click="state.ui.wallpaperOpen = true">🖼 {{ t('壁纸库') }}</button>
+              <button class="btn sm" @click="state.ui.wallpaperOpen = true">🖼 {{ t('壁纸库 / 导入') }}</button>
             </div>
           </div>
           <div class="field-row">
@@ -1270,7 +1324,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
               </div>
             </div>
           </div>
-          <div class="field-row">
+          <div class="field-row" data-setting="ui_scale">
             <div>
               <div class="fr-label">{{ t('界面缩放') }}</div>
               <div class="fr-hint">{{ t('全局放大或缩小整个界面（0.9 ~ 1.3）：连画布一起缩放，不会糊也不会重叠') }}</div>
@@ -1469,7 +1523,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
       </div>
 
         <div v-else-if="tab === 'feature'">
-          <div class="field-row">
+          <div class="field-row" data-setting="engine_mode">
             <div>
               <div class="fr-label">{{ t('默认引擎模式') }}</div>
               <div class="fr-hint">{{ t('转录新音频时默认使用的识别引擎') }}</div>
@@ -1482,7 +1536,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
               </select>
             </div>
           </div>
-          <div class="field-row">
+          <div class="field-row" data-setting="perf_mode">
             <div>
               <div class="fr-label">{{ t('默认性能模式') }}</div>
               <div class="fr-hint">{{ t('最高质量用全部核心，同机上反而最快；低配省资源限 2 核，低配机更稳') }}</div>
@@ -1493,6 +1547,25 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
                 <option value="balanced">{{ t('均衡') }}</option>
                 <option value="fast">{{ t('低配省资源') }}</option>
               </select>
+            </div>
+          </div>
+          <div class="field-row" data-setting="expert_mode" data-guide="expert-mode-row">
+            <div>
+              <div class="fr-label">{{ t('专家模式') }}</div>
+              <div class="fr-hint">{{ t('打开后显示 OMR / 翻唱 / GPU 等高级入口；关闭时界面保持精简（可随时打开）') }}</div>
+            </div>
+            <div class="fr-ctl">
+              <label class="ov-check"><input type="checkbox" v-model="form.advanced_mode" data-guide="expert-mode-toggle" /> {{ t('显示高级入口') }}</label>
+            </div>
+          </div>
+          <div v-if="form.advanced_mode" class="field-row" data-setting="ai_mode" data-guide="ai-generate-row">
+            <div>
+              <div class="fr-label">{{ t('AI 生成（可选）') }}</div>
+              <div class="fr-hint">{{ t('默认关闭。打开后使用你自备的本地生成命令；所有产物会标记为 AI 生成') }}</div>
+            </div>
+            <div class="fr-ctl">
+              <label class="ov-check"><input type="checkbox" v-model="form.ai_enabled" data-guide="ai-generate-toggle" /> {{ t('允许 AI 生成') }}</label>
+              <input v-model="form.ai_provider_cmd" class="ov-input mono" style="width:240px" :placeholder="t('本地命令（可选）')" data-guide="ai-generate-cmd" />
             </div>
           </div>
           <div class="field-row">
@@ -1528,7 +1601,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
               </select>
             </div>
           </div>
-          <div class="field-row">
+          <div class="field-row" data-setting="watch_dir">
             <div>
               <div class="fr-label">{{ t('监视文件夹') }}</div>
               <div class="fr-hint">{{ t('放入音频自动加入转录队列') }}</div>
@@ -1675,7 +1748,9 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
           <div class="field-row">
             <div>
               <div class="fr-label">{{ t('当前版本') }}</div>
-              <div class="fr-hint">{{ appVersion }}</div>
+              <div class="fr-hint">{{ appVersion }}<template v-if="buildTime"> · {{ t('构建于') }} {{ buildTime }}</template>
+        <button class="btn sm" style="margin-left:var(--sp-2)" @click="openLicenses">{{ t('许可与溯源') }}</button>
+      </div>
             </div>
             <div class="fr-ctl">
               <button class="btn sm primary" @click="updLaunch">{{ t('检查更新') }}</button>
@@ -1701,7 +1776,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
             </div>
           </div>
 
-          <div class="field-row">
+          <div class="field-row" data-setting="download_source">
             <div>
               <div class="fr-label">{{ t('下载源') }}</div>
               <div class="fr-hint">{{ t('国内源经 CNB 镜像，速度更快；全球源直连 GitHub，适合境外网络。自动会在国内源不可用时回退。') }}</div>
@@ -1856,7 +1931,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
 
       <div class="settings-foot">
         <button class="btn" @click="cancel">{{ t('取消') }}</button>
-        <button class="btn primary" @click="apply">{{ t('保存') }}</button>
+        <button class="btn primary" data-guide="settings-save" @click="apply">{{ t('保存') }}</button>
       </div>
     </div>
 
@@ -1898,4 +1973,19 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
             border: 1px solid var(--hairline); background: transparent; color: var(--ink); }
   .sp-use:disabled { opacity: .4; cursor: default; }
   .sp-empty { padding: 10px; font-size: var(--fs-sm); color: var(--text-soft); }
+
+  /* P1-14 B4：设置搜索 */
+  .settings-search { position: relative; margin-left: auto; display: flex; align-items: center; gap: var(--sp-1);
+                     padding: 2px var(--sp-2); border: 1px solid var(--hairline); border-radius: var(--r-sm); background: var(--canvas); }
+  .settings-search-input { border: none; background: transparent; color: var(--ink); outline: none; width: 220px; font-size: var(--fs-sm); }
+  .settings-search-results { position: absolute; top: calc(100% + var(--sp-2)); right: 0; width: 380px; max-height: 320px; overflow-y: auto;
+                             background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md);
+                             box-shadow: var(--shadow-lg); z-index: 60; padding: var(--sp-1); }
+  .settings-search-item { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%;
+                          padding: var(--sp-1) var(--sp-2); border: none; background: transparent; color: var(--ink);
+                          cursor: pointer; border-radius: var(--r-sm); text-align: left; }
+  .settings-search-item:hover { background: var(--surface-soft); }
+  .settings-search-item span { color: var(--muted); font-size: var(--fs-sm); }
+  .settings-search-empty { padding: var(--sp-2); color: var(--muted); font-size: var(--fs-sm); }
+  :deep(.field-row.set-flash) { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: var(--r-sm); }
 </style>

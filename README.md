@@ -16,9 +16,9 @@ FuFumidi is a fully offline desktop workstation for MIDI. It targets musicians, 
 
 The application is packaged as a classic Electron desktop app with a modern Vue 3 + TypeScript renderer, a bundled Python transcriber/runtime, and an optional Rust core. All audio, model weights and inference execute locally; transcription and editing never upload anything. Only when you opt in to cloud sync does your playlist and MIDI library get uploaded to your own cloud account.
 
-Current release line: **5.1.0** ([release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v5.1.0), stable channel; test builds are published under the [beta](https://github.com/qdTXTbp/FuFumidi/releases/tag/beta) tag).
+Current release line: **6.2.0** ([release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v6.2.0), stable channel; test builds are published under the [beta](https://github.com/qdTXTbp/FuFumidi/releases/tag/beta) tag).
 
-What's new in 5.1.0: **the singing workbench gains two more render paths and multi-speaker voicebanks.** Worldline v11 (R1.1) is now turnkey - the harmonic/noise separation model is downloadable from the resource centre and auto-installs - and a third path, **Worldline v20 (R2)**, feeds WORLD features through a bundled 83 KB `mel.onnx` into an NSF-HiFiGAN vocoder, with frame padding, trimming and edge fades matched line by line against upstream. DiffSinger voicebanks with several speakers now expose speaker selection (per-note override, track-level default). Elsewhere: transcription parameters are exposed in the UI (including a precision switch that honestly reports **no speed gain on either backend**), task templates were replaced by per-queue settings, a token replay bench reproduces a 148-minute run in 19.5 seconds with byte-identical MIDI, the resource centre gained pinning / drag-sorting / tags / search, presets are now per-model, every parameter slider accepts typed values, and the update page lists each download line with measured latency and speed. 22 defects were fixed; the full list is in the [release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v5.1.0).
+What's new in 6.1.6: the auto-probe now filters invalid instrument-group names (for example `program_105`) before they reach MuScriptor, so a probe result can no longer abort a whole transcription with `unknown instrument name(s)`. 6.1.5 added **a short completion chime when a transcription batch finishes** (three ascending notes on full success, two descending notes if any file failed; cancelled batches stay silent). This release also includes the 6.1.4 optional engines: **hFT-Transformer** for piano, and **YourMT3+** and **MIROS** for general transcription. All three are installed from the resource centre on demand, so the installer stays lean; once downloaded they run fully offline. 6.1.3 brought a dedicated AudioSet audio-tagger probe with a faithful fallback, a zero-note guard that refuses to write empty MIDI, automatic repair of the bundled Windows file association icon, and per-queue model reuse. See the [release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v6.1.7) for the full list.
 
 ### What it does
 
@@ -32,9 +32,9 @@ What's new in 5.1.0: **the singing workbench gains two more render paths and mul
 
 ### Highlights
 
-- 100% offline after installation. Python runtime, transcription models and Demucs vocal-separation weights ship inside the full installer.
+- 100% offline after installation. The Python runtime, core transcription models and Demucs vocal-separation weights ship inside the full installer; optional transcription engines (`YourMT3+`, `MIROS`, `hFT-Transformer`) are one-click downloads from the resource centre.
 - Vue 3 + TypeScript + Vite renderer, rebuilt from the original monolithic renderer.
-- 11 hash-routed views, in-app i18n, 10 built-in themes plus image-based custom theme generation, `Ctrl+K` command palette, onboarding guide, theme library and dynamic wallpaper gallery.
+- Five primary areas (Home / Music / Workspace / Create / Resources), hash-routed sub-tabs, four interface languages, 12 built-in themes, custom accent and image themes, `Ctrl+K` command palette, 6-chapter onboarding guide, and a unified static + motion wallpaper library.
 - Plugin sandbox that runs third-party code inside its own worker.
 - Integrity check and one-click repair for the bundled runtime.
 - Optional native Rust core (`rust-core/`) accelerates batch, CPU-heavy library operations.
@@ -42,7 +42,7 @@ What's new in 5.1.0: **the singing workbench gains two more render paths and mul
 
 ### i18n contribution rule
 
-The UI supports three interface languages: **Simplified Chinese / Traditional Chinese / English**.
+The UI supports four interface languages: **Simplified Chinese / Traditional Chinese / English / Japanese**.
 
 - Every new UI string MUST include an English translation in `frontend/src/core/i18n.js` (`I18N_MAP`); missing English = incomplete.
 - Traditional Chinese is auto-derived from the Simplified source via `frontend/src/core/zhHant.js` (no manual per-string translation needed; add to its `PHRASE` map only when a term needs a Traditional-Chinese wording difference).
@@ -73,12 +73,12 @@ A short map of the main views. Each view is reachable from the sidebar or via th
 
 ## Transcriber
 
-The transcriber supports three modes and multiple sub-models. Every mode runs against the bundled Python runtime, and every model is bundled or resolved locally.
+The transcriber supports three modes and multiple sub-models. Every mode runs against the bundled Python runtime; the core models ship with the installer, while the optional engines (`YourMT3+`, `MIROS`, `hFT-Transformer`) are downloaded once from the resource centre and then run fully offline.
 
 | Mode | Sub-models | What it is good for |
 | --- | --- | --- |
-| Universal | `basic-pitch` (ONNX int8), `MuScriptor` (small / medium / large) | Broad polyphonic material, mixing instruments. |
-| Piano | `piano_pt`, `aria`, `transkun` | Piano recordings, including pedal detection. |
+| Universal | `basic-pitch` (ONNX int8), `MuScriptor` (small / medium / large), `YourMT3+` (YPTF+Single), `MIROS` (2025 AMT Challenge champion) | Broad polyphonic material, mixing instruments. |
+| Piano | `piano_pt`, `aria`, `transkun`, `hFT-Transformer` | Piano recordings, including pedal detection. |
 | Separate | `demucs` (htdemucs) | Vocal-first or stem-separated transcription. |
 
 Advanced options exposed by the view include onset/frame thresholds, minimum note length, merge gap, pedal detection, drum extraction, denoising, normalization, automatic tempo detection, stem export (WAV) and a transcription queue with pause, cancel and reordering.

@@ -1,0 +1,68 @@
+{
+  "format": "fufumidi-perf-baseline",
+  "notesLoaded": 60000,
+  "version": 1,
+  "updatedAt": "2026-10-17T18:42:50.479Z",
+  "env": {
+    "platform": "win32 10.0.26200",
+    "cpus": 32,
+    "totalMemGB": 61.7,
+    "node": "v24.16.0"
+  },
+  "song": {
+    "notes": 60000,
+    "tracks": 4
+  },
+  "startupMs": 820,
+  "switches": {
+    "cold": [
+      {
+        "view": "#/home",
+        "ms": 224
+      },
+      {
+        "view": "#/music",
+        "ms": 68
+      },
+      {
+        "view": "#/views",
+        "ms": 11
+      },
+      {
+        "view": "#/resources",
+        "ms": 412
+      }
+    ],
+    "warm": [
+      {
+        "view": "#/home",
+        "ms": 10
+      },
+      {
+        "view": "#/music",
+        "ms": 183
+      },
+      {
+        "view": "#/views",
+        "ms": 11
+      },
+      {
+        "view": "#/resources",
+        "ms": 13
+      }
+    ],
+    "coldP95": 412,
+    "warmP95": 183
+  },
+  "editColdMs": 529,
+  "frames": {
+    "samples": 180,
+    "p50": 3.3,
+    "p95": 3.4
+  },
+  "heap": {
+    "startMB": 10.5,
+    "bigSongMB": 44.7,
+    "growthPct": 325.7
+  }
+}

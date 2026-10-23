@@ -1,16 +1,21 @@
 <script setup>
 import { onMounted, onBeforeUnmount, watch } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
+import { navHistory, readSession, writeSession, parseDeepLink } from './core/nav_history.js';
 import Icon from './components/Icon.vue';
 import SideBar from './components/SideBar.vue';
+import PrimaryRail from './components/PrimaryRail.vue';
 import TopBar from './components/TopBar.vue';
+import { useTabsStore } from './stores/tabs';
 import PlayerBar from './components/PlayerBar.vue';
 import SettingsPanel from './components/SettingsPanel.vue';
 import ThemeLibrary from './components/ThemeLibrary.vue';
 import WallpaperGallery from './components/WallpaperGallery.vue';
 import CommandPalette from './components/CommandPalette.vue';
 import GuideOverlay from './components/GuideOverlay.vue';
+import AppearancePanel from './components/AppearancePanel.vue';
 import ChangeLogOverlay from './components/ChangeLogOverlay.vue';
+import TaskCenter from './components/TaskCenter.vue';
 import { ref, computed, reactive } from 'vue';
 
 /* 全局 UI 缩放（M9b）：界面全是 px 布局，用 CSS zoom 整体缩放最省事、也最一致
@@ -28,6 +33,7 @@ import { usePlaylistStore } from './stores/playlist';
 import { useSettingsStore } from './stores/settings';
 import { setLang, t, browserLang } from './core/i18n.js';
 import { applyDisplayPrefs as applyDisplayPrefsShared, loadDisplayPrefs } from './core/display.js';
+import { installSfxClicks } from './core/sfx.js';
 import { playbackPrefs, applyPlaybackSettings } from './core/playback_prefs.js';
 import { holdRate, isEditableTarget } from './core/transport_keys.js';
 import { getAppVersion, cmpVersion, getUpdateChannel } from './core/version.js';
@@ -38,13 +44,35 @@ import { viewFromPath } from './router';
 const app = useAppStore();
 const state = app;
 const playlistStore = usePlaylistStore();
+const tabsStore = useTabsStore();
 const settingsStore = useSettingsStore();
 const wallpaperPromptOpen = ref(false);
 const route = useRoute();
+const router = useRouter();
+// P1-14 B3：启动时先同步抓一次会话（避免首帧路由 watcher 写入把上次会话覆盖掉）
+const bootSession = readSession();
+// E2E 调试钩子：曲目标签（正常安装版不存在）
+try {
+  if (window.fuBridge && window.fuBridge.e2e) {
+    window.__fufumidiTabs = () => ({ tabs: tabsStore.tabs.map((x) => ({ id: x.id, name: x.name })), activeId: tabsStore.activeId });
+  }
+} catch (e) {}
+// E2E 调试钩子：只在测试实例里暴露历史栈（正常安装版不存在）
+try { if (window.fuBridge && window.fuBridge.e2e) window.__fufumidiNav = navHistory; } catch (e) {}
 
 const wpUrl = ref('');
 const wpEnabled = ref(false);
 const bgVideo = ref(null);
+const wpKind = ref('video');
+const wpFit = ref('cover');
+const wpDim = ref(18);
+const wpBlur = ref(0);
+const isVideoPath = (p) => /\.(mp4|webm|mov)(\?.*)?$/i.test(String(p || ''));
+const wallpaperStyle = computed(() => ({
+  objectFit: wpFit.value === 'contain' ? 'contain' : 'cover',
+  filter: wpBlur.value > 0 ? 'blur(' + wpBlur.value + 'px)' : 'none',
+}));
+const wallpaperScrimStyle = computed(() => ({ opacity: String(Math.max(0, Math.min(60, Number(wpDim.value) || 0)) / 60) }));
 // 动态壁纸无缝循环：原生 loop 在循环切换时有黑屏/卡顿，改为临近结尾提前 seek 到开头偏后位置（跳过首帧解码延迟与黑帧）
 function onBgTime() {
   const v = bgVideo.value;
@@ -83,12 +111,20 @@ async function loadWallpaper() {
     const s = await settingsStore.load();
     wpUrl.value = wpFileUrl(s.custom_wallpaper || '');
     wpEnabled.value = !!(s.wallpaper_enabled && s.custom_wallpaper);
+    wpKind.value = s.wallpaper_kind || (isVideoPath(s.custom_wallpaper) ? 'video' : 'image');
+    wpFit.value = s.wallpaper_fit || 'cover';
+    wpDim.value = Number.isFinite(Number(s.wallpaper_dim)) ? Number(s.wallpaper_dim) : 18;
+    wpBlur.value = Number.isFinite(Number(s.wallpaper_blur)) ? Number(s.wallpaper_blur) : 0;
   } catch (e) {}
 }
 watch(() => settingsStore.settings, () => {
   const s = settingsStore.settings;
   wpUrl.value = wpFileUrl(s.custom_wallpaper || '');
   wpEnabled.value = !!(s.wallpaper_enabled && s.custom_wallpaper);
+    wpKind.value = s.wallpaper_kind || (isVideoPath(s.custom_wallpaper) ? 'video' : 'image');
+    wpFit.value = s.wallpaper_fit || 'cover';
+    wpDim.value = Number.isFinite(Number(s.wallpaper_dim)) ? Number(s.wallpaper_dim) : 18;
+    wpBlur.value = Number.isFinite(Number(s.wallpaper_blur)) ? Number(s.wallpaper_blur) : 0;
   // 播放偏好（跳过空白 / 步长 / 长按倍数）：设置页一改就同步到播放器
   applyPlaybackSettings(s);
   app.applyPlaybackPrefs();
@@ -96,6 +132,41 @@ watch(() => settingsStore.settings, () => {
 watch(() => route.path, (p) => {
   state.view = viewParentOf(viewFromPath(p));
 }, { immediate: true });
+/* P1-14 多标签页：当前曲目变化 → 打开/聚焦同名标签（标签栏只做切换入口，不复制数据） */
+watch(() => state.currentId, (id) => {
+  if (!id) return;
+  const item = (state.songs || []).find((s) => s.id === id);
+  if (item) tabsStore.open(id, item.name || id);
+}, { immediate: true });
+
+/* P1-14 B3：导航历史 + 会话持久化（只记视图 hash；曲目恢复仍走曲库原有逻辑） */
+let sessionTimer = 0;
+function saveSessionNow() {
+  try {
+    writeSession({ hash: route.fullPath || '/home', songId: (state.currentSong && state.currentSong.id) || '' });
+  } catch (e) {}
+}
+watch(() => route.fullPath, (p) => {
+  if (p && !navHistory.state.applying) navHistory.push(p);
+  clearTimeout(sessionTimer);
+  sessionTimer = setTimeout(saveSessionNow, 400);
+}, { immediate: true });
+// 启动后恢复上次视图：仅当本次是从首页启动（没有深链接/文件关联抢入口）且上次不是首页
+function restoreSessionView() {
+  try {
+    const cur = route.fullPath || '/';
+    if (cur && cur !== '/home' && cur !== '/' && cur !== '') return;
+    const s = bootSession;
+    if (!s || s.hash === cur || s.hash === '/home') return;
+    if (!parseDeepLink(s.hash).valid) return;
+    navHistory.state.applying = true;
+    Promise.resolve(router.replace(s.hash)).finally(() => {
+      navHistory.state.applying = false;
+      navHistory.push(String(route.fullPath || s.hash));
+      saveSessionNow();
+    });
+  } catch (e) {}
+}
 const startTickLoop = () => app.startTickLoop();
 const stopTickLoop = () => app.stopTickLoop();
 const restoreSongs = () => app.restoreSongs();
@@ -153,6 +224,9 @@ async function initGlobal() {
     ui_scale: dp.ui_scale || s.ui_scale,
   });
 
+  // 减少动态效果（外观抽屉持久化）：启动即同步
+  try { if (localStorage.getItem('fufumidi_reduce_motion') === '1') document.documentElement.classList.add('reduce-motion'); } catch (e) {}
+
   // 3) 完整性检验（后台静默，由设置面板警告条展示 + 一键修复）
   if (bridge && bridge.checkIntegrity) {
     bridge.checkIntegrity().then(r => {
@@ -162,13 +236,17 @@ async function initGlobal() {
 
   // 4) 新手引导：首次启动展示
   let guideDone = false;
+  let guideUiSeen = false;
   try { guideDone = !!localStorage.getItem('fufumidi_guide_done'); } catch (e) {}
-  if (!guideDone && !s.guide_done) state.ui.guideOpen = true;
+  try { guideUiSeen = !!localStorage.getItem('fufumidi_guide_ui4_seen'); } catch (e) {}
+  // UI 改版后的首次启动也弹一次新版引导；E2E 实例不弹，避免遮挡自动用例。
+  const guideE2E = !!(window.fuBridge && window.fuBridge.e2e);
+  if (!guideE2E && (!guideUiSeen || (!guideDone && !s.guide_done))) state.ui.guideOpen = true;
 
   // 5) 首次启动壁纸询问（仅一次，未设置壁纸时）
   if (!s.wallpaper_prompt_done && !s.custom_wallpaper) {
     setTimeout(() => {
-      if (!settingsStore.settings.custom_wallpaper && !state.ui.wallpaperOpen) wallpaperPromptOpen.value = true;
+      if (!settingsStore.settings.custom_wallpaper && !state.ui.wallpaperOpen && !state.ui.guideOpen) wallpaperPromptOpen.value = true;
     }, 1200);
   }
 
@@ -460,6 +538,22 @@ function onBeforeUnload() {
 }
 
 onMounted(() => setupGlobalHotkeys());
+
+/* E2E 测试钩子（scripts/e2e）：只在 FUFUMIDI_E2E=1 的实例里注册，正常安装版不存在。
+   用途：让交互回放能在**隔离数据根**里造一首最小 MIDI，从而进入编辑页/跑手势脚本，
+   不依赖用户曲库。接口刻意做小：hasSong / importMidi / songCount。 */
+onMounted(() => {
+  try { installSfxClicks(); } catch (e) {}
+  try {
+    if (!window.fuBridge || !window.fuBridge.e2e) return;
+    window.__fufumidiE2E = {
+      hasSong: () => !!(app.currentSong && app.currentSong.song),
+      song: () => (app.currentSong && app.currentSong.song) || null,
+      songCount: () => (Array.isArray(app.songs) ? app.songs.length : 0),
+      importMidi: (name, bytes) => app.importFiles([{ name: String(name || 'e2e.mid'), bytes: new Uint8Array(bytes) }]),
+    };
+  } catch (e) { /* 测试钩子失败不影响应用 */ }
+});
 onBeforeUnmount(() => { if (_hotkeyOff) { try { _hotkeyOff(); } catch (e) {} _hotkeyOff = null; } });
 
 /* ---------------- GPU 安装常驻通知条 ---------------- */
@@ -566,7 +660,13 @@ onMounted(() => {
   // settings 尽早加载（同步 active_soundfont 引用）：restoreSongs→selectSong→ensureAudio
   // 会读该引用选择音色库，曾因晚于音频初始化导致重启后回退内置音色（另有 localStorage 兜底）
   loadWallpaper();
-  restoreSongs();
+  Promise.resolve(restoreSongs()).finally(() => {
+    try {
+      tabsStore.hydrate((state.songs || []).map((s) => s.id));
+      if (state.currentId) tabsStore.open(state.currentId, (state.songs.find((s) => s.id === state.currentId) || {}).name || state.currentId);
+    } catch (e) {}
+  });
+  setTimeout(restoreSessionView, 350);   // 等首屏路由/曲库恢复稳定后再套用会话
   playlistStore.hydrateFromDb();
   initGlobal();
   if (bridge && bridge.onGpuProgress) offGpuProg = bridge.onGpuProgress(onGpuProgressGlobal);
@@ -633,8 +733,12 @@ _endHold();
 </script>
 
 <template>
-  <video v-if="wpEnabled && wpUrl" :key="wpUrl" ref="bgVideo" class="app-wallpaper" :src="wpUrl" autoplay muted playsinline preload="auto" @timeupdate="onBgTime"></video>
+  <template v-if="wpEnabled && wpUrl">
+    <img v-if="wpKind === 'image'" :key="wpUrl" class="app-wallpaper" :src="wpUrl" alt="" :style="wallpaperStyle" />
+    <video v-else :key="wpUrl" ref="bgVideo" class="app-wallpaper" :src="wpUrl" autoplay muted playsinline preload="auto" :style="wallpaperStyle" @timeupdate="onBgTime"></video>
+  </template>
   <div class="app-shell" :style="{ '--sidebar-w': state.sidebarWidth + 'px' }" :class="{ 'side-collapsed': !state.sidebarOpen, 'no-player': !state.playerbarOpen, 'wallpaper-on': wpEnabled && wpUrl, resizing: state.sidebarResizing, immersive: state.ui.immersive }">
+    <PrimaryRail />
     <SideBar />
     <TopBar />
     <main class="app-main">
@@ -742,11 +846,15 @@ _endHold();
       <CommandPalette v-if="state.ui.paletteOpen" />
     </Transition>
     <Transition name="ov">
-      <GuideOverlay v-if="state.ui.guideOpen" />
+      <AppearancePanel v-if="state.ui.appearanceOpen" />
+    <GuideOverlay v-if="state.ui.guideOpen" />
     </Transition>
     <Transition name="ov">
       <ChangeLogOverlay v-if="state.ui.changelogOpen" />
     </Transition>
+    <!-- C2：全局长任务中心（任何页面都能看进度/取消）；必须是 Transition 的兄弟节点，
+         放进 Transition 里会被当成第二个子节点（切换时被一起移除）。 -->
+    <TaskCenter />
   </div>
 
   <!-- 全局 Web 弹窗：统一替代 window.confirm / alert / prompt -->

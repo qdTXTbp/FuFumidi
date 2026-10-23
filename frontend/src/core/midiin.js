@@ -8,6 +8,13 @@ let access = null;
 let activeInput = null;
 let _onNoteOn = null;
 let _onNoteOff = null;
+let _onControl = null;   // CC（P0-3 录音：延音踏板等）
+let _onRaw = null;       // 原始短消息（校准/诊断用）
+
+/** 统一时间源：录音用 performance.now()，保证与播放时钟同一单调时基 */
+function nowMs() {
+  try { return (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now(); } catch (e) { return Date.now(); }
+}
 
 /** 当前选中的输入设备 id（持久化由调用方做，这里只管会话内的切换） */
 let chosenId = '';
@@ -32,6 +39,16 @@ export function parseNoteMessage(data) {
   return null;
 }
 
+/**
+ * 解析 Control Change（0xB0）：录音时需要延音踏板等。
+ * @returns {{cc:number, val:number, ch:number}|null}
+ */
+export function parseControlMessage(data) {
+  if (!data || data.length < 3) return null;
+  if ((data[0] & 0xf0) !== 0xb0) return null;
+  return { cc: data[1] & 0x7f, val: data[2] & 0x7f, ch: data[0] & 0x0f };
+}
+
 /** 初始化（请求权限）并枚举输入设备。失败返回空数组（没键盘是常态，不算错）。 */
 export async function listMidiInputs() {
   if (!navigator.requestMIDIAccess) return [];
@@ -45,14 +62,20 @@ export async function listMidiInputs() {
 
 /**
  * 选择输入设备并开始监听（重复调用 = 切换设备；传空 id = 停止监听）。
+ * ★ P0-3：回调多带一个 atMs（performance.now() 时间戳），录音器用它换算 tick；
+ *   旧调用方只取前两个参数，不受影响。
  * @param {string} id
- * @param {{onNoteOn?: (note: number, vel: number) => void,
- *          onNoteOff?: (note: number) => void}} handlers
+ * @param {{onNoteOn?: (note: number, vel: number, atMs: number) => void,
+ *          onNoteOff?: (note: number, atMs: number) => void,
+ *          onControl?: (cc: number, val: number, atMs: number) => void,
+ *          onRaw?: (data: number[], atMs: number) => void}} handlers
  */
 export async function selectMidiInput(id, handlers) {
   chosenId = id || '';
   _onNoteOn = (handlers && handlers.onNoteOn) || null;
   _onNoteOff = (handlers && handlers.onNoteOff) || null;
+  _onControl = (handlers && handlers.onControl) || null;
+  _onRaw = (handlers && handlers.onRaw) || null;
   if (!access) {
     try { if (navigator.requestMIDIAccess) access = await navigator.requestMIDIAccess(); } catch (e) { return false; }
   }
@@ -67,9 +90,14 @@ export async function selectMidiInput(id, handlers) {
   activeInput = input;
   input.onmidimessage = (msg) => {
     const d = (msg && msg.data) || null;
+    if (!d) return;
+    const atMs = nowMs();
+    if (_onRaw) { try { _onRaw(Array.from(d), atMs); } catch (e) {} }
     const ev = parseNoteMessage(d);
-    if (ev === 'on') { if (_onNoteOn) _onNoteOn(d[1] & 0x7f, d[2] & 0x7f); }
-    else if (ev === 'off') { if (_onNoteOff) _onNoteOff(d[1] & 0x7f); }
+    if (ev === 'on') { if (_onNoteOn) _onNoteOn(d[1] & 0x7f, d[2] & 0x7f, atMs); return; }
+    if (ev === 'off') { if (_onNoteOff) _onNoteOff(d[1] & 0x7f, atMs); return; }
+    const cc = parseControlMessage(d);
+    if (cc && _onControl) _onControl(cc.cc, cc.val, atMs);
   };
   return true;
 }

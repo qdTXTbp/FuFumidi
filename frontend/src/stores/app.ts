@@ -19,11 +19,11 @@ let audioUrl = '';
 /* hint = 悬停解释。用户复核里点名「调教 / 声部轨 / 曲库 / 对齐偏移」这类圈内术语没有解释 ——
    导航是最需要解释的一层（新用户第一眼看到的就是它）。 */
 export const VIEWS = [
-  { id: 'home', label: '首页', ic: 'home', hint: '总览与快捷入口' },
-  { id: 'music', label: '音乐', ic: 'music', hint: '曲库（导入的 MIDI 资料库）与播放' },
-  { id: 'views', label: '视图', ic: 'viz', hint: '同一份音乐的其它看法：乐谱 / 分析 / 可视化' },
-  { id: 'transcode', label: '转译', ic: 'convert', hint: '把别的东西变成 MIDI：转录 / 转换 / 变谱（识谱）' },
-  { id: 'resources', label: '资源中心', ic: 'box', hint: '模型、音色、识谱引擎、依赖与诊断' },
+  { id: 'home', label: '首页', ic: 'home', hint: '继续上次的工作、最近项目与系统状态' },
+  { id: 'music', label: '音乐', ic: 'music', hint: '曲库、歌单、播放、可视化与乐谱' },
+  { id: 'views', label: '工作台', ic: 'viz', hint: '当前曲目的编辑 / 歌词 / 分析 / 编排' },
+  { id: 'transcode', label: '创作', ic: 'convert', hint: '转录 / 转换 / 变谱 / 翻唱 / 调教' },
+  { id: 'resources', label: '资源', ic: 'box', hint: '模型、音色、声库、插件、识谱引擎与诊断' },
   // 调教：UTAU 与 DiffSinger 是同一条产品线的两种合成引擎（引擎是**轨道属性**），
   // 声库（做 / 装 / 管）与编辑器（选歌手 / 画音符 / 渲染）也是同一条工作流的两半，
   // 所以合成**一个**入口；页内在「编辑器 / 声库」两个页签之间切换（?tab=banks）。
@@ -38,8 +38,8 @@ export const VIEWS = [
 
 // 旧子视图 ID → 所属分组父视图，保留内部跳转（如“同步到乐谱”“打开播放”）
 export const OLD_VIEW_TO_PARENT: Record<string, string> = {
-  play: 'music', lyrics: 'music', edit: 'music',
-  viz: 'views', analyze: 'views', score: 'views',
+  play: 'music', viz: 'music', score: 'music',
+  edit: 'views', lyrics: 'views', analyze: 'views', arrange: 'views',
   transcribe: 'transcode', convert: 'transcode',
   // 合并前的三个独立视图 → 统一落到「调教」。
   // 老跳转（setView('utau'|'diffsinger'|'banks')）继续有效：调教页按 ?tab= 落到
@@ -1082,45 +1082,28 @@ export const useAppStore = defineStore('app', {
         localStorage.setItem('fufumidi_tags', JSON.stringify(m));
       } catch (e) {}
     },
-    /** 重命名曲目（用户：「侧边栏对歌曲的编辑信息功能要可以重命名」+「重命名同步动磁盘文件名」）。
-     *  ★ 2026-10-17 修：原来读的是 `s.path`，而曲库的路径一律存在 **`s.meta.path`**
-     *    （DB 记录里是扁平字段 path，restoreSongs() 把它搬进 meta）—— 判空失败后整段被跳过，
-     *    于是只改了库里的名字、磁盘文件名纹丝不动（用户实测就是这么报的）。
-     *    现在：先改文件，改不动就整个放弃（库里改了、磁盘还是旧名是最糟的中间态），
-     *    再把新路径用**扁平记录**写回库（嵌套 meta 直接写入会让 songsAll() 读回 path 为空）。 */
+    /** 重命名曲目（用户：「侧边栏对歌曲的编辑信息功能要可以重命名」）。
+     *  只改**曲库里的名字**并写回库，不动磁盘上的文件 —— 改名不改文件是刻意的：
+     *  文件名一改，用户的播放列表/云同步/历史里引用的路径全会失效。 */
     async renameSong(id: string, name: string) {
       const n = String(name || '').trim();
       const s: any = this.songs.find((x: any) => x.id === id);
       if (!s || !n || n === s.name) return false;
       const b: any = (typeof window !== 'undefined') ? (window as any).fuBridge : null;
-      const oldPath = String((s.meta && s.meta.path) || '');
-      if (b && typeof b.renameMidi === 'function' && oldPath) {
+      /* ★ 用户要求「重命名同步动磁盘文件名」：**先改文件**，改不动就整个放弃 ——
+         库里改了、磁盘还是旧名，是最糟的中间态（导出、分享、"在文件夹中显示"全对不上）。 */
+      if (b && typeof b.renameMidi === 'function' && s.path) {
+        const oldPath = String(s.path);
         let r: any = null;
         try { r = await b.renameMidi(oldPath, n); } catch (e: any) { r = { ok: false, error: String((e && e.message) || e) }; }
         if (!r || !r.ok) { this.toast(t('重命名失败：') + String((r && r.error) || ''), 'error'); return false; }
-        const np = String((r && r.path) || oldPath);
-        if (!s.meta) s.meta = {};
-        s.meta.path = np;
-        if (s.meta.fp === oldPath) s.meta.fp = np;   // 指纹里也存了路径，一起换
+        if (r.path) {
+          s.path = r.path;
+          if (s.meta && s.meta.fp === oldPath) s.meta.fp = r.path;   // 指纹里也存了路径，一起换
+        }
       }
       s.name = n;
-      if (b && typeof b.dbSongsPut === 'function') {
-        try {
-          let bytes = toBytes(s.__bytes);
-          if (!bytes) { try { const rec = await idbGet(STORE_SONGS, s.id); bytes = toBytes(rec && rec.bytes); } catch (e) {} }
-          if (!bytes && s.meta && s.meta.path) { try { bytes = toBytes(await b.readBinary(s.meta.path)); } catch (e) {} }
-          const rec: any = {
-            id: s.id, name: s.name,
-            size: (s.meta && s.meta.size) || (bytes ? bytes.byteLength : 0),
-            time: (s.meta && s.meta.time) || 0,
-            dur: (s.meta && s.meta.dur) || 0,
-            fp: (s.meta && s.meta.fp) || '',
-            path: (s.meta && s.meta.path) || '',
-          };
-          if (bytes) rec.bytes = Array.from(bytes as any);
-          await b.dbSongsPut(rec);
-        } catch (e) {}
-      }
+      if (b && typeof b.dbSongsPut === 'function') { try { await b.dbSongsPut(s); } catch (e) {} }
       return true;
     },
     async editTags(id: string) {

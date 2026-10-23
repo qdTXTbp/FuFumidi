@@ -132,14 +132,14 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
       // 实测：517 个预设 / 4164 采样 / 保留 4306 条 pmod+imod 调制器；
       //   bank0 GM 128 个全来自 ToH，bank128 鼓组也是 ToH，其余 bank 是 XG/GS 扩展；
       //   480.5MB < 应用 512MB 单文件读取上限（libfluidsynth 实测加载 591ms，129/129 音色有声）。
-      // ⚠ 许可：ToH 原库条款禁止未经书面授权再分发 —— 本条目只给「已获 ToH 授权」的用户下载，
-      //   若作者/法务要求下架，应立刻删除 soundfonts-v1 Release 里的 allvoice.sf2 资产。
+      // 许可：ToH 原库条款默认禁止再分发；本项目**已拿到作者书面授权**（用户 2026-10-18 确认），
+      //   因此 allvoice.sf2 可公开分发（GitHub / CNB 两个 Release 都保留）；授权凭证随项目档案保管。
       id: 'allvoice',
       name: 'Allvoice (ToH 基底 · 最全)',
       version: '2.0',
       desc: '以 Timbres of Heaven (XGM) 4.00 为基底、再合并多个开源音色库而成的大综合音色库：517 个预设 / 4164 个采样（480MB），完整保留 ToH 的调制器与 GM/XG 扩展音色，管弦乐与合奏细节最完整。',
       size: 503881454,
-      license: 'ToH 派生 · 仅供已获 Timbres of Heaven 授权的用户使用（原库条款禁止再分发）',
+      license: 'ToH 派生 · 已获作者书面授权，可再分发（授权凭证见项目档案）',
       minSize: 500000000,
       maxSize: 520000000,
       fileName: 'allvoice.sf2',
