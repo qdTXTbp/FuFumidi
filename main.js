@@ -138,7 +138,15 @@ if (!gotLock) {
     registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, readSettings });
     registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEngineInline, spawnEngine });
     registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net, bundledPython });
-    registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngine, engineWorkerConvert, cancelEngineJob: (...a) => cancelJob(...a), pluginHost, readSettings, resolveSeparateModel: (id) => (ModelsService ? ModelsService.resolveSeparateModel(id) : null),
+  // C2 TaskCenter：全局长任务中心（进度/取消/离开页面不丢）。先建中心，再把句柄分给各业务模块。
+  const taskCenter = getTaskCenter({
+    emit: (ev) => {
+      for (const w of BrowserWindow.getAllWindows()) {
+        try { w.webContents.send('task:update', ev); } catch (e) {}
+      }
+    },
+  });
+    registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngine, engineWorkerConvert, cancelEngineJob: (...a) => cancelJob(...a), pluginHost, readSettings, center: taskCenter, resolveSeparateModel: (id) => (ModelsService ? ModelsService.resolveSeparateModel(id) : null),
     // 分离前自愈：MSST 模型的配置是**下载时**从上游备齐的，老安装/半装状态在这里补一次
     ensureSepConfig: (id) => (ModelsService && ModelsService.ensureSepConfig ? ModelsService.ensureSepConfig(id) : null) });
     registerVideoIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEngineInline, parsePyJson });
@@ -171,14 +179,6 @@ if (!gotLock) {
     registerSettingsIpc({ ipcMain, readSettings, writeSettings, db: DbService });
     // 歌声工程文件（.fufumidi 自包含包）：保存/打开都在这里，音频字节不过 IPC
     registerProjectIpc({ ipcMain, dialog, path, fs, spawnEngine });
-  // C2 TaskCenter：全局长任务中心（进度/取消/离开页面不丢）。先建中心，再把句柄分给各业务模块。
-  const taskCenter = getTaskCenter({
-    emit: (ev) => {
-      for (const w of BrowserWindow.getAllWindows()) {
-        try { w.webContents.send('task:update', ev); } catch (e) {}
-      }
-    },
-  });
   registerTaskIpc({ ipcMain, center: taskCenter, e2e: process.env.FUFUMIDI_E2E === '1' });
   // P1-9 存储治理：分类占用 + 安全清理（曲库永远 protected；资产需显式 includeAssets）
   registerStorageIpc({

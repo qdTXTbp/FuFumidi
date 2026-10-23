@@ -566,7 +566,7 @@ onBeforeUnmount(() => {
                它本来就是视效的一部分（轨道色 / 按音高推导的两套 HSL），现在住进视效面板。 -->
           <!-- 背景：主题 / 纯色 / 图片 / 透明（叠加层）。SeeMusic 那类软件把"背景图 + 模糊"
                当成主要观感开关，这里补上；透明档配合导出即可当 OBS 叠加层。 -->
-          <button class="chip-btn" :class="{ active: bgMore }" :title="t('音符瀑布背景（主题/纯色/图片/动态壁纸/透明）')" @click="bgMore = !bgMore">
+          <button v-if="false" class="chip-btn" :class="{ active: bgMore }" :title="t('音符瀑布背景（主题/纯色/图片/动态壁纸/透明）')" @click="bgMore = !bgMore">
             <Icon name="eye" :size="12" />{{ t('背景') }}
           </button>
           <!-- 视效：3D 键盘 / 粒子光效 / 落键光柱 / 击键光带 / 音符质感。
@@ -586,7 +586,7 @@ onBeforeUnmount(() => {
         </div>
         <!-- ★ 沉浸模式不显示这条：沉浸态的 .vc-head 是绝对定位浮层，设置条留在文档流里会与它重叠，
              而且浅色控件压在满屏画面上很突兀。退出沉浸后设置条原样回来。 -->
-        <div v-if="bgMore && !immersive" class="viz-bg-bar">
+        <div v-if="false" class="viz-bg-bar">
           <span class="muted small">{{ t('音符瀑布背景') }}</span>
           <button class="chip-btn" :class="{ active: bg.mode === 'theme' }" @click="setBgMode('theme')">{{ t('主题') }}</button>
           <button class="chip-btn" :class="{ active: bg.mode === 'solid' }" @click="setBgMode('solid')">{{ t('纯色') }}</button>
