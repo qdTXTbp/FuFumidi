@@ -115,9 +115,49 @@ async function loadOcrLangs() {
 /** 跳到资源中心的**资源管理**页签 —— 识谱引擎 / OCR 语言包 / 超分辨率组件都在那里。
  *  ★ 不能只 setView('resources')：那样同步出来的 hash 是 #/resources（不带 tab），
  *    ViewResources 会默认落在「模型管理」，用户在那儿根本看不到识谱引擎（实测反馈）。 */
-function openOcrResources() {
-  app.setView('resources');
-  app.syncHash('resources');
+/** 在变谱页直接下载组件，不再要求用户跳到资源中心。 */
+async function installOne(id: string) {
+  const b = bridge();
+  if (!b || !b.omrEngine) throw new Error(t('当前环境不支持组件安装'));
+  if (id === 'audiveris') return await b.omrEngine.install();
+  if (id === 'homr') return await b.omrEngine.homrInstall();
+  if (id === 'sr') return await b.omrEngine.srInstall();
+  if (id === 'ocr') return await b.omrEngine.langInstall(['eng', 'chi_sim']);
+  throw new Error('unknown component');
+}
+
+async function installComponent(id: string) {
+  if (omrBusy.value) return;
+  omrBusy.value = true; omrText.value = t('准备下载…');
+  try {
+    const r = await installOne(id);
+    const ok = !!(r && r.ok !== false && (r.installed || r.ready || r.added));
+    if (ok) { app.toast(t('组件已安装'), 'ok'); await refreshOmr(); await loadOcrLangs(); }
+    else app.toast(t('组件下载失败：') + String((r && r.error) || ''), 'warn');
+  } catch (e: any) {
+    app.toast(t('组件下载失败：') + String((e && e.message) || e), 'warn');
+  } finally { omrBusy.value = false; omrText.value = ''; }
+}
+
+async function installAllMissing() {
+  if (omrBusy.value || !omrMissing.value) return;
+  omrBusy.value = true;
+  try {
+    for (const c of omrComponents.value.filter((x: any) => !x.on)) {
+      omrText.value = t('正在下载：') + c.name;
+      await installOne(c.id);
+      await refreshOmr();
+    }
+    await loadOcrLangs();
+    app.toast(t('缺失组件已全部安装'), 'ok');
+  } catch (e: any) {
+    app.toast(t('组件下载失败：') + String((e && e.message) || e), 'warn');
+  } finally { omrBusy.value = false; omrText.value = ''; }
+}
+
+async function refreshOmrComponents() {
+  await refreshOmr();
+  await loadOcrLangs();
 }
 
 /** 识别模型 = 后端（Audiveris / 内置）+ 内置后端的模式。
@@ -882,13 +922,15 @@ onBeforeUnmount(() => { if (offProgress) offProgress(); if (offOmr) offOmr(); fo
         </div>
         <div v-for="c in omrComponents" :key="c.id" class="sc-cmp">
           <Icon :name="c.on ? 'check' : 'plus'" :size="11" :class="c.on ? 'sc-cmp-ok' : 'sc-cmp-no'" />
-          <span class="sc-cmp-nm">{{ c.name }}</span>
-          <span class="sc-cmp-st" :class="{ off: !c.on }" :title="c.note">{{ c.on ? t('已安装') : c.size }}</span>
+          <span class="sc-cmp-nm">{{ c.name }}<small class="sc-cmp-size">{{ c.size }}</small></span>
+          <button v-if="!c.on" class="btn sm" :disabled="omrBusy" @click="installComponent(c.id)"><Icon name="download" :size="11" /> {{ t('下载') }}</button>
         </div>
-        <div class="sc-side-hint">{{ t('这四样都要在资源中心单独安装（不随安装包分发，装在数据根的 omr 目录）。没装也能用内置识谱，只是精度低一档、读不出乐器名与速度记号。') }}</div>
-        <button class="btn sm" :class="omrMissing ? 'primary' : ''" @click="openOcrResources">
-          <Icon name="download" :size="12" /> {{ omrMissing ? t('去资源中心安装') : t('打开资源中心') }}
-        </button>
+        <div v-if="omrText" class="sc-cmp-progress">{{ omrText }}</div>
+        <div class="sc-cmp-actions">
+          <button v-if="omrMissing" class="btn sm primary" :disabled="omrBusy" @click="installAllMissing">
+            <Icon name="download" :size="12" /> {{ omrBusy ? t('安装中…') : t('一键安装缺失组件') }}
+          </button>
+        </div>
       </div>
 
 
@@ -1059,4 +1101,8 @@ onBeforeUnmount(() => { if (offProgress) offProgress(); if (offOmr) offOmr(); fo
 .lg-acc::before { background: var(--t-ok); }
 .lg-bar::before { background: var(--data-7); }
 .sc-actions { display: flex; gap: var(--sp-3); flex-wrap: wrap; }
+.sc-cmp-size { margin-left: 6px; color: var(--stone); font-size: var(--fs-xs); font-weight: 400; }
+.sc-cmp .btn { margin-left: auto; flex: none; padding: 2px 8px; min-height: 22px; }
+.sc-cmp-progress { margin: 6px 0 2px; color: var(--t-info); font-size: var(--fs-xs); }
+.sc-cmp-actions { display: flex; gap: var(--sp-2); margin-top: 8px; }
 </style>
