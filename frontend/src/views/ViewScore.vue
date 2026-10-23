@@ -462,7 +462,14 @@ async function rasterizeSvg(svg, scale, tileH) {
   const w = svg.clientWidth || svg.getBoundingClientRect().width || parseFloat(svg.getAttribute('width')) || 986;
   const h = svg.clientHeight || svg.getBoundingClientRect().height || parseFloat(svg.getAttribute('height')) || 600;
   if (!w || !h) return [];
-  const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(svg)], { type: 'image/svg+xml' }));
+  // 导出必须是白底黑谱：应用主题是深色，直接把 SVG 画到 canvas 上会得到黑谱 + 深底。
+  const clone = svg.cloneNode(true);
+  clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  clone.setAttribute('style', 'color:#000;background:#fff');
+  const style = document.createElementNS('http://www.w3.org/2000/svg', 'style');
+  style.textContent = '*{fill:#000 !important;stroke:#000 !important;background:transparent !important;}';
+  clone.insertBefore(style, clone.firstChild);
+  const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(clone)], { type: 'image/svg+xml' }));
   const img = new Image();
   await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
   URL.revokeObjectURL(url);
@@ -475,7 +482,7 @@ async function rasterizeSvg(svg, scale, tileH) {
     cv.height = Math.max(1, Math.round(th * scale));
     const g = cv.getContext('2d');
     g.setTransform(scale, 0, 0, scale, 0, 0);
-    g.fillStyle = cssVar('--canvas', '#ffffff'); g.fillRect(0, 0, w, th);
+    g.fillStyle = '#ffffff'; g.fillRect(0, 0, w, th);
     g.drawImage(img, 0, off, w, th, 0, 0, w, th);
     out.push(cv.toDataURL('image/png'));
     off += th;

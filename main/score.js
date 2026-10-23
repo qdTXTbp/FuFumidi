@@ -57,14 +57,34 @@ function registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEn
         filters: [{ name: 'PDF', extensions: ['pdf'] }],
       });
       if (r.canceled || !r.filePath) return { ok: false, canceled: true };
-      const data = await win.webContents.printToPDF({
-        printBackground: true,
-        pageSize: 'A4',
-        landscape: false,
-        margins: { marginType: 'default' },
-      });
-      await fs.promises.writeFile(r.filePath, data);
-      return { ok: true, path: r.filePath };
+      // 只在打印时把页面裁成乐谱本身：白底、黑谱、隐藏全部应用 UI，避免把深色工作区整页打进 PDF。
+      const printCss = `@media print {
+        @page { size: A4 portrait; margin: 12mm; }
+        html, body { background: #fff !important; }
+        body * { visibility: hidden !important; }
+        .score-view, .score-view * { visibility: visible !important; }
+        .score-view { position: absolute !important; inset: 0 auto auto 0 !important; width: 100% !important; height: auto !important; padding: 0 !important; gap: 0 !important; background: #fff !important; }
+        .score-head, .score-toolbar, .score-subbar, .score-legend { display: none !important; }
+        .score-scroll { position: static !important; overflow: visible !important; height: auto !important; max-height: none !important; padding: 0 !important; border: 0 !important; background: #fff !important; }
+        #abcScore { color: #000 !important; background: #fff !important; overflow: visible !important; }
+        #abcScore svg { display: block !important; width: 100% !important; height: auto !important; max-width: 100% !important; background: #fff !important; }
+        #abcScore svg * { fill: #000 !important; stroke: #000 !important; }
+      }`;
+      let cssKey = '';
+      try { cssKey = await win.webContents.insertCSS(printCss, { cssOrigin: 'user' }); } catch (e) {}
+      try {
+        const data = await win.webContents.printToPDF({
+          printBackground: true,
+          pageSize: 'A4',
+          landscape: false,
+          margins: { marginType: 'none' },
+          preferCSSPageSize: true,
+        });
+        await fs.promises.writeFile(r.filePath, data);
+        return { ok: true, path: r.filePath };
+      } finally {
+        if (cssKey) { try { await win.webContents.removeInsertedCSS(cssKey); } catch (e) {} }
+      }
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
 

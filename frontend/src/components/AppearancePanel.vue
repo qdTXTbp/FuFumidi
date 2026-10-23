@@ -5,6 +5,7 @@ import { computed, onMounted, ref } from 'vue';
 import Icon from './Icon.vue';
 import { useAppStore } from '../stores/app';
 import { useSettingsStore } from '../stores/settings';
+import { useVizBgStore } from '../stores/vizbg';
 import { t } from '../core/i18n.js';
 import { THEMES, themeById, saveTheme, loadTheme, loadMode, setMode } from '../core/theme.js';
 import WallpaperLibrary from './WallpaperLibrary.vue';
@@ -14,6 +15,8 @@ import { setLang, getLang } from '../core/i18n.js';
 const app = useAppStore();
 const state = app;
 const settingsStore = useSettingsStore();
+const vizBg = useVizBgStore();
+const vbg = vizBg.bg;
 const bridge = window.fuBridge;
 
 const mode = ref(loadMode());
@@ -56,6 +59,11 @@ async function saveWp(patch) {
 }
 function toggleWallpaper() { saveWp({ wallpaper_enabled: !cfg.value.wallpaper_enabled }); }
 function setFit(v) { saveWp({ wallpaper_fit: v }); }
+function setVizMode(m) { vizBg.setMode(m); }
+function pickVizImage() { void vizBg.pickImage(); }
+function openVizWallpaper() { state.ui.wallpaperTarget = 'viz'; state.ui.wallpaperOpen = true; }
+function clearVizWall() { vizBg.clearWall(); }
+function saveVizBg() { vizBg.save(); }
 function openThemes() { state.ui.themesOpen = true; }
 function openSound() { state.ui.appearanceOpen = false; state.ui.settingsTab = 'sound'; state.ui.settingsOpen = true; }
 async function pickImage() {
@@ -74,6 +82,7 @@ function toggleMotion() {
 }
 onMounted(async () => {
   try { await settingsStore.load(); } catch (e) {}
+  try { await vizBg.init(); vizBg.setWallActive(vbg.mode === 'wallpaper'); } catch (e) {}
   try { reduceMotion.value = localStorage.getItem('fufumidi_reduce_motion') === '1'; } catch (e) {}
   document.documentElement.classList.toggle('reduce-motion', reduceMotion.value);
 });
@@ -123,6 +132,29 @@ onMounted(async () => {
           <div class="ap-row"><span>{{ t('适配方式') }}</span><div class="ap-seg"><button :class="{ on: fit === 'cover' }" @click="setFit('cover')">{{ t('填充') }}</button><button :class="{ on: fit === 'contain' }" @click="setFit('contain')">{{ t('完整显示') }}</button></div></div>
           <div class="ap-slider"><label>{{ t('模糊') }}<b>{{ blur }} px</b></label><input type="range" min="0" max="24" step="1" :value="blur" @input="blur = Number($event.target.value)" /></div>
           <p class="ap-note">{{ t('普通图片与动态壁纸共用同一背景层；切换不会留下两个图层。') }}</p>
+        </section>
+
+        <section class="ap-sec">
+          <div class="ap-sec-head"><span>{{ t('音符瀑布背景') }}</span><span class="ap-state" :class="{ on: vbg.mode !== 'theme' }">{{ vbg.mode === 'wallpaper' ? (vizBg.wallName || t('动态壁纸')) : vbg.mode === 'image' ? t('自定义图片') : vbg.mode === 'solid' ? t('纯色') : vbg.mode === 'transparent' ? t('透明') : t('主题') }}</span></div>
+          <div class="ap-modes ap-viz-modes">
+            <button :class="{ on: vbg.mode === 'theme' }" @click="setVizMode('theme')">{{ t('主题') }}</button>
+            <button :class="{ on: vbg.mode === 'solid' }" @click="setVizMode('solid')">{{ t('纯色') }}</button>
+            <button :class="{ on: vbg.mode === 'image' }" @click="setVizMode('image')">{{ t('图片') }}</button>
+            <button :class="{ on: vbg.mode === 'wallpaper' }" @click="setVizMode('wallpaper')">{{ t('动态壁纸') }}</button>
+            <button :class="{ on: vbg.mode === 'transparent' }" @click="setVizMode('transparent')">{{ t('透明') }}</button>
+          </div>
+          <div v-if="vbg.mode === 'solid'" class="ap-row"><span>{{ t('背景色') }}</span><input type="color" class="ap-color-input" :value="vbg.color" @input="vbg.color = $event.target.value; saveVizBg()" /></div>
+          <div class="ap-wp-actions">
+            <button class="btn sm" @click="pickVizImage"><Icon name="folder" :size="13" />{{ t('选择图片') }}</button>
+            <button class="btn sm ghost" @click="openVizWallpaper"><Icon name="wallpaper" :size="13" />{{ t('从壁纸库选择') }}</button>
+            <button v-if="vbg.wallPath" class="btn sm ghost" @click="clearVizWall">{{ t('清除') }}</button>
+          </div>
+          <p v-if="vbg.mode === 'wallpaper'" class="ap-note">{{ vbg.wallPath ? (vizBg.wallName || vbg.wallPath) : t('还没有选择动态壁纸') }} · {{ t('只影响音符瀑布，导出视频使用同一份设置。') }}</p>
+          <template v-if="vbg.mode === 'image' || vbg.mode === 'theme' || vbg.mode === 'wallpaper'">
+            <div class="ap-slider"><label>{{ t('模糊') }}<b>{{ vbg.blur }} px</b></label><input type="range" min="0" max="40" step="1" :value="vbg.blur" @input="vbg.blur = Number($event.target.value); saveVizBg()" /></div>
+            <div class="ap-slider"><label>{{ t('暗化') }}<b>{{ Math.round(vbg.dim * 100) }}%</b></label><input type="range" min="0" max="80" step="5" :value="Math.round(vbg.dim * 100)" @input="vbg.dim = Number($event.target.value) / 100; saveVizBg()" /></div>
+          </template>
+          <p class="ap-note">{{ t('这里只控制音符瀑布的画面背景；整窗壁纸仍由上方「壁纸」控制。') }}</p>
         </section>
 
         <section class="ap-sec">
@@ -199,4 +231,6 @@ onMounted(async () => {
 .ap-select { border: 1px solid var(--hairline); border-radius: var(--r-sm); background: var(--surface-soft); color: var(--text); padding: var(--sp-1) var(--sp-2); font-size: var(--fs-sm); }
 .ap-library { margin-top: var(--sp-3); border-top: 1px solid var(--hairline); padding-top: var(--sp-3); }
 .ap-drawer { width: min(580px, 94vw) !important; }
+.ap-viz-modes { grid-template-columns: repeat(3, 1fr); }
+.ap-color-input { width: 44px; height: 26px; border: 1px solid var(--hairline); border-radius: var(--r-sm); background: transparent; padding: 1px; }
 </style>

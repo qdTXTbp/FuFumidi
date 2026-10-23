@@ -5,7 +5,7 @@
 const SepCommon = require('./separate-common');
 const Paths = require('./paths');
 
-function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngine, engineWorkerConvert, cancelEngineJob, pluginHost, readSettings, resolveSeparateModel, ensureSepConfig }) {
+function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngine, engineWorkerConvert, cancelEngineJob, pluginHost, readSettings, resolveSeparateModel, ensureSepConfig, center }) {
   const convertChildren = new Map();  // jobId -> 子进程句柄（转录/修正取消用）
 
   // 转录
@@ -38,6 +38,13 @@ function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngi
       let n = 1;
       while (fs.existsSync(cfg.out)) { cfg.out = path.join(dir, base + '_' + n + '.mid'); n++; }
     }
+    const baseName = String(cfg.name || cfg.audio || 'audio').replace(/^.*[\\/]/, '').replace(/\.[^.]+$/, '') || '音频';
+    const task = center ? center.register({
+      kind: 'transcribe',
+      title: '转录：' + baseName,
+      cancelable: true,
+      onCancel: () => { try { if (cancelEngineJob) cancelEngineJob(cfg.id); } catch (e) {} },
+    }) : null;
     const runSpawn = () => new Promise((resolve, reject) => {
       const args = ['convert', cfg.audio, '-o', cfg.out];
       if (cfg.mode) args.push('--mode', cfg.mode);
@@ -79,9 +86,10 @@ function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngi
               pluginHost.emit('transcribe-done', { ok: !!r.result.ok, out: r.result.out, note_count: r.result.note_count, mode: cfg.mode, perf: cfg.perf });
               return resolve(r.result);
             }
+            if (!r.result) { try { task && task.fail((r.err || r.out || '转录失败').slice(-400)); } catch (e) {} }
             resolve({ ok: code === 0, code, out: cfg.out, error: (r.err || r.out || '').slice(-400) });
           },
-          onError: (e) => { convertChildren.delete(cfg.id); reject(new Error(e)); },
+          onError: (e) => { convertChildren.delete(cfg.id); try { task && task.fail(e); } catch (err) {} reject(new Error(e)); },
         });
         convertChildren.set(cfg.id, child);
       } catch (e) { reject(new Error(String(e))); }

@@ -15,6 +15,11 @@ import { zhToHant } from './zhHant.js';
 import { I18N_JA } from './i18n_ja.js';
 
 export const I18N_MAP = {
+  '从壁纸库选择': "Choose from wallpaper library",
+  '还没有选择动态壁纸': "No motion wallpaper selected",
+  '这里只控制音符瀑布的画面背景；整窗壁纸仍由上方「壁纸」控制。': "This controls only the waterfall background; the app-wide wallpaper is still controlled by Wallpaper above.",
+  '只影响音符瀑布，导出视频使用同一份设置。': "Affects only the waterfall; video export uses the same setting.",
+  '自定义图片': "Custom image",
   '音乐：演奏 / 可视化 / 乐谱': "Music: playback / visualization / score",
   '音乐区分成三页：演奏看播放与混音，可视化看瀑布与频谱，乐谱看五线谱 / 总谱 / 简谱 / 六线谱。': "Music has three tabs: playback for transport and mixer, visualization for waterfall and spectrum, score for staff / full score / numbered notation / tab.",
   '右下角任务图标可拖动；拖到左右边缘自动收成侧边条，点击恢复，面板里也能隐藏到侧边。': "The task icon at bottom-right can be dragged; drop it near either edge to tuck it into a side strip. Click to restore; the panel also has a hide-to-side button.",
