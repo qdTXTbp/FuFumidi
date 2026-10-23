@@ -1343,6 +1343,9 @@ export interface FuBridge {
     addLocal(path: string): Promise<WallpaperDownloadResult>;
     onAddLocalProgress(cb: (p: { progress: number; path?: string }) => void): () => void;
     removeLocal(name: string): Promise<{ ok: boolean; error?: string }>;
+    searchWallhaven(query: string, page?: number): Promise<{ ok: boolean; list?: any[]; page?: number; last?: number; source?: string; warning?: string; error?: string }>;
+    downloadUrl(url: string, name?: string): Promise<{ ok: boolean; path?: string; name?: string; kind?: 'image' | 'video'; size?: number; error?: string }>;
+    scanFolder(dir: string): Promise<{ ok: boolean; list?: any[]; error?: string }>;
   };
 
   // optional rust core

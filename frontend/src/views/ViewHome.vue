@@ -5,6 +5,7 @@ import { useAppStore } from '../stores/app';
 import { ensureAudio } from '../audio.js';
 import { encodeMidi } from '../core/midi.js';
 import { t } from '../core/i18n.js';
+import mascot from '../assets/mascot.png';
 import { getAppVersion } from '../core/version.js';
 import { fmtTime } from '../core/util.js';
 // 立绘（全身，透明底）：用户要求「立绘放到工具里」—— 首页是工具内最大的静态位。
@@ -162,6 +163,7 @@ async function openProject() {
 
     <div class="home-top">
       <section class="card home-hero brand-frame">
+        <img class="home-hero-mascot" :src="mascot" alt="" aria-hidden="true" />
         <template v-if="currentSong">
           <div class="home-hero-top">
             <div class="home-cover"><Icon name="music" :size="26" /></div>
@@ -254,7 +256,9 @@ async function openProject() {
 .home-sub { margin: 8px 0 0; color: var(--text3); font-size: var(--fs-sm); }
 .home-head-actions { margin-left: auto; display: flex; gap: var(--sp-2); }
 .home-top { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(260px, .72fr); gap: var(--sp-3); }
-.home-hero { padding: 22px; overflow: hidden; background: linear-gradient(120deg, color-mix(in srgb, var(--accent-sapphire) 15%, transparent), color-mix(in srgb, var(--accent-sea) 8%, transparent) 55%, var(--surface)); }
+.home-hero { position: relative; padding: 18px 126px 18px 20px; overflow: hidden; background: linear-gradient(120deg, color-mix(in srgb, var(--accent-sapphire) 15%, transparent), color-mix(in srgb, var(--accent-sea) 8%, transparent) 55%, var(--surface)); }
+.home-hero-mascot { position: absolute; right: 8px; top: 4px; height: 170px; width: auto; max-width: 130px; object-fit: contain; pointer-events: none; user-select: none; filter: drop-shadow(0 18px 30px rgba(0,0,0,.28)); z-index: 0; opacity: .98; }
+.home-hero > :not(.home-hero-mascot) { position: relative; z-index: 1; }
 .home-hero-top { display: flex; align-items: flex-start; gap: var(--sp-3); }
 .home-cover { width: 66px; height: 66px; border-radius: var(--r-md); display: grid; place-items: center; background: linear-gradient(145deg, color-mix(in srgb, var(--accent-sapphire) 28%, var(--surface)), var(--surface-soft)); color: var(--accent-sky); border: 1px solid color-mix(in srgb, var(--ornament) 35%, var(--hairline)); flex: none; }
 .home-hero-copy { min-width: 0; }
@@ -303,5 +307,5 @@ async function openProject() {
 .home-recent-row > svg { color: var(--text3); flex: none; }
 .home-recent-empty { padding: 28px; text-align: center; color: var(--text3); font-size: var(--fs-sm); }
 @media (max-width: 1100px) { .home-top { grid-template-columns: 1fr; } .home-head { align-items: flex-start; flex-direction: column; } .home-head-actions { margin-left: 0; } }
-@media (max-width: 760px) { .home-actions { grid-template-columns: 1fr; } .home-hero-title { font-size: var(--fs-lg); } }
+@media (max-width: 760px) { .home-actions { grid-template-columns: 1fr; } .home-hero { padding-right: 22px; } .home-hero-mascot { height: 150px; right: 6px; top: 4px; opacity: .55; } .home-hero-title { font-size: var(--fs-lg); } }
 </style>
