@@ -10,6 +10,8 @@ import { t } from '../core/i18n.js';
 const app = useAppStore();
 const settingsStore = useSettingsStore();
 const bridge = window.fuBridge;
+// 同一会话内切走再回来不重新拉取（墙纸列表/文件夹扫描只在首开与手动刷新时执行）
+let _repoMemo = null, _folderMemo = null, _memoAt = 0;
 const source = ref('repo');       // repo | online | local
 const kindFilter = ref('all');    // all | image | video
 const repo = ref([]);
@@ -46,15 +48,15 @@ const currentName = computed(() => String((settingsStore.settings && settingsSto
 
 async function loadRepo() {
   if (!bridge || !bridge.wallpaper) return;
-  try { const r = await bridge.wallpaper.list(); if (r && r.ok) repo.value = r.list || []; } catch (e) {}
+  try { const r = await bridge.wallpaper.list(); if (r && r.ok) { repo.value = r.list || []; _repoMemo = repo.value; _memoAt = Date.now(); } } catch (e) {}
 }
 async function scanFolders() {
   if (!bridge || !bridge.wallpaper || !bridge.wallpaper.scanFolder) return;
-  const out = [];
-  for (const dir of folderPaths.value) {
-    try { const r = await bridge.wallpaper.scanFolder(dir); if (r && r.ok) for (const it of r.list) out.push({ ...it, dir }); } catch (e) {}
-  }
-  folderFiles.value = out;
+  const batches = await Promise.all(folderPaths.value.map(async (dir) => {
+    try { const r = await bridge.wallpaper.scanFolder(dir); return (r && r.ok ? r.list : []).map((it) => ({ ...it, dir })); } catch (e) { return []; }
+  }));
+  folderFiles.value = batches.flat();
+  _folderMemo = folderFiles.value;
 }
 async function searchOnline(more = false) {
   if (!bridge || !bridge.wallpaper || !bridge.wallpaper.searchWallhaven) { error.value = t('当前版本不支持在线搜索'); return; }
@@ -106,9 +108,15 @@ async function addFolder() {
   if (!folderPaths.value.includes(dir)) { folderPaths.value.push(dir); saveFolders(); await scanFolders(); app.toast(t('已链接外部壁纸文件夹（不复制文件）'), 'ok'); }
 }
 function removeFolder(dir) { folderPaths.value = folderPaths.value.filter(x => x !== dir); saveFolders(); scanFolders(); }
+function seekPreview(e) { try { if (e && e.target && e.target.readyState >= 1) e.target.currentTime = 0.5; } catch (err) {} }
 function openSite(url) { try { if (bridge && bridge.openExternal) bridge.openExternal(url); else window.open(url, '_blank'); } catch (e) {} }
 function isCurrent(x) { return !!(settingsStore.settings && settingsStore.settings.custom_wallpaper === (x.image || x.video || x.path)); }
-onMounted(async () => { await settingsStore.load(); await loadRepo(); await scanFolders(); });
+onMounted(async () => {
+  await settingsStore.load();
+  const fresh = _memoAt && Date.now() - _memoAt < 5 * 60 * 1000;
+  if (fresh && _repoMemo) { repo.value = _repoMemo; folderFiles.value = _folderMemo || []; return; }
+  await Promise.all([loadRepo(), scanFolders()]);
+});
 </script>
 
 <template>
@@ -163,6 +171,7 @@ onMounted(async () => { await settingsStore.load(); await loadRepo(); await scan
     <div v-else class="wlib-grid">
       <button v-for="(it, i) in shown" :key="it.path || it.image || it.video || i" class="wlib-card" :class="{ busy: busy && busy === (it.id || it.name || 'wallpaper') }" @click="downloadAndApply(it)">
         <img v-if="thumbOf(it)" :src="thumbOf(it)" loading="lazy" alt="" />
+        <video v-else-if="kindOf(it) === 'video' && (it.video || it.path)" class="wlib-video" :src="fileUrl(it.video || it.path) + '#t=0.5'" muted playsinline preload="metadata" @loadedmetadata="seekPreview"></video>
         <span v-else class="wlib-ph"><Icon name="wallpaper" :size="22" /></span>
         <span class="wlib-badge">{{ kindOf(it) === 'image' ? t('静态') : t('动态') }}</span>
         <span v-if="isCurrent(it)" class="wlib-current"><Icon name="check" :size="12" /></span>
@@ -205,7 +214,7 @@ onMounted(async () => { await settingsStore.load(); await loadRepo(); await scan
 @media (max-width: 620px) { .wlib-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .wlib-card { position: relative; aspect-ratio: 16/10; overflow: hidden; border: 1px solid var(--hairline); border-radius: var(--r-sm); background: var(--surface-soft); padding: 0; cursor: pointer; }
 .wlib-card:hover { border-color: var(--accent-sky); }
-.wlib-card img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.wlib-card img, .wlib-card .wlib-video { width: 100%; height: 100%; object-fit: cover; display: block; }
 .wlib-ph { width: 100%; height: 100%; display: grid; place-items: center; color: var(--text3); }
 .wlib-badge { position: absolute; left: var(--sp-1); top: var(--sp-1); padding: 1px var(--sp-1); border-radius: var(--r-xs); background: color-mix(in srgb, var(--canvas) 70%, transparent); color: var(--text2); font-size: var(--fs-xs); }
 .wlib-current { position: absolute; right: var(--sp-1); top: var(--sp-1); color: var(--accent-sky); }

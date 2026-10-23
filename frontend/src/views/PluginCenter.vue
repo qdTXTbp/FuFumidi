@@ -17,10 +17,13 @@ import { useAppStore } from '../stores/app';
 const app = useAppStore();
 const toast = (m: string, kind?: string) => app.toast(m, kind as any);
 
-const loading = ref(false);
+const CACHE_KEY = 'fufumidi_plugin_catalog_v1';
+const cachedCatalog = (() => { try { return JSON.parse(localStorage.getItem(CACHE_KEY) || 'null'); } catch (e) { return null; } })();
+const catalogFresh = !!(cachedCatalog && cachedCatalog.at && Date.now() - Number(cachedCatalog.at) < 10 * 60 * 1000 && Array.isArray(cachedCatalog.plugins));
+const loading = ref(!catalogFresh);
 const err = ref('');
-const url = ref('');
-const plugins = ref<any[]>([]);
+const url = ref((cachedCatalog && cachedCatalog.url) || '');
+const plugins = ref<any[]>((cachedCatalog && Array.isArray(cachedCatalog.plugins)) ? cachedCatalog.plugins : []);
 const channel = ref<'stable' | 'beta'>('stable');
 const busySlug = ref('');
 const confirm = ref<any>(null);          // 待确认的安装（含包内清单）
@@ -41,6 +44,7 @@ async function load() {
     if (!r || !r.ok) { err.value = (r && r.error) || t('加载插件中心失败'); plugins.value = []; return; }
     url.value = r.url || '';
     plugins.value = r.plugins || [];
+    try { localStorage.setItem(CACHE_KEY, JSON.stringify({ url: url.value, plugins: plugins.value, at: Date.now() })); } catch (e) {}
     const il = await bridge.plugins.installedList().catch(() => null);
     installed.value = (il && il.plugins) || [];
   } catch (e: any) {
@@ -130,7 +134,10 @@ async function loadPlatformInfo() {
 
 let offLog: any = null;
 onMounted(async () => {
-  await Promise.all([load(), loadLocal(), loadPlatformInfo()]);
+  await Promise.all([loadLocal(), loadPlatformInfo()]);
+  if (!catalogFresh) await load();
+  else if (bridge.plugins?.installedList) { try { const il = await bridge.plugins.installedList(); installed.value = (il && il.plugins) || []; } catch (e) {} }
+  // 有缓存时不重复请求网络；刷新按钮 / 切通道仍会 load()
   // 插件日志：原来的设置页里也有，搬过来一起显示
   if (bridge.plugins.onLog) {
     offLog = bridge.plugins.onLog((p: any) => {
@@ -241,7 +248,7 @@ onBeforeUnmount(() => { if (offLog) { try { offLog(); } catch (e) {} offLog = nu
         <button class="btn sm" @click="load">{{ t('重试') }}</button>
       </div>
 
-      <div v-if="loading" class="pc-grid">
+      <div v-if="loading && !plugins.length" class="pc-grid">
         <div v-for="i in 4" :key="i" class="pc-card pc-skel"><i></i><i></i><i></i></div>
       </div>
       <div v-else-if="!plugins.length && !err" class="pc-empty">
