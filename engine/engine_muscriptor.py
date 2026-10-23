@@ -746,13 +746,25 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         except Exception:
             pass
 
-    # ★ 2026-10-21：「识别片段长度」已移除 —— 分块转录实测导致块与块之间质量参差不齐
-    #   （边界重复音、换音色、延音被切断）。MuScriptor 的块长一律用上游默认
-    #   muscriptor.transcription_model._SEGMENT_DURATION（5s），不再由界面/参数覆盖。
-    #   跨块延音缝合（_stitch_chunk_boundaries）保留：它修的是模型内部固有分块的接缝，
-    #   不是分块功能本身。
+    # ★ 识别片段长度：**默认不开启**（用户 2026-10-23「改成不强制开启分段识别，
+    #   允许用户手动切换」）。不传时 MuScriptor 的块长一律用上游默认
+    #   muscriptor.transcription_model._SEGMENT_DURATION（5s = 训练块长）；
+    #   只有用户在高级参数里把滑条调离 0，才在这里改模块常量。
+    #   ★ 注意：改块长会让模型进入训练分布外（另一台机器实测 30s → 29 个音符、
+    #     中位 28.8s 的长音），所以界面必须写明代价，且预设一律不写这个键。
     if str(params.get("memory_mode") or "") == "low":
         params = dict(params)
+    _chunk_sec = CHUNK_SEC          # 缝合法找块边界用；用户改了片段长度就跟着改
+    if params.get("segment_sec"):
+        try:
+            import segment_options as _seg_opt
+            _chunk_sec = _seg_opt.muscriptor_segment_sec(params.get("segment_sec"))
+            import muscriptor.transcription_model as _tm
+            _tm._SEGMENT_DURATION = float(_chunk_sec)
+            _log(log_cb, "识别片段长度：%.1fs（MuScriptor 默认 5s；改块长会离开训练分布，质量可能下降）"
+                 % float(_chunk_sec))
+        except Exception as _e:  # noqa: BLE001
+            _log(log_cb, "识别片段长度设置失败，按默认 5s：%s" % _e)
     if model._device and model._device.type == "cuda":
         _log(log_cb, "使用 GPU（CUDA）推理")
     elif model._device and model._device.type == "mps":
@@ -1306,7 +1318,7 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                         % (_dur_chk, size, " / ".join(constrain) if constrain else "无"))
                 if _stitch and data:
                     try:
-                        _stitched, _st_stats = _stitch_chunk_boundaries(data, chunk_sec=CHUNK_SEC)
+                        _stitched, _st_stats = _stitch_chunk_boundaries(data, chunk_sec=_chunk_sec)
                         if _st_stats.get("merged"):
                             data = _stitched
                         _log(log_cb, "跨块延音缝合：接合 %d 处（边界两侧同轨同音高），缝合后最长音 %.1fs"

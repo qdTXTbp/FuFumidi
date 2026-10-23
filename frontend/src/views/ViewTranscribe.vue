@@ -41,10 +41,16 @@ void (async () => {
 })();
 const perf = ref('quality');             // quality | balanced | fast
 const perfHint = ref('');
-/* ★ 2026-10-21：「识别片段长度」（分块转录）已整体移除 —— 实测按固定长度切片再合并，
-   块与块之间质量参差不齐（边界重复音/换音色/延音被切断）。现在所有模型一律用
-   **模型原生块长**、整曲一次喂入；模型内部固有的取窗（basic-pitch 2s 帧、
-   MuScriptor 5s 块等）属于架构，不是可调功能。 */
+/* 识别片段长度（秒）：每种模型一次喂给模型识别的音频长度。
+   ★ 2026-10-23 重新定位为**可选、默认不开启**（用户「改成不强制开启分段识别，
+   允许用户手动切换」）：
+     · 0 = 模型默认 —— 用各模型的原生块长（= 训练块长），整曲一次推理。
+       这是默认值，也是 2026-10-21「取消分块转录」后的行为。
+     · >0 = 用户显式开启分段识别。实测按固定长度切片再合并会让**块与块之间
+       质量参差不齐**（接缝重复音、换音色、延音被切断），所以默认关、并写明代价。
+   ★ 预设一律不写这个键 —— 6.1.x 的预设给每个模型都写了值，切模型就自动套上，
+     那正是「强制开启」。这条由 engine/tests/test_transcribe_options.py 固化。 */
+const segmentSec = ref(0);
 /* 转录前降噪：默认 off（保持旧输出完全一致）。选项来自引擎 audio_chain：
    off / light（谱减）/ strong（UVR-DeNoise 模型，需资源中心下载）。
    2026-10-15 实测降噪在部分素材会增加噪声引起的假音符，所以默认关、并写明代价。 */
@@ -57,6 +63,15 @@ function setMemoryMode(v) {
   memoryMode.value = ['auto', 'low', 'allow'].includes(v) ? v : 'auto';
   try { localStorage.setItem('fufumidi_memory_mode', memoryMode.value); } catch (e) {}
 }
+/** 各模型推荐片段长度（= 训练块长；见各引擎源码/配置）。
+ *  只在用户显式开启分段识别时作为「推荐」标注显示，**不写进预设**。 */
+const SEG_RECOMMEND = computed(() => {
+  if (mode.value === 'universal') return umodel.value === 'basic' ? 0 : 5;
+  if (pmodel.value === 'aria') return 30;
+  if (pmodel.value === 'transkun') return 16;
+  if (pmodel.value === 'hft') return 0;
+  return 10;
+});
 const bassBoost = ref(false);            // 低音增强（仅 basic 子模型）：关闭 melodia trick 以保留低音声部
 // 多条弯音曲线（仅 basic 子模型）：basic-pitch 唯一没转发的用户可见参数。
 // 开了以后同一音符可以挂多条弯音（颤音/滑音），**会真的落进导出的 MIDI**。
@@ -590,6 +605,10 @@ const WEB_MODEL_DEFAULTS = () => ({
 // 网页版内置预设（与 engine/presets.py 的 _builtin_presets 一一对应；名字必须逐字一致）。
 // 无桥接时 loadPresets 用这份数据填充，避免「应用预设」因列表为空而失效。
 // 判据同引擎侧：最高质量 + 保证稳定性，不考虑速度性能（perf=quality / fp32 / 中性解码值）。
+// ★ 2026-10-23：这份表**一律不写 segment_sec**（识别片段长度）。用户明确「改成不强制
+//   开启分段识别，允许用户手动切换」—— 6.1.x 给每个模型都写了值（MuScriptor 5s /
+//   钢琴 10s / Aria 30s…），切模型就自动套上，那就是强制开启。现在默认 0 = 模型
+//   原生块长，要不要分段由用户在高级参数里自己决定。
 const WEB_BUILTIN_PRESETS = () => {
   const basic = {
     model: 'basic', onset_threshold: 0.5, frame_threshold: 0.3, minimum_note_length: 128,
@@ -1192,6 +1211,12 @@ function collectPresetParams() {
     tempo: iv(exportTempo.value),
     denoise_mode: denoiseMode.value || 'off',
   };
+  // ★ 识别片段长度：**只有用户显式调离 0 才写进预设/请求**。0 = 不传 = 模型原生
+  //   块长。这样「保存预设」不会把分段识别悄悄固化进去（用户 2026-10-23：
+  //   改成不强制开启分段识别，允许用户手动切换）。
+  if (mode.value !== 'separate' && Number(segmentSec.value) > 0) {
+    p.segment_sec = Number(segmentSec.value);
+  }
   if (mode.value === 'universal') {
     Object.assign(p, {
       model: umodel.value,
@@ -1294,6 +1319,9 @@ function applyPresetParams(p, opts) {
     }
   }
   if (has('precision') && ['fp32', 'fp16'].indexOf(pr.precision) >= 0) msPrec.value = pr.precision;
+  // 识别片段长度：0 = 模型默认（不开启）。老预设没有这个键时保留当前值；
+  //   带了就按它来（兼容 6.1.x 及更早写死了值的预设，用户可自己调回 0）。
+  if (has('segment_sec')) segmentSec.value = clamp(Math.round(numOr('segment_sec', 0)), 0, 120);
   // 降噪档位：只认引擎支持的三个值；老预设没有这个键时保持当前值（默认 off）
   if (has('denoise_mode') && ['off', 'light', 'strong'].indexOf(String(pr.denoise_mode)) >= 0) {
     denoiseMode.value = String(pr.denoise_mode);
@@ -1500,6 +1528,9 @@ function collectParams() {
   }
   // 转录前降噪（默认 off = 旧行为；只有显式选择才发送）
   if (mode.value !== 'separate' && denoiseMode.value && denoiseMode.value !== 'off') cfg.denoise_mode = denoiseMode.value;
+  // ★ 识别片段长度：**只有用户显式调离 0 才发送**。0 = 不传 = 模型原生块长
+  //   （用户 2026-10-23：改成不强制开启分段识别，允许用户手动切换）。
+  if (mode.value !== 'separate' && Number(segmentSec.value) > 0) cfg.segment_sec = Number(segmentSec.value);
   if (mode.value !== 'separate' && memoryMode.value) cfg.memory_mode = memoryMode.value;
   if (mode.value === 'separate') {
     cfg.with_drums = drums.value;
@@ -2230,6 +2261,15 @@ onBeforeUnmount(() => {
             <!-- ★ 钢琴模型的碎音护栏（engine_pt._sane_min_note_ms）：10ms 等于关掉过滤器，
                  实测 30 秒样例 71 → 8037 个音符、3 分钟样例 47967 个 / 517 秒。 -->
 
+          </div>
+          <!-- ★ 识别片段长度：**默认 0 = 不开启**（用户 2026-10-23「改成不强制开启
+               分段识别，允许用户手动切换」）。调离 0 才按固定长度切片识别再合并，
+               实测块与块之间质量参差不齐（接缝重复音 / 换音色 / 延音被切断），
+               所以默认关并写明代价；0 时各模型用原生训练块长、整曲一次推理。 -->
+          <div class="tr-slider" v-if="mode !== 'separate'" data-guide="segment-sec">
+            <label>{{ t('识别片段长度') }}<b>{{ segmentSec > 0 ? segmentSec + 's' : t('模型默认（不开启）') }}{{ segmentSec > 0 && SEG_RECOMMEND > 0 ? ' · ' + t('推荐') + ' ' + SEG_RECOMMEND + 's' : '' }}</b></label>
+            <NumSlider v-model="segmentSec" :min="0" :max="60" :step="1" unit="s" :aria-label="t('识别片段长度')" />
+            <small v-if="segmentSec > 0" style="color:var(--t-warn)">{{ t('分段识别可能让块与块之间质量参差不齐（接缝重复音 / 换音色 / 延音被切断）；0 = 用模型原生块长，效果最稳。') }}</small>
           </div>
           <div class="tr-switch" v-if="mode !== 'separate'" data-guide="memory-mode">
             <label>
