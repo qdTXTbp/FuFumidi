@@ -119,7 +119,6 @@ const MS_GROUPS = [
 const msInstrValue = computed(() => {
   if (msMode.value === 'probe_segments') return 'probe_segments';
   if (msMode.value === 'limit') return msGroups.value.join(',');
-  if (msMode.value === 'probe') return 'probe';
   return 'none';
 });
 // ② 计算精度：默认 fp32（不传）—— bf16 改数值精度、属影响质量的开关，默认关。
@@ -623,7 +622,7 @@ const WEB_BUILTIN_PRESETS = () => {
     { name: 'MuScriptor · 最优', mode: 'universal', params: { ...basic,
       model: 'muscriptor', model_size: 'medium',
       // 与 engine/presets.py 逐键一致：probe 锁定乐器组 + 音色稳定后处理
-      muscriptor_instruments: 'probe', timbre_stabilize: true,
+      muscriptor_instruments: 'probe_segments', timbre_stabilize: true,
       temperature: 1.0, cfg_coef: 1.0, beam_size: 1, prelude_forcing: true,
       precision: 'fp32' } },
     { name: '钢琴 · 最优', mode: 'piano', params: { ...piano, model: 'piano_pt' } },
@@ -1305,8 +1304,7 @@ function applyPresetParams(p, opts) {
   if (has('muscriptor_instruments') && typeof pr.muscriptor_instruments === 'string') {
     const v = pr.muscriptor_instruments.trim();
     if (!v || v === 'none') msMode.value = 'none';
-    else if (v === 'probe' || v === 'auto' || v === 'smart') msMode.value = 'probe';
-    else if (v === 'probe_segments' || v === 'segments') msMode.value = 'probe_segments';
+    else if (v === 'probe' || v === 'probe_segments' || v === 'segments' || v === 'auto' || v === 'smart') msMode.value = 'probe_segments';
     else {
       const groups = v.split(',').map((s) => s.trim()).filter((g) => MS_GROUPS.some((x) => x.id === g));
       if (groups.length) { msGroups.value = groups; msMode.value = 'limit'; }
@@ -2341,13 +2339,12 @@ onBeforeUnmount(() => {
               <span><b>{{ t('乐器组') }}</b></span>
               <select v-model="msMode" class="select-input" style="width:auto;padding:2px 6px;font-size:var(--fs-xs)">
                 <option value="none">{{ t('不限定') }}</option>
-                <option value="probe">{{ t('自动锁定乐器组（音色稳定）') }}</option>
                 <option value="limit">{{ t('限定乐器组') }}</option>
                 <option value="probe_segments">{{ t('自动探测（分段）') }}</option>
               </select>
             </label>
           </div>
-          <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor' && (msMode === 'probe_segments' || msMode === 'probe')">
+          <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'probe_segments'">
             <label>
               <span><b>{{ t('音频标签模型') }}</b><small class="fb-hint" style="margin-left:6px">{{ t('只用于自动探测乐器组') }}</small></span>
               <select v-model="tagModel" class="select-input" style="width:auto;padding:2px 6px;font-size:var(--fs-xs)">

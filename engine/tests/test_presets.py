@@ -105,7 +105,7 @@ def test_quality_policy_highest_quality_and_stable():
     #   后来 b42e097「精简高级参数面板」把它们连带删掉，默认悄悄退回"不干预乐器组"，
     #   于是 MuScriptor 逐 5 秒块自由改判乐器（用户报障：每隔一段时间换一种乐器）。
     #   面板可以不暴露，默认行为不能退化 —— 这里钉住，别再被"精简"顺手删掉。
-    assert ms["muscriptor_instruments"] == "probe"   # 转录前探测并锁定主乐器组
+    assert ms["muscriptor_instruments"] == "probe_segments"   # 按 6.2.1 做法逐段探测乐器组
     assert ms["timbre_stabilize"] is True            # 短命孤立轨并入邻近主导轨
     assert b["钢琴 · 最优"]["params"]["include_pedal"] is True
     assert b["分离 · 最优"]["params"]["include_drums"] is True

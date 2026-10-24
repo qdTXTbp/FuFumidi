@@ -177,7 +177,7 @@ def _builtin_presets():
                 #   面板可以不暴露，但**默认行为不该跟着退化**，这里恢复。
                 #   probe = 转录前用 instrument_probe（AudioSet 标签模型，CPU ~0.3s/10s）
                 #   探测主乐器组并作为硬约束；置信度不足会自动兜底，判空则本次不限制。
-                "muscriptor_instruments": "probe",
+                "muscriptor_instruments": "probe_segments",
                 # 短命孤立乐器轨并入邻近主导轨（跨块延音缝合只管同音高延音，管不到换乐器）
                 "timbre_stabilize": True,
                 "temperature": 1.0, "cfg_coef": 1.0, "beam_size": 1,
