@@ -630,17 +630,83 @@ const WEB_BUILTIN_PRESETS = () => {
 const fileInput = ref(null);
 
 function estSec() {
-  if (!duration.value || duration.value <= 0) return null;
-  let f = { universal: 1.5, piano: 4, separate: 10 }[mode.value] || 2;
-  if (perf.value === 'fast') f *= 1.5;
-  else if (perf.value === 'balanced') f *= 1.15;
-  return Math.max(2, Math.round(duration.value * f));
+  return trEstimateSec(currModelKey(), duration.value, collectPresetParams());
+}
+/* 转录时长估算：按模型窗口长度 + 实测「单窗口耗时」校准。
+   · 每种模型先给一个窗口长度（MuScriptor 5s / 钢琴等按各自原生窗口）
+   · 每次跑完一首，记录实际耗时 / 窗口数，写回本地校准表
+   · 单曲、队列、多队列顺序都用同一套窗口估算，不再用固定的「倍速」猜。 */
+const TR_ETA_KEY = 'fufumidi_tr_eta_v1';
+const TR_WINDOW_SEC = {
+  basic: 5, yourmt3: 5, miros: 5,
+  muscriptor_small: 5, muscriptor_medium: 5, muscriptor_large: 5,
+  piano_pt: 10, aria: 30, transkun: 16, hft: 5,
+};
+const TR_DEFAULT_SEC_PER_WINDOW = {
+  basic: 7, yourmt3: 10, miros: 14,
+  muscriptor_small: 6, muscriptor_medium: 11, muscriptor_large: 20,
+  piano_pt: 20, aria: 30, transkun: 18, hft: 10,
+};
+function trWindowSec(key, params) {
+  const seg = Number(params && params.segment_sec);
+  if (seg > 0 && String(key).startsWith('muscriptor_')) return seg;
+  return TR_WINDOW_SEC[key] || 5;
+}
+function trLoadEta() { try { const a = JSON.parse(localStorage.getItem(TR_ETA_KEY) || '{}'); return (a && typeof a === 'object') ? a : {}; } catch (e) { return {}; } }
+let trEtaCache = trLoadEta();
+const trEtaVersion = ref(0);
+function trEtaKey(key) { return String(key) + '|' + String(perf.value || 'quality'); }
+function trSecPerWindow(key) {
+  const v = Number(trEtaCache[trEtaKey(key)]);
+  return Number.isFinite(v) && v > 0 ? v : (TR_DEFAULT_SEC_PER_WINDOW[key] || 8);
+}
+function trEstimateSec(key, dur, params) {
+  const d = Number(dur);
+  if (!Number.isFinite(d) || d <= 0) return null;
+  const n = Math.max(1, Math.ceil(d / trWindowSec(key, params)));
+  return Math.max(2, Math.round(n * trSecPerWindow(key)));
+}
+function trRecordEtaWindows(key, windows, elapsedSec) {
+  const n = Number(windows);
+  if (!Number.isFinite(n) || n <= 0 || !Number.isFinite(elapsedSec) || elapsedSec <= 0) return;
+  const actual = elapsedSec / n;
+  const k = trEtaKey(key);
+  const old = Number(trEtaCache[k]);
+  trEtaCache[k] = old > 0 ? (old * 0.6 + actual * 0.4) : actual;
+  try { localStorage.setItem(TR_ETA_KEY, JSON.stringify(trEtaCache)); } catch (e) {}
+  trEtaVersion.value++;
+}
+function trRecordEta(key, dur, elapsedSec, params) {
+  const d = Number(dur);
+  if (!Number.isFinite(d) || d <= 0 || !Number.isFinite(elapsedSec) || elapsedSec <= 0) return;
+  trRecordEtaWindows(key, Math.max(1, Math.ceil(d / trWindowSec(key, params))), elapsedSec);
 }
 const sumTime = computed(() => {
-  if (!queue.some(i => i.status === 'pending' || i.status === 'running')) return null;
-  const e = estSec();
-  return e ? t('约 ') + fmtTime(e) : t('依引擎与性能档位而定');
+  trEtaVersion.value;
+  const qs = chainMode.value ? queues : [currentQueue()];
+  let total = 0;
+  let any = false;
+  for (const q of qs) {
+    if (!q) continue;
+    const key = q.modelKey || currModelKey();
+    const items = (q.id === activeQid.value) ? queue : (q.items || []);
+    for (const it of items) {
+      if (it.status !== 'pending' && it.status !== 'running') continue;
+      const dur = Number(it.duration) || (it.status === 'running' ? Number(duration.value) : 0);
+      const e = trEstimateSec(key, dur, q.params || {});
+      if (e == null) continue;
+      any = true;
+      if (it.status === 'running' && it.startedAt) {
+        const elapsed = (Date.now() - it.startedAt) / 1000;
+        total += Math.max(0, e - elapsed);
+      } else {
+        total += e;
+      }
+    }
+  }
+  return any ? t('约 ') + fmtTime(Math.max(2, Math.round(total))) : null;
 });
+
 const pendingCount = computed(() => queue.filter(i => i.status === 'pending' || i.status === 'error' || i.status === 'canceled').length);
 
 /* ---------------- 队列 ---------------- */
@@ -651,6 +717,7 @@ function addPaths(paths) {
     if (queue.some(i => i.path === p)) continue;
     const it = { id: nextId++, path: p, name: String(p).replace(/^.*[\\/]/, ''), status: 'pending', progress: 0, realPct: 0, duration: 0, out: '', note_count: 0, error: '' };
     queue.push(it);
+    decodeDuration(it);
     // 运行中往当前视图队列加条目：同时写进队列对象，正在跑的 worker 才能捡到
     if (q && q.id === runningQueueId.value) {
       q.items = Array.isArray(q.items) ? q.items : [];
@@ -1566,7 +1633,15 @@ function clearLog() { logs.value = []; }
 /* ---------------- 转录运行 ---------------- */
 let trTimer = null;
 async function decodeDuration(it) {
-  if (it.duration || !bridge || !bridge.readBinary) return;
+  if (!it || it.duration || !bridge) return;
+  // 优先走 main 的 ffprobe（只读文件头）；旧版没有 audioDuration 才退回整文件解码。
+  try {
+    if (bridge.audioDuration) {
+      const r = await bridge.audioDuration(it.path);
+      if (r && r.ok && Number(r.seconds) > 0) { it.duration = Number(r.seconds); return; }
+    }
+  } catch (e) {}
+  if (!bridge.readBinary) return;
   try {
     const buf = await bridge.readBinary(it.path);
     if (!buf) return;
@@ -1630,7 +1705,7 @@ async function runBatch() {
       if (curP > 0 && curP < 100) cur.progress = curP;
       const elS = (Date.now() - (cur.startedAt || Date.now())) / 1000;
       const estS = ((cur.estMs || estSec() * 1000 || 60000)) / 1000;
-      const remains = Math.max(0, Math.round(estS - elS));
+      const remains = (curP > 0 && curP < 100 && elS > 0) ? Math.max(0, Math.round(elS / (curP / 100) - elS)) : Math.max(0, Math.round(estS - elS));
       stage.value = (chain ? t('队列 ') + totals.queueIndex + '/' + totals.queueCount + ' · ' : '')
         + t('已用 ') + fmtTime(elS) + (remains > 0 ? ' · ' + t('剩余约 ') + fmtTime(remains) : '');
     }
@@ -1644,8 +1719,11 @@ async function runBatch() {
   const processOne = async (it, cfgBase, target) => {
     it.status = 'running'; it.progress = 0; it.realPct = 0; it.error = '';
     it.startedAt = Date.now();
+    it._etaMeasured = false; it._etaLastAt = 0; it._etaLastCompleted = 0;
     await decodeDuration(it);
-    it.estMs = Math.max(5000, estSec() * 1000 || 60000);
+    const _etaKey = (runQ && runQ.modelKey) || currModelKey();
+    const _etaParams = (runQ && runQ.params) || collectPresetParams();
+    it.estMs = Math.max(5000, (trEstimateSec(_etaKey, it.duration || duration.value, _etaParams) || 60) * 1000);
     const jid = 'batch' + it.id;
     runningJobIds.add(jid); currentJobId.value = jid;
     logLine('→ ' + it.name);
@@ -1659,6 +1737,7 @@ async function runBatch() {
       if (cancelAll.value) it.status = 'canceled';
       else if (res && res.ok && res.out) {
         it.status = 'done'; it.progress = 100; it.out = res.out; it.note_count = res.note_count || 0;
+        try { if (!it._etaMeasured) trRecordEta(_etaKey, it.duration || duration.value, (Date.now() - it.startedAt) / 1000, _etaParams); } catch (e) {}
         totals.done += 1;
         try {
           const bytes = await bridge.readBinary(res.out);
@@ -1880,7 +1959,19 @@ onMounted(() => {
           const d = JSON.parse(ln.slice(8));
           const qid = parseInt(String(p.id).replace(/^batch/, ''), 10);
           const it = queue.find((x) => x.id === qid);
-          if (it && d && d.total > 0) it.realPct = Math.min(99, Math.round(d.completed / d.total * 100));
+          if (it && d && d.total > 0) {
+            it.realPct = Math.min(99, Math.round(d.completed / d.total * 100));
+            const _now = Date.now();
+            const _comp = Number(d.completed) || 0;
+            if (it._etaLastAt && _comp > (it._etaLastCompleted || 0)) {
+              const _q = queues.find((x) => (x.items || []).some((y) => y.id === it.id)) || currentQueue();
+              trRecordEtaWindows((_q && _q.modelKey) || currModelKey(),
+                                 _comp - (it._etaLastCompleted || 0),
+                                 (_now - it._etaLastAt) / 1000);
+              it._etaMeasured = true;
+            }
+            it._etaLastAt = _now; it._etaLastCompleted = _comp;
+          }
         } catch (e) {}
         return;
       }
