@@ -480,6 +480,8 @@ def build_parser():
                    help="[muscriptor] 音频标签探测使用整首（全曲均匀采样）")
     g.add_argument("--audio-tagger", dest="audio_tagger", default=None,
                    help="[muscriptor] 音频标签模型：audioset（默认）或 ced")
+    g.add_argument("--probe-segment-sec", dest="probe_segment_sec", type=float, default=None,
+                   help="[muscriptor] 自动探测（分段）的段长（秒）")
     g.add_argument("--muscriptor-instruments", dest="muscriptor_instruments", default=None,
                    help="[muscriptor] 乐器组硬约束：逗号分隔的组名（voice / acoustic_piano /"
                         " clean_electric_guitar / synth_lead / flutes / organ / drums …，"
@@ -580,6 +582,7 @@ def cmd_worker():
                 # 旋律乐器组：漏掉这一项时界面选了「人声」也传不进引擎，
                 # 模型仍会自由改判乐器（甩葱歌那类「同一旋律换音色」的根因）。
                 muscriptor_instruments=req.get('muscriptor_instruments'),
+                probe_segment_sec=req.get('probe_segment_sec'),
                 audio_tagger=req.get('audio_tagger'),
                 audio_tagger_window_sec=req.get('audio_tagger_window_sec'),
                 audio_tagger_whole_song=bool(req.get('audio_tagger_whole_song')),

@@ -1067,6 +1067,78 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         _mode, _groups = instrument_probe.parse_mode(params.get("muscriptor_instruments"))
         _groups = _sanitize_groups(_groups, log_cb, "手动/预设")
         constrain = _groups if _mode == "limit" else None
+        # ★ 2026-10-21 / 6.2.1 的「自动探测（分段）」恢复版：
+        #   按固定段长切音频，每段独立用音频标签模型探测乐器组，再取各段的
+        #   允许组并集作为全局硬约束。这样不会因为整曲只抽到一次 voice
+        #   就把整首歌锁成单一乐器组；单组结果也不硬锁（宁可自由判定）。
+        if _mode == "probe_segments":
+            try:
+                import segment_probe as _sp
+                import soundfile as _sfp
+                import tempfile as _tfp
+                import shutil as _shp
+                _tag_kind = str((params or {}).get("audio_tagger") or "audioset").strip().lower()
+                if _tag_kind not in ("audioset", "ced"):
+                    _tag_kind = "audioset"
+                import audio_tagger as _at
+                if not _at.available(_tag_kind):
+                    _tag_kind = "audioset" if _at.available("audioset") else _tag_kind
+                _tg = _at.get_tagger(_tag_kind) if _at.available(_tag_kind) else None
+                if _tg is not None:
+                    _x, _sr = _sfp.read(wav_tmp, dtype="float32", always_2d=False)
+                    if getattr(_x, "ndim", 1) > 1:
+                        _x = _x.mean(axis=1)
+                    _dur = (len(_x) / float(_sr)) if _sr else 0.0
+                    _seg_sec = float((params or {}).get("probe_segment_sec") or 60.0)
+                    _segs = _sp.fixed_segments(_dur, _seg_sec)
+                    _tmpdir = _tfp.mkdtemp(prefix="fuprobe-seg-")
+                    _per_groups = []
+                    _t_segprobe = time.perf_counter()
+                    try:
+                        for _si, (_a, _b) in enumerate(_segs):
+                            _spath = os.path.join(_tmpdir, "seg%02d.wav" % _si)
+                            _sfp.write(_spath, _x[int(_a * _sr):int(_b * _sr)], _sr)
+                            _nwin = max(1, min(12, int(round((_b - _a) / 10.0))))
+                            _pg, _psc, _prs = _tg.probe_groups(
+                                _spath, min_score=0.05,
+                                max_windows=_nwin, window_sec=10.0)
+                            _pg = _sanitize_groups(_pg, log_cb, "分段 %d" % (_si + 1))
+                            _per_groups.append(_pg)
+                            _log(log_cb, "分段探测 %d/%d（%.0f–%.0fs，音频标签模型[%s]）：%s%s"
+                                 % (_si + 1, len(_segs), _a, _b, _tag_kind,
+                                    " / ".join(_pg) if _pg else "（置信度不足/未检出）",
+                                    "" if _pg else ("（%s）" % _prs if _prs else "")))
+                    finally:
+                        try:
+                            _shp.rmtree(_tmpdir, ignore_errors=True)
+                        except Exception:
+                            pass
+                    _allowed, _keep = _sp.build_constraints(_per_groups, max_groups=12)
+                    _union = []
+                    for _gs in _allowed:
+                        for _g in _gs:
+                            if _g not in _union:
+                                _union.append(_g)
+                    if len(_union) >= 2:
+                        constrain = _union
+                        _log(log_cb, "分段探测完成（探测器=音频标签模型[%s]，%.1fs）：%d 段；稳定组=%s；全局允许=%s"
+                             % (_tag_kind, time.perf_counter() - _t_segprobe,
+                                len(_segs), " / ".join(_keep) if _keep else "无",
+                                " / ".join(_union)))
+                    elif len(_union) == 1:
+                        constrain = None
+                        _log(log_cb, "分段探测只检出单一乐器组（%s），本次不启用硬约束，避免把整首歌锁成一种音色" % _union[0])
+                    else:
+                        constrain = None
+                        _log(log_cb, "分段探测未得到任何乐器组，本次不限制")
+                    _mode = "segprobe_done"
+                else:
+                    _log(log_cb, "分段探测不可用：音频标签模型未安装，本次不限制")
+                    _mode = "segprobe_done"
+            except Exception as _e:  # noqa: BLE001
+                _log(log_cb, "分段探测失败，本次不限制：%s" % str(_e)[:180])
+                constrain = None
+                _mode = "segprobe_done"
         if _mode in ("probe", "probe_segments"):
             # 「音色稳定」预设：先探测主乐器组，再作为硬约束（减少长尾乐器与跨块改判）。
             # ★ 2026-10-21：'probe_segments'（分段探测）档已移除 —— 它本身就是又一次分块，

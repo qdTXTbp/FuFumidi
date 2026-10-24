@@ -114,8 +114,10 @@ def parse_mode(raw):
     # 'probe'：整曲探测后硬约束（引擎/CLI 能力，界面不暴露这一档）。
     # ★ 2026-10-21：'probe_segments' / 'segments'（分段探测）已移除 —— 它本身就是又一次
     #   分块，A/B 见 docs/plans/2026-10-20-segment-probe-ab.md；旧值按整曲探测兼容。
-    if len(groups) == 1 and groups[0].lower() in ("probe", "probe_segments", "segments"):
+    if len(groups) == 1 and groups[0].lower() == "probe":
         return ("probe", [])
+    if len(groups) == 1 and groups[0].lower() in ("probe_segments", "segments"):
+        return ("probe_segments", [])
     return ("limit", groups)
 
 

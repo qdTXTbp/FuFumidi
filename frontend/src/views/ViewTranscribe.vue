@@ -86,8 +86,7 @@ const msMode = ref('none');
 const msGroups = ref(['voice', 'drums']);
 // 音频标签模型：只用于「自动探测乐器组」，不参与 MIDI 生成。
 const tagModel = ref('audioset'); // audioset | ced
-const tagWholeSong = ref(false); // 音频标签探测：整首 / 固定窗口
-const tagWindowSec = ref(60);   // 固定窗口长度（秒，默认 60）
+const msProbeSegSec = ref(60);   // 自动探测（分段）的段长
 function toggleMsGroup(id) {
   const i = msGroups.value.indexOf(id);
   if (i >= 0) { if (msGroups.value.length > 1) msGroups.value.splice(i, 1); return; }
@@ -109,7 +108,7 @@ const MS_GROUPS = [
   { id: 'orchestra_hit', cn: '管弦齐奏' },
 ];
 const msInstrValue = computed(() => {
-  if (msMode.value === 'probe') return 'probe';
+  if (msMode.value === 'probe_segments') return 'probe_segments';
   if (msMode.value === 'limit') return msGroups.value.join(',');
   return 'none';
 });
@@ -1209,8 +1208,7 @@ function collectPresetParams() {
       model_size: msSize.value,
       muscriptor_instruments: msInstrValue.value,
       audio_tagger: tagModel.value,
-      audio_tagger_whole_song: tagWholeSong.value,
-      audio_tagger_window_sec: Number(tagWindowSec.value),
+      probe_segment_sec: Number(msProbeSegSec.value),
       temperature: Number(msTemp.value), cfg_coef: Number(msCfg.value),
       beam_size: iv(msBeam.value), prelude_forcing: msPrelude.value,
       precision: msPrec.value,
@@ -1301,12 +1299,7 @@ function applyPresetParams(p, opts) {
     }
   }
   if (has('audio_tagger') && ['audioset', 'ced'].indexOf(String(pr.audio_tagger)) >= 0) tagModel.value = String(pr.audio_tagger);
-  if (has('audio_tagger_whole_song')) tagWholeSong.value = !!pr.audio_tagger_whole_song;
-  if (has('audio_tagger_window_sec')) {
-    const _tw = clamp(Math.round(numOr('audio_tagger_window_sec', 60)), 5, 60);
-    // 旧构建把默认值写成了 10s；新默认 60s，老队列/预设迁移一次。
-    tagWindowSec.value = _tw === 10 ? 60 : _tw;
-  }
+  if (has('probe_segment_sec')) msProbeSegSec.value = clamp(Math.round(numOr('probe_segment_sec', 60)), 20, 120);
   if (has('precision') && ['fp32', 'fp16'].indexOf(pr.precision) >= 0) msPrec.value = pr.precision;
   // 降噪档位：只认引擎支持的三个值；老预设没有这个键时保持当前值（默认 off）
   if (has('denoise_mode') && ['off', 'light', 'strong'].indexOf(String(pr.denoise_mode)) >= 0) {
@@ -1479,8 +1472,7 @@ function collectParams() {
       cfg.beat_grid = beatGrid.value;
       cfg.muscriptor_instruments = msInstrValue.value;
       cfg.audio_tagger = tagModel.value;
-      cfg.audio_tagger_whole_song = tagWholeSong.value;
-      cfg.audio_tagger_window_sec = Number(tagWindowSec.value);
+      cfg.probe_segment_sec = Number(msProbeSegSec.value);
       // 乐器组约束：'none' / '人声,鼓' 这样的组名列表。
       // 注意这条链路有三跳（渲染端 → 主进程 worker 请求体 → 引擎），少任何一跳界面选了都不生效。
       // ★ 2026-10-14 更正：这段注释原先描述的是**已被移除**的批量推理行为
@@ -2334,11 +2326,11 @@ onBeforeUnmount(() => {
               <select v-model="msMode" class="select-input" style="width:auto;padding:2px 6px;font-size:var(--fs-xs)">
                 <option value="none">{{ t('不限定') }}</option>
                 <option value="limit">{{ t('限定乐器组') }}</option>
-                <option value="probe">{{ t('自动探测乐器组') }}</option>
+                <option value="probe_segments">{{ t('自动探测（分段）') }}</option>
               </select>
             </label>
           </div>
-          <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
+          <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'probe_segments'">
             <label>
               <span><b>{{ t('音频标签模型') }}</b><small class="fb-hint" style="margin-left:6px">{{ t('只用于自动探测乐器组') }}</small></span>
               <select v-model="tagModel" class="select-input" style="width:auto;padding:2px 6px;font-size:var(--fs-xs)">
@@ -2347,18 +2339,9 @@ onBeforeUnmount(() => {
               </select>
             </label>
           </div>
-          <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
-            <label>
-              <span><b>{{ t('音频标签探测长度') }}</b><small class="fb-hint" style="margin-left:6px">{{ t('整首 = 扫描全曲；固定长度 = 按总时长均匀抽样（内部 10s 窗口）') }}</small></span>
-              <select v-model="tagWholeSong" class="select-input" style="width:auto;padding:2px 6px;font-size:var(--fs-xs)">
-                <option :value="false">{{ t('固定长度') }}</option>
-                <option :value="true">{{ t('整首') }}</option>
-              </select>
-            </label>
-          </div>
-          <div class="tr-slider" v-if="mode === 'universal' && umodel === 'muscriptor' && !tagWholeSong">
-            <label>{{ t('探测长度') }}<b>{{ tagWindowSec }}s</b></label>
-            <NumSlider v-model="tagWindowSec" :min="5" :max="60" :step="5" unit="s" />
+          <div class="tr-slider" v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'probe_segments'">
+            <label>{{ t('探测段长') }}<b>{{ msProbeSegSec }}s</b></label>
+            <NumSlider v-model="msProbeSegSec" :min="20" :max="120" :step="10" unit="s" />
           </div>
           <div class="tr-switch" style="display:block" v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'limit'">
             <div style="display:flex;flex-wrap:wrap;gap:var(--sp-2);max-height:150px;overflow:auto;padding:2px 0">
