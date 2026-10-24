@@ -49,18 +49,41 @@ AUDIOSET_TO_GROUPS = {
     "Synthesizer": ["synth_lead", "synth_pad"], "Sampler": ["synth_pad"],
 }
 
-MODEL_DIR_CANDIDATES = (
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "resources", "models", "audio-tagger"),
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "models", "audio-tagger"),
-)
+#: 随包分发的落点（应用目录下 resources/models/audio-tagger）
+BUNDLED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "..", "resources", "models", "audio-tagger")
+
+
+def model_dir_candidates():
+    """按优先级列出可能的模型目录。
+
+    顺序（★ 2026-10-24 起「下载来的副本优先」）：
+      ① FUFUMIDI_AUDIO_TAGGER_DIR —— 显式覆盖（测试/诊断）
+      ② <FUFUMIDI_MODELS_DIR>/audio-tagger —— **数据根里的下载副本**
+         （资源中心「乐器组标签模型（AudioSet）」会解包到这里；
+          放最前是为了让用户能更新/修复到比随包更新的一份）
+      ③ resources/models/audio-tagger —— 随包兜底（离线可用，不依赖下载）
+      ④ 源码仓库根的 models/audio-tagger —— 开发期
+    """
+    out = []
+    env = os.environ.get("FUFUMIDI_AUDIO_TAGGER_DIR")
+    if env:
+        out.append(env)
+    models_dir = os.environ.get("FUFUMIDI_MODELS_DIR") or ""
+    if models_dir:
+        out.append(os.path.join(models_dir, "audio-tagger"))
+    out.append(BUNDLED_DIR)
+    out.append(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "..", "..", "models", "audio-tagger"))
+    return out
 
 
 def find_model_dir():
-    env = os.environ.get("FUFUMIDI_AUDIO_TAGGER_DIR")
-    if env and os.path.isdir(env):
-        return env
-    for c in MODEL_DIR_CANDIDATES:
-        c = os.path.abspath(c)
+    for c in model_dir_candidates():
+        try:
+            c = os.path.abspath(c)
+        except Exception:
+            continue
         if os.path.isfile(os.path.join(c, "model.int8.onnx")):
             return c
     return ""
