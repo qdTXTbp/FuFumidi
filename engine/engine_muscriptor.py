@@ -1303,6 +1303,14 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         # 用户调了 temperature / cfg_coef 才自动打开采样 —— 采样关着时这两个值是被忽略的，
         # 界面给了滑块却不生效就是坑。
         _gen_kw = {}
+        # ★ 长音频默认 batch=4：在 12GB 笔记本 GPU + Large 1.4B 上，
+        #   4 个 chunk 并发会让首块长时间不出进度。Large 固定 batch=1，
+        #   按块流式出结果；Medium/Small 保留 batch=4。
+        _batch_override = params.get("muscriptor_batch")
+        if _batch_override is None:
+            _batch_override = 1 if size == "large" else 4
+        _gen_kw["batch_size"] = max(1, int(_batch_override))
+        _log(log_cb, "muscriptor 批量：%d（模型 %s）" % (_gen_kw["batch_size"], size))
         for _k, _cast in (("temperature", float), ("cfg_coef", float), ("beam_size", int)):
             _v = params.get(_k)
             if _v is not None:
