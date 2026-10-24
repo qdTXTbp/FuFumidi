@@ -3616,18 +3616,18 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
    这里按布局尺寸给下限（28px 已达标），视觉小于 28 是刻意的缩放效果，不作为命中目标。 */
 
 /* ===== 6.2.1 调教页页头与工作台外壳 ===== */
-.sing-page { background: transparent; gap: 10px; padding: 12px 14px 10px; }
-.sing-head { display: flex; align-items: center; gap: 14px; padding: 14px 18px; border: 1px solid var(--hairline); border-radius: var(--r-lg); background: linear-gradient(120deg, color-mix(in srgb, var(--accent-sapphire) 16%, var(--surface)), color-mix(in srgb, var(--accent-sky) 5%, var(--surface)) 58%, var(--surface)); box-shadow: var(--shadow-sm); flex: none; }
-.sing-head-emblem { width: 44px; height: 44px; flex: none; border-radius: 14px; display: grid; place-items: center; color: var(--accent-sky); background: color-mix(in srgb, var(--accent-sky) 12%, transparent); border: 1px solid color-mix(in srgb, var(--accent-sky) 24%, transparent); }
+.sing-page { background: transparent; gap: var(--sp-2); padding: 12px 14px 10px; }
+.sing-head { display: flex; align-items: center; gap: var(--sp-4); padding: 14px 18px; border: 1px solid var(--hairline); border-radius: var(--r-lg); background: linear-gradient(120deg, color-mix(in srgb, var(--accent-sapphire) 16%, var(--surface)), color-mix(in srgb, var(--accent-sky) 5%, var(--surface)) 58%, var(--surface)); box-shadow: var(--shadow-sm); flex: none; }
+.sing-head-emblem { width: 44px; height: 44px; flex: none; border-radius: var(--r-lg); display: grid; place-items: center; color: var(--accent-sky); background: color-mix(in srgb, var(--accent-sky) 12%, transparent); border: 1px solid color-mix(in srgb, var(--accent-sky) 24%, transparent); }
 .sing-head-copy { min-width: 0; flex: 1; }
 .sing-kicker { font-size: var(--fs-xs); letter-spacing: .16em; color: var(--accent-sky); }
-.sing-title-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sing-title-row { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
 .sing-title-row h1 { margin: 0; font-size: var(--fs-xl); line-height: 1.2; color: var(--text); }
 .sing-badge { padding: 1px 8px; border-radius: var(--r-pill); border: 1px solid color-mix(in srgb, var(--accent-sky) 30%, transparent); color: var(--accent-sky); background: color-mix(in srgb, var(--accent-sky) 8%, transparent); font-size: var(--fs-xs); }
 .sing-head-copy p { margin: 3px 0 0; color: var(--text2); font-size: var(--fs-sm); }
-.sing-head-actions { display: flex; align-items: center; gap: 8px; flex: none; }
-.sing-nav { display: flex; align-items: center; gap: 4px; padding: 5px; border: 1px solid var(--hairline); border-radius: var(--r-lg); background: color-mix(in srgb, var(--surface) 70%, transparent); flex: none; border-bottom: 1px solid var(--hairline); }
-.sn-tab { border: 0; border-radius: var(--r-md); background: transparent; padding: 8px 13px; gap: 6px; color: var(--text2); }
+.sing-head-actions { display: flex; align-items: center; gap: var(--sp-2); flex: none; }
+.sing-nav { display: flex; align-items: center; gap: var(--sp-1); padding: 5px; border: 1px solid var(--hairline); border-radius: var(--r-lg); background: color-mix(in srgb, var(--surface) 70%, transparent); flex: none; border-bottom: 1px solid var(--hairline); }
+.sn-tab { border: 0; border-radius: var(--r-md); background: transparent; padding: 8px 13px; gap: var(--sp-2); color: var(--text2); }
 .sn-tab i { opacity: .65; }
 .sn-tab:hover { background: color-mix(in srgb, var(--accent-sky) 8%, transparent); border: 0; color: var(--text); }
 .sn-tab.on { background: color-mix(in srgb, var(--accent-sapphire) 22%, var(--surface)); border: 0; color: var(--text); }
