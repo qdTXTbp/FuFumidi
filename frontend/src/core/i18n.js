@@ -5696,6 +5696,8 @@ export const I18N_MAP = {
   '更新器已启动，下载与更新进度请在更新器窗口内查看…': 'The updater has started; check download and update progress in the updater window…',
   '工具': 'Tools',
   '工具目录：': 'Tools folder: ',
+  '已沿用原数据目录（旧版本位置）': 'Reusing your existing data folder (previous location)',
+  '用户数据目录（已有数据）': 'User data folder (already has data)',
   '工具目录（默认）': 'Tools folder (default)',
   '工具目录不可写，已回退到用户数据目录': 'Tools folder is not writable; fell back to the user data folder',
   '工作区': 'Workspace',

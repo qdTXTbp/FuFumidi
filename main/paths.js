@@ -22,8 +22,9 @@
 const { app } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const Pick = require('./data-root-pick');
 
-const DIR_NAME = 'FuFumidiData';
+const DIR_NAME = Pick.DATA_DIR_NAME;
 const READY_MARK = '.fufumidi-ready';
 const MIGRATING_MARK = '.fufumidi-migrating';
 
@@ -38,6 +39,8 @@ const MIGRATE_DIRS = [
 
 let _root = null;
 let _rootReason = '';
+let _rootFrom = '';          // 依据来源（settings.data_root_last / settings-paths / install-dir …）
+let _discoveredCache = [];    // 本次发现的历史数据根候选（供设置页展示）
 // 迁移未完成的项：值为旧路径（服务继续用旧路径，避免读到半成品）
 const _legacy = Object.create(null);
 let _migrationReport = null;
@@ -45,6 +48,10 @@ let _migrationReport = null;
 /* ---------------- 基础路径 ---------------- */
 
 function installRoot() {
+  /* 测试/诊断可强制指定（只影响去哪找 FuFumidiData，不影响别的事）。
+     与 FUFUMIDI_E2E_DATA_ROOT 同类的开关，正常启动不设。 */
+  const forced = process.env.FUFUMIDI_INSTALL_ROOT || '';
+  if (forced) return forced;
   try {
     return app.isPackaged ? path.dirname(process.execPath) : path.join(__dirname, '..');
   } catch (_) { return process.cwd(); }
@@ -61,6 +68,111 @@ function configuredRoot() {
     const s = JSON.parse(fs.readFileSync(settingsFile(), 'utf8'));
     return (s && typeof s.data_root === 'string') ? s.data_root.trim() : '';
   } catch (_) { return ''; }
+}
+
+/** settings.json 的宽松读取（拿不到就当空对象，绝不抛） */
+function settingsRaw() {
+  try {
+    const s = JSON.parse(fs.readFileSync(settingsFile(), 'utf8'));
+    return (s && typeof s === 'object') ? s : {};
+  } catch (_) { return {}; }
+}
+
+/** 上次实际用过的数据根（自动记录，仅作「找回来」的线索） */
+function lastUsedRoot() {
+  const s = settingsRaw();
+  return (typeof s.data_root_last === 'string') ? s.data_root_last.trim() : '';
+}
+
+/* ---------------- 旧数据根的发现（2026-10-24 报障修复） ----------------
+ * 背景：6.2.4 装进 Program Files 后数据根回退到 %APPDATA% 下的**新建空目录**，
+ * 而用户数据还在旧便携目录里 —— 候选表里根本没有「上次用过的位置」这一路。
+ *
+ * 发现来源（都不贵，启动时跑一次）：
+ *   ① settings.json 里那些绝对路径值（active_soundfont / custom_wallpaper /
+ *      output_dir / engine_path / plugin.dirs…，以及任何含 FuFumidiData 的字符串）
+ *   ② %APPDATA%\fufumidi\*.json 里记录的路径（曲库 midi 文件、最近打开、播放列表）
+ * 每个路径都会被展开成「祖先里叫 FuFumidiData 的目录」+「每层祖先下的 FuFumidiData」，
+ * 再由 pickDataRoot 用 hasData/canUse 过滤 —— 只有**真有数据**的才认领。
+ */
+
+/** 从任意值里收集看起来像绝对路径的字符串 */
+function collectPathStrings(v, out, depth) {
+  const d = depth || 0;
+  if (d > 6 || out.length > 400) return out;
+  if (typeof v === 'string') {
+    // 只留像盘符/UNC 开头的绝对路径（settings 里也有主题名之类的普通字符串）
+    if (/^(?:[a-zA-Z]:[\\/]|\\\\)/.test(v.trim())) out.push(v.trim());
+    return out;
+  }
+  if (Array.isArray(v)) {
+    for (const x of v) collectPathStrings(x, out, d + 1);
+    return out;
+  }
+  if (v && typeof v === 'object') {
+    for (const k of Object.keys(v)) collectPathStrings(v[k], out, d + 1);
+  }
+  return out;
+}
+
+/** 扫 %APPDATA%\fufumidi 下的 json（限量，按体积与文件数封顶），取出里面的绝对路径 */
+function pathsFromLegacyJson(dir) {
+  const out = [];
+  let names = [];
+  try { names = fs.readdirSync(dir); } catch (_) { return out; }
+  const MAX_FILES = 15, MAX_BYTES = 512 * 1024;
+  let n = 0;
+  for (const name of names) {
+    if (n >= MAX_FILES) break;
+    if (!/\.json$/i.test(name)) continue;
+    const p = path.join(dir, name);
+    try {
+      const st = fs.statSync(p);
+      if (!st.isFile() || st.size > MAX_BYTES) continue;
+    } catch (_) { continue; }
+    n++;
+    try { collectPathStrings(JSON.parse(fs.readFileSync(p, 'utf8')), out, 0); } catch (_) {}
+  }
+  return out;
+}
+
+/** 汇总所有线索路径（设置值 + 旧 json 里的路径） */
+function hintPaths() {
+  const hints = collectPathStrings(settingsRaw(), [], 0);
+  const legacy = legacyBase();
+  for (const p of pathsFromLegacyJson(legacy)) hints.push(p);
+  return hints;
+}
+
+/** 已存在且可写（**不创建目录**）；不存在一律 false —— 探测期绝不产生空目录 */
+function canUseExisting(dir) {
+  try {
+    if (!dir || !fs.existsSync(dir)) return false;
+    if (!fs.statSync(dir).isDirectory()) return false;
+    const probe = path.join(dir, '.write-probe');
+    fs.writeFileSync(probe, 'ok');
+    fs.unlinkSync(probe);
+    return true;
+  } catch (_) { return false; }
+}
+
+/** 目录还不存在，但父目录存在且可写（用于「全新安装，允许现场建」） */
+function canCreateUnder(dir) {
+  try {
+    if (!dir) return false;
+    if (fs.existsSync(dir)) return false;         // 已存在就走 canUseExisting
+    const parent = path.dirname(dir);
+    if (!fs.existsSync(parent) || !fs.statSync(parent).isDirectory()) return false;
+    const probe = path.join(parent, '.write-probe-' + process.pid);
+    fs.writeFileSync(probe, 'ok');
+    fs.unlinkSync(probe);
+    return true;
+  } catch (_) { return false; }
+}
+
+/** 该目录里是否真有数据（交给纯函数判定） */
+function hasDataAt(dir) {
+  return Pick.hasDataDir(dir, { fs, readyMark: READY_MARK });
 }
 
 /** 目录可写探测（顺带创建） */
@@ -81,28 +193,104 @@ function resolveRoot() {
      只有设置了环境变量才生效；正常启动完全不走这条路。 */
   const e2eRoot = process.env.FUFUMIDI_E2E_DATA_ROOT || '';
   if (e2eRoot && writable(e2eRoot)) { _root = e2eRoot; _rootReason = 'e2e'; return _root; }
+
   const preferred = path.join(installRoot(), DIR_NAME);
+  const userData = userDataBase();
   const configured = configuredRoot();
+  const last = lastUsedRoot();
+
+  // 历史数据根候选：从设置里的绝对路径反推（本次报障的关键一路）
+  let discovered = [];
+  try {
+    discovered = Pick.rootsFromHints(hintPaths(), DIR_NAME);
+    // 只留「已存在且有数据」的，供设置页展示（不含当前选中的那个）
+    _discoveredCache = discovered.filter((d) => {
+      if (d === preferred || d === userData || d === configured) return false;
+      try { return hasDataAt(d) && canUseExisting(d); } catch (_) { return false; }
+    });
+  } catch (_) { discovered = []; _discoveredCache = []; }
+
+  let picked;
+  try {
+    picked = Pick.pickDataRoot({
+      configured, last, preferred, userData, discovered,
+      canUse: canUseExisting, canCreate: canCreateUnder, hasData: hasDataAt,
+    });
+  } catch (e) {
+    console.warn('[data-root] 选择逻辑异常，走旧路径：' + (e && e.message));
+    picked = null;
+  }
+
+  if (picked && picked.root) {
+    _root = picked.root;
+    _rootReason = picked.reason;
+    _rootFrom = picked.from;
+    // 认领了历史目录：它是已存在的真实目录，标一个 ready 免得后续被当成「待迁移目标」
+    if (picked.reason === 'adopted-previous' || picked.reason === 'user-data') {
+      try { markReady(_root); } catch (_) {}
+    } else if (picked.reason === 'install-dir' || picked.reason === 'configured') {
+      // 全新安装：目录可能还不存在，这里建出来（等价于旧代码 writable() 的副作用）
+      try { ensure(_root); } catch (_) {}
+    }
+    return _root;
+  }
+
+  /* 旧逻辑兜底（正常不会走到这里：pickDataRoot 必定返回一个候选） */
   const candidates = [];
   if (configured) candidates.push(configured);
   if (preferred !== configured) candidates.push(preferred);
-  candidates.push(userDataBase());
+  candidates.push(userData);
   for (const c of candidates) {
     if (writable(c)) {
       _root = c;
       if (c === preferred) _rootReason = 'install-dir';
       else if (c === configured) _rootReason = 'configured';
-      else if (c === userDataBase()) _rootReason = configured ? 'configured-not-writable' : 'install-dir-not-writable';
+      else _rootReason = configured ? 'configured-not-writable' : 'install-dir-not-writable';
       return _root;
     }
   }
-  _root = userDataBase();
+  _root = userData;
   _rootReason = 'no-writable-location';
   return _root;
 }
 
+/**
+ * 把本次实际使用的数据根记到 settings.data_root_last。
+ *
+ * 为什么需要：6.2.4 报障的根因就是「换安装位置后没有任何记录能找回旧目录」。
+ * 记下这一条之后，下次升级/换安装位置时 pickDataRoot 的第 ② 步就能把它找回来。
+ * 只在变化时写，读-合并-写 + 临时文件原子替换，避免和 settings 服务并发写截断。
+ * 显式写了 settings.data_root 的用户不受影响（那是第 ① 步，优先级更高）。
+ */
+function rememberRoot() {
+  try {
+    if (!_root || _rootReason === 'e2e') return false;
+    const s = settingsRaw();
+    if (s.data_root_last === _root) return false;
+    s.data_root_last = _root;
+    const file = settingsFile();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const tmp = file + '.tmp-root';
+    fs.writeFileSync(tmp, JSON.stringify(s, null, 2), 'utf8');
+    fs.renameSync(tmp, file);
+    return true;
+  } catch (e) {
+    console.warn('[data-root] 记录本次数据根失败：' + (e && e.message));
+    return false;
+  }
+}
+
 function dataRoot() { return resolveRoot(); }
 function rootReason() { return _rootReason || (resolveRoot(), _rootReason); }
+/** 本次数据根是凭什么选的（settings.data_root_last / settings-paths / install-dir / …） */
+function rootFrom() { resolveRoot(); return _rootFrom || ''; }
+/** 已发现的历史数据根候选（供设置页展示，不含当前选中的） */
+function discoveredRoots() {
+  resolveRoot();
+  try {
+    return _discoveredCache || [];
+  } catch (_) { return []; }
+}
 
 function at(...parts) { return path.join(resolveRoot(), ...parts); }
 
@@ -439,9 +627,12 @@ async function overview() {
     ok: true,
     root,
     reason: rootReason(),
+    from: rootFrom(),
     installRoot: installRoot(),
     legacyBase: legacyBase(),
     configured: configuredRoot(),
+    lastRoot: lastUsedRoot(),
+    discovered: discoveredRoots(),
     entries: out,
     migration: _migrationReport,
   };
@@ -462,6 +653,9 @@ module.exports = {
   userDataBase,
   dataRoot,
   rootReason,
+  rootFrom,
+  discoveredRoots,
+  rememberRoot,
   at,
   modelsDir,
   gpuEnhanceRoot,

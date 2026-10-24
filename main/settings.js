@@ -45,6 +45,12 @@ const DEFAULT_SETTINGS = {
   'export.audio.dither': true,      // 仅 16bit 生效
   'export.audio.loudness': 'off',   // off / -14 / -16 / -23 LUFS
   data_root: '',  // 数据根目录（模型 / 依赖 / 缓存 / 临时文件的落点）；留空 = 自动（工具目录旁的 FuFumidiData）
+  /* ★ 2026-10-24：上一次实际使用的数据根，**自动写入、仅作线索**。
+     存在的理由：6.2.4 装进 Program Files 后数据根回退到 %APPDATA% 下新建的空目录，
+     而用户数据还在旧便携目录里 —— 之前没有任何记录能把它找回来。
+     注意与 data_root 的区别：data_root 是用户显式指定（优先级最高）；
+     这个只是「上次用过的位置」，只有目录**里真有数据**时才会被认领。 */
+  data_root_last: '',
   update_channel: 'stable',  // 更新通道：'stable'=正式版（默认），'beta'=测试版（提前收到 X.Y.Z-beta.N / -rc.N）
   download_source: 'auto',   // 下载源：'auto'=自动（优先国内 CNB，失败回退 GitHub），'cnb'=国内优先，'github'=全球优先
   // 线路测速后选定的具体源 id（如 'ghfast' / 'cnb-beta' / 'github'）；空串 = 没选过，按 download_source 的偏好走。

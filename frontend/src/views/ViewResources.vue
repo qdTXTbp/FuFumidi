@@ -1016,7 +1016,7 @@ onBeforeUnmount(() => {
 
 /* ===== 资源页页签统一：分段控件 + 全部带图标，与工作台页签同构 ===== */
 .rc-tabs { display: inline-flex; align-items: center; gap: 2px; padding: 4px; border: 1px solid var(--hairline); border-radius: var(--r-pill); background: color-mix(in srgb, var(--surface) 60%, transparent); margin-bottom: 14px; flex-wrap: wrap; }
-.rc-tabs .rc-tab { display: inline-flex; align-items: center; gap: 6px; border: 1px solid transparent; border-radius: var(--r-pill); background: transparent; color: var(--text2); padding: 7px 13px; font-size: var(--fs-sm); line-height: 1.4; white-space: nowrap; cursor: pointer; transition: background-color var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out); }
+.rc-tabs .rc-tab { display: inline-flex; align-items: center; gap: var(--sp-1); border: 1px solid transparent; border-radius: var(--r-pill); background: transparent; color: var(--text2); padding: 7px 13px; font-size: var(--fs-sm); line-height: 1.4; white-space: nowrap; cursor: pointer; transition: background-color var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out); }
 .rc-tabs .rc-tab:hover { background: color-mix(in srgb, var(--accent-sky) 8%, transparent); color: var(--text); }
 .rc-tabs .rc-tab.on { background: color-mix(in srgb, var(--accent-sapphire) 24%, var(--surface)); border-color: color-mix(in srgb, var(--accent-sky) 30%, transparent); color: var(--text); font-weight: 600; }
 .rc-tabs .rc-tab svg { opacity: .85; }
