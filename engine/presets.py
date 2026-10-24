@@ -145,7 +145,7 @@ def _builtin_presets():
         "beat_grid": True,            # 节拍网格检测：装了 beat_this 就开
         "tempo": 0,                   # 0 = 引擎默认 120（自动 BPM 优先）
         "perf": "quality",
-        "denoise_mode": "off", "auto_bpm": False,
+        "denoise_mode": "off", "auto_bpm": True,
         # ★ 2026-10-21：「识别片段长度」已移除 —— 分块转录实测块间质量参差不齐。
         #   所有模型一律用各自的原生块长（= 训练块长），预设里不再有这个键。
     }
@@ -154,7 +154,7 @@ def _builtin_presets():
         "min_note_ms": 60, "merge_gap_ms": 30,
         "include_pedal": True,        # 踏板：钢琴转录的必需信息，绝不默认丢
         "perf": "quality",
-        "denoise_mode": "off", "auto_bpm": False,
+        "denoise_mode": "off", "auto_bpm": True,
     }
     sep = {k: v for k, v in s.items() if k in
            ("onset_threshold", "frame_threshold", "minimum_note_length", "midi_tempo")}
@@ -167,19 +167,9 @@ def _builtin_presets():
             "params": {
                 **basic,
                 "model": "muscriptor", "model_size": "medium",
-                # ★ 2026-10-24：恢复「音色稳定」的两项默认（用户报障「每隔一段时间就换一种乐器、
-                #   质量大不如前」）。这两项是 2026-10-18 A/B 后**固化过默认**的：
-                #     音色切换 5 → 0，F1 0.4914 → 0.7692，峰值显存不变
-                #   （docs/plans/2026-10-18-muscriptor-preset-ab.md）。
-                #   后来 b42e097「精简高级参数面板」把它们连同 UI 一起删了，默认悄悄退回
-                #   「不干预乐器组 + 不做音色稳定」—— MuScriptor 逐 5 秒块自由改判乐器，
-                #   于是同一段旋律每隔几小节换音色、F1 掉回 0.49。
-                #   面板可以不暴露，但**默认行为不该跟着退化**，这里恢复。
-                #   probe = 转录前用 instrument_probe（AudioSet 标签模型，CPU ~0.3s/10s）
-                #   探测主乐器组并作为硬约束；置信度不足会自动兜底，判空则本次不限制。
+                # 6.2.1 的分段自动探测；音色稳定功能已移除
                 "muscriptor_instruments": "probe_segments",
-                # 短命孤立乐器轨并入邻近主导轨（跨块延音缝合只管同音高延音，管不到换乐器）
-                "timbre_stabilize": True,
+                "auto_bpm": True,
                 "temperature": 1.0, "cfg_coef": 1.0, "beam_size": 1,
                 "prelude_forcing": True,
                 "precision": "fp32",
@@ -199,7 +189,7 @@ def _builtin_presets():
                 "include_drums": True,     # 鼓组轨开
                 "stem_format": "wav",      # 分轨格式 wav（无损）
                 "perf": "quality",
-                "denoise_mode": "off", "auto_bpm": False,
+                "denoise_mode": "off", "auto_bpm": True,
             },
         },
     }

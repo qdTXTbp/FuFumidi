@@ -1114,20 +1114,14 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                         except Exception:
                             pass
                     _allowed, _keep = _sp.build_constraints(_per_groups, max_groups=12)
-                    _union = []
-                    for _gs in _allowed:
-                        for _g in _gs:
-                            if _g not in _union:
-                                _union.append(_g)
-                    if len(_union) >= 2:
-                        constrain = _union
-                        _log(log_cb, "分段探测完成（探测器=音频标签模型[%s]，%.1fs）：%d 段；稳定组=%s；全局允许=%s"
-                             % (_tag_kind, time.perf_counter() - _t_segprobe,
-                                len(_segs), " / ".join(_keep) if _keep else "无",
-                                " / ".join(_union)))
-                    elif len(_union) == 1:
+                    if any(_allowed):
+                        _per_seg_constraints = _allowed
+                        _seg_plan = {"duration": _dur, "segments": _segs, "skipped_sec": 0.0}
+                        _seg_pcm, _seg_sr = _x, _sr
                         constrain = None
-                        _log(log_cb, "分段探测只检出单一乐器组（%s），本次不启用硬约束，避免把整首歌锁成一种音色" % _union[0])
+                        _log(log_cb, "分段探测完成（探测器=音频标签模型[%s]，%.1fs）：%d 段；稳定组=%s；按段约束已启用"
+                             % (_tag_kind, time.perf_counter() - _t_segprobe,
+                                len(_segs), " / ".join(_keep) if _keep else "无"))
                     else:
                         constrain = None
                         _log(log_cb, "分段探测未得到任何乐器组，本次不限制")
@@ -1323,6 +1317,75 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
             _gen_kw["use_sampling"] = True
         if _gen_kw:
             _log(log_cb, "生成参数：" + "，".join("%s=%s" % kv for kv in sorted(_gen_kw.items())))
+        def _segmented_events(plan, pcm, sr, constrain_override="__unset__", per_seg_constraints=None):
+            """逐段推理并合并事件流（6.2.1 分段乐器组约束）。"""
+            import soundfile as _sf2
+            import tempfile as _tf
+            segs = plan["segments"]
+            pad = float(params.get("segment_pad") or 1.0)
+            chunk_sec = _chunk_sec
+            per = [max(1, int((e - s) / chunk_sec + 0.999)) for s, e in segs]
+            total_chunks = sum(per)
+            done_chunks = 0
+            base_index = 0
+            tmps = []
+            try:
+                for si, (cs, ce) in enumerate(segs):
+                    a = max(0, int(round((cs - pad) * sr)))
+                    b = min(len(pcm), int(round((ce + pad) * sr)))
+                    if b - a < sr:
+                        done_chunks += per[si]
+                        continue
+                    fd, seg_wav = _tf.mkstemp(prefix="fufumidi-seg-", suffix=".wav")
+                    os.close(fd)
+                    tmps.append(seg_wav)
+                    _sf2.write(seg_wav, pcm[a:b], sr)
+                    if _SUSTAIN_EV is not None:
+                        try:
+                            _SUSTAIN_EV(_make_pitch_evidence((pcm[a:b], sr), log_cb, _ev_stats))
+                        except Exception:
+                            pass
+                    off = a / float(sr)
+                    kept = {}
+                    dropped = set()
+                    if constrain_override != "__unset__":
+                        _seg_instruments = constrain_override
+                    elif per_seg_constraints is not None and si < len(per_seg_constraints):
+                        _pg = per_seg_constraints[si] or []
+                        _seg_instruments = _pg if _pg else None
+                    else:
+                        _seg_instruments = constrain
+                    for ev in model.transcribe(seg_wav, instruments=_seg_instruments, **_gen_kw):
+                        if _ProgressEvent is not None and isinstance(ev, _ProgressEvent):
+                            yield _ProgressEvent(completed=done_chunks + int(getattr(ev, "completed", 0)),
+                                                 total=total_chunks)
+                            continue
+                        if _NoteStartEvent is not None and isinstance(ev, _NoteStartEvent):
+                            t = float(ev.start_time) + off
+                            if not (cs - 0.02 <= t < ce - 0.02):
+                                dropped.add(ev.index)
+                                continue
+                            new = _replace(ev, start_time=t, index=base_index)
+                            base_index += 1
+                            kept[ev.index] = new
+                            yield new
+                            continue
+                        if _NoteEndEvent is not None and isinstance(ev, _NoteEndEvent):
+                            idx = ev.start_event_index
+                            if idx in dropped or idx not in kept:
+                                continue
+                            t = float(ev.end_time) + off
+                            yield _replace(ev, end_time=t, start_event=kept[idx])
+                            continue
+                        yield ev
+                    done_chunks += per[si]
+            finally:
+                for p_ in tmps:
+                    try:
+                        os.remove(p_)
+                    except OSError:
+                        pass
+
         while data is None:
             try:
                 if _replay_from:
@@ -1369,7 +1432,11 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                     _install_pause_wrapper(model)
                     # ★ 2026-10-21：一律整曲一次推理（分块转录已移除）。
                     #   模型内部固有的 5s 块由上游 tokenizer 负责，接缝事后缝合。
-                    events = model.transcribe(wav_tmp, instruments=constrain, **_gen_kw)
+                    if _seg_plan is not None:
+                        events = _segmented_events(_seg_plan, _seg_pcm, _seg_sr,
+                                                   per_seg_constraints=_per_seg_constraints)
+                    else:
+                        events = model.transcribe(wav_tmp, instruments=constrain, **_gen_kw)
                 data = model.events_to_midi_bytes(_events_capped(events), beat_grid=beat_grid)
                 # ★ 0 音符保护：空 MIDI 不是成功结果。
                 #   以前这里会把只有 tempo 的 33B 文件直接写盘/入库（用户看到"转录成功但 MIDI 是空的"）。
@@ -1380,7 +1447,11 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                     _log(log_cb, "识别结果为 0 音符，先取消乐器组约束重试一次（原限制：%s）"
                          % (" / ".join(constrain) if constrain else "无"))
                     try:
-                        _retry_events = model.transcribe(wav_tmp, instruments=None, **_gen_kw)
+                        if _seg_plan is not None:
+                            _retry_events = _segmented_events(_seg_plan, _seg_pcm, _seg_sr,
+                                                              constrain_override=None, per_seg_constraints=None)
+                        else:
+                            _retry_events = model.transcribe(wav_tmp, instruments=None, **_gen_kw)
                         _retry_data = model.events_to_midi_bytes(_events_capped(_retry_events), beat_grid=beat_grid)
                         _n_retry = _midi_note_count_bytes(_retry_data)
                         if _n_retry > 0:
@@ -1411,18 +1482,6 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                              % (int(_st_stats.get("merged") or 0), float(_st_stats.get("longest") or 0.0)))
                     except Exception as _e:                 # noqa: BLE001
                         _log(log_cb, "跨块延音缝合跳过（按原样输出）：%s" % _e)
-                # 音色稳定后处理（默认关；MuScriptor 预设默认开）：短命孤立乐器轨并入邻近主导轨
-                if params.get("timbre_stabilize") and data:
-                    try:
-                        import timbre_stabilize as _ts
-                        data2, _ts_stats = _ts.stabilize_midi_bytes(data)
-                        if _ts_stats.get("moved"):
-                            data = data2
-                        _log(log_cb, "音色稳定：并入 %d 个短命轨音符，删除 %d 条孤立轨（轨 %d → %d）"
-                             % (int(_ts_stats.get("moved") or 0), int(_ts_stats.get("removed_tracks") or 0),
-                                int(_ts_stats.get("before_tracks") or 0), int(_ts_stats.get("after_tracks") or 0)))
-                    except Exception as _e:                 # noqa: BLE001
-                        _log(log_cb, "音色稳定后处理跳过（按原样输出）：%s" % _e)
                 if _cap > 0:
                     _log(log_cb, "超长音符上限 %.0fs：强制收尾 %d 个音符"
                                   % (_cap, _cap_stats["closed"]))
