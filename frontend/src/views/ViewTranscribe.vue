@@ -99,7 +99,16 @@ const msPrelude = ref(true);             // 跨块延音缝合（默认开；关
 // ★ 2026-10-21：「自动探测（分段）」档已移除 —— 分段探测本身又是一次分块，
 //   A/B 见 docs/plans/2026-10-20-segment-probe-ab.md（音色切换 4 次、边界重复音 1 个、
 //   耗时 +3.6s，F1 还低于全局探测）。
+// none=不限定（模型自由判定）/ probe=转录前探测并锁定主乐器组（音色稳定，默认）/
+// limit=手动限定乐器组。★ probe 是 MuScriptor 默认预设用的档：不锁的话模型逐 5 秒块
+// 自由改判乐器，同一段旋律每隔几小节换音色（2026-10-18 A/B：锁定后音色切换 5→0、F1 0.49→0.77）。
 const msMode = ref('none');
+/* 音色稳定后处理（engine/timbre_stabilize.py）：把「短命孤立的乐器轨」并入邻近主导轨。
+   MuScriptor 逐 5 秒块判定乐器，不处理的话同一段旋律每隔几小节就换音色。
+   2026-10-18 A/B：锁定乐器组 + 本后处理一起用，音色切换 5→0、F1 0.49→0.77。
+   ★ 必须有这个 ref 且被 collectParams 发出 —— b42e097 精简面板时把状态也删了，
+     于是即使预设里写了 true 也发不出去（三跳断在第二跳）。 */
+const msTimbre = ref(true);
 const msGroups = ref(['voice', 'drums']);
 function toggleMsGroup(id) {
   const i = msGroups.value.indexOf(id);
@@ -123,6 +132,7 @@ const MS_GROUPS = [
 ];
 const msInstrValue = computed(() => {
   if (msMode.value === 'limit') return msGroups.value.join(',');
+  if (msMode.value === 'probe') return 'probe';
   return 'none';
 });
 // ② 计算精度：默认 fp32（不传）—— bf16 改数值精度、属影响质量的开关，默认关。
@@ -629,6 +639,8 @@ const WEB_BUILTIN_PRESETS = () => {
       model: 'miros' } },
     { name: 'MuScriptor · 最优', mode: 'universal', params: { ...basic,
       model: 'muscriptor', model_size: 'medium',
+      // 与 engine/presets.py 逐键一致：probe 锁定乐器组 + 音色稳定后处理
+      muscriptor_instruments: 'probe', timbre_stabilize: true,
       temperature: 1.0, cfg_coef: 1.0, beam_size: 1, prelude_forcing: true,
       precision: 'fp32' } },
     { name: '钢琴 · 最优', mode: 'piano', params: { ...piano, model: 'piano_pt' } },
@@ -1229,7 +1241,7 @@ function collectPresetParams() {
     if (umodel.value === 'basic') p.multiple_pitch_bends = pitchBends.value;
     if (umodel.value === 'muscriptor') Object.assign(p, {
       model_size: msSize.value,
-      muscriptor_instruments: msInstrValue.value,
+      muscriptor_instruments: msInstrValue.value, timbre_stabilize: msTimbre.value,
       temperature: Number(msTemp.value), cfg_coef: Number(msCfg.value),
       beam_size: iv(msBeam.value), prelude_forcing: msPrelude.value,
       precision: msPrec.value,
@@ -1313,11 +1325,13 @@ function applyPresetParams(p, opts) {
   if (has('muscriptor_instruments') && typeof pr.muscriptor_instruments === 'string') {
     const v = pr.muscriptor_instruments.trim();
     if (!v || v === 'none') msMode.value = 'none';
+    else if (v === 'probe' || v === 'auto' || v === 'smart') msMode.value = 'probe';
     else {
       const groups = v.split(',').map((s) => s.trim()).filter((g) => MS_GROUPS.some((x) => x.id === g));
       if (groups.length) { msGroups.value = groups; msMode.value = 'limit'; }
     }
   }
+  if (has('timbre_stabilize')) msTimbre.value = pr.timbre_stabilize !== false;
   if (has('precision') && ['fp32', 'fp16'].indexOf(pr.precision) >= 0) msPrec.value = pr.precision;
   // 识别片段长度：0 = 模型默认（不开启）。老预设没有这个键时保留当前值；
   //   带了就按它来（兼容 6.1.x 及更早写死了值的预设，用户可自己调回 0）。
@@ -1492,6 +1506,7 @@ function collectParams() {
       cfg.model_size = msSize.value;
       cfg.beat_grid = beatGrid.value;
       cfg.muscriptor_instruments = msInstrValue.value;
+      if (!msTimbre.value) cfg.timbre_stabilize = false;   // 开=默认，不传；关掉才显式 false
       // 乐器组约束：'none' / '人声,鼓' 这样的组名列表。
       // 注意这条链路有三跳（渲染端 → 主进程 worker 请求体 → 引擎），少任何一跳界面选了都不生效。
       // ★ 2026-10-14 更正：这段注释原先描述的是**已被移除**的批量推理行为
@@ -2355,8 +2370,15 @@ onBeforeUnmount(() => {
               <span><b>{{ t('乐器组') }}</b></span>
               <select v-model="msMode" class="select-input" style="width:auto;padding:2px 6px;font-size:var(--fs-xs)">
                 <option value="none">{{ t('不限定') }}</option>
+                <option value="probe">{{ t('自动锁定乐器组（音色稳定）') }}</option>
                 <option value="limit">{{ t('限定乐器组') }}</option>
               </select>
+            </label>
+          </div>
+          <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
+            <label>
+              <span><b>{{ t('音色稳定') }}</b><small>{{ t('把短命孤立的乐器轨并入邻近主导轨，减少跨块换音色（默认开）') }}</small></span>
+              <input type="checkbox" v-model="msTimbre">
             </label>
           </div>
           <div class="tr-switch" style="display:block" v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'limit'">

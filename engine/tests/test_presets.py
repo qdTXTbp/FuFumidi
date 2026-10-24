@@ -100,7 +100,13 @@ def test_quality_policy_highest_quality_and_stable():
     assert ms["precision"] == "fp32"
     assert ms["prelude_forcing"] is True            # 跨块延音：把默认行为写成显式值
     assert ms["max_note_hold"] == 0                 # 不截断：僵尸音由音频证据收尾（见 test_muscriptor_sustain_evidence）
-    assert "muscriptor_instruments" not in ms     # 乐器组锁定入口已移除，默认不干预
+    # ★ 2026-10-24：恢复「音色稳定」两项默认。
+    #   2026-10-18 A/B 后这两项曾被固化为默认（音色切换 5→0、F1 0.4914→0.7692），
+    #   后来 b42e097「精简高级参数面板」把它们连带删掉，默认悄悄退回"不干预乐器组"，
+    #   于是 MuScriptor 逐 5 秒块自由改判乐器（用户报障：每隔一段时间换一种乐器）。
+    #   面板可以不暴露，默认行为不能退化 —— 这里钉住，别再被"精简"顺手删掉。
+    assert ms["muscriptor_instruments"] == "probe"   # 转录前探测并锁定主乐器组
+    assert ms["timbre_stabilize"] is True            # 短命孤立轨并入邻近主导轨
     assert b["钢琴 · 最优"]["params"]["include_pedal"] is True
     assert b["分离 · 最优"]["params"]["include_drums"] is True
     assert b["分离 · 最优"]["params"]["stem_format"] == "wav"
