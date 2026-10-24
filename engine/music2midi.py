@@ -136,6 +136,7 @@ def _resolve_params(args, mode):
         if args.minimum_frequency is not None: p["minimum_frequency"] = args.minimum_frequency or None
         if args.maximum_frequency is not None: p["maximum_frequency"] = args.maximum_frequency or None
         if args.no_melodia: p["melodia_trick"] = False
+        if getattr(args, "multiple_pitch_bends", False): p["multiple_pitch_bends"] = True
         if args.tempo is not None: p["midi_tempo"] = args.tempo
     elif mode == "piano":
         if args.onset_threshold is not None: p["onset_threshold"] = args.onset_threshold
@@ -481,6 +482,8 @@ def build_parser():
     g.add_argument("--max-freq", "--maximum-frequency", dest="maximum_frequency",
                    type=float, default=None, help="最高音高(Hz)，0=不限")
     g.add_argument("--no-melodia", action="store_true", help="关闭旋律增强")
+    g.add_argument("--multiple-pitch-bends", dest="multiple_pitch_bends", action="store_true",
+                   help="[basic] 允许同一音符挂多条弯音曲线")
     g.add_argument("--beat-grid", action="store_true",
                    help="[muscriptor] 加载 Beat This! 权重做节拍网格检测（未下载/失败时自动跳过）")
     g.add_argument("--audio-tagger-window-sec", dest="audio_tagger_window_sec", type=float, default=None,

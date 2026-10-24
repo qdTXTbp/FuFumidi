@@ -76,7 +76,7 @@ function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngi
       for (const [k, flag] of Object.entries(map)) {
         if (cfg[k] !== undefined && cfg[k] !== null) args.push(flag, String(cfg[k]));
       }
-      for (const [k, flag] of Object.entries({ denoise: '--denoise', normalize: '--normalize', auto_bpm: '--auto-bpm', beat_grid: '--beat-grid', no_merge: '--no-merge', no_velnorm: '--no-velnorm', with_drums: '--with-drums', no_pedal: '--no-pedal', export_stems: '--export-stems' })) {
+      for (const [k, flag] of Object.entries({ denoise: '--denoise', normalize: '--normalize', auto_bpm: '--auto-bpm', beat_grid: '--beat-grid', no_merge: '--no-merge', no_velnorm: '--no-velnorm', with_drums: '--with-drums', no_pedal: '--no-pedal', no_melodia: '--no-melodia', export_stems: '--export-stems', multiple_pitch_bends: '--multiple-pitch-bends' })) {
         if (cfg[k]) args.push(flag);
       }
       if (cfg.model) args.push('--model', cfg.model);
