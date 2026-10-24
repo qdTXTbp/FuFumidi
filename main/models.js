@@ -62,7 +62,11 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       arch: 'hFT-Transformer',
       use: '钢琴专用：hFT 分层频时 Transformer，MAESTRO 权重；比 piano-transcription 更细的和弦/踏板，CPU 即可运行',
       dest: 'hft_transformer',
-      url: 'https://github.com/sony/hFT-Transformer/releases/download/ismir2023/checkpoint.zip',
+      // ★ 2026-10-24：改从**自有 models 仓库**的双端 Release 资产下载（原来直连
+      //   github.com/sony/hFT-Transformer —— 国内经常连不通，且属于别人的仓库，
+      //   上游一旦删 release 我们就下不到）。字节未改，sha256 与原来完全一致。
+      url: 'https://github.com/monologue82/Models/releases/download/models-extra-v1/hft-transformer-ismir2023.zip',
+      mirrors: ['https://cnb.cool/FuFuCloud-mirror/Models/-/releases/download/models-extra-v1/hft-transformer-ismir2023.zip'],
       unpack: true,
       unpackMarker: 'checkpoint/MAESTRO-V3/model_016_003.pkl',
       sha256: 'bb3c88758e4802e6b3881ccb6dc7927417fb43f76980df3739ab2bbc418d70c5',
@@ -180,6 +184,35 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       // 截断/被改写的文件被当成模型装进本地
       sha256: '8c328b45f59d8dd3dff219253ff6a8d6482be57d0133a29140e2febbf8eb8331',
       minSize: 7e7,
+      downloadable: true,
+      runtime: 'muscriptor',
+    },
+    // 乐器组标签模型（AudioSet zipformer-small，int8 ONNX）：MuScriptor「音色稳定」的探测器。
+    // ★ 2026-10-24：以前只随包分发（resources/models/audio-tagger，27MB 压在 git 里），
+    //   现在纳入统一下载/管理：解包到 <数据根>/models/audio-tagger，
+    //   引擎侧 audio_tagger.find_model_dir() **优先用这里的下载副本**（允许更新/修复），
+    //   随包那份保留作离线兜底 —— 所以「没下载」也不会让音色稳定失效，只是用不上最新的一份。
+    // 双端存放：GitHub monologue82/Models 与 CNB FuFuCloud-mirror/Models 的
+    //   Release 资产 models-extra-v1（20.8MB，压缩后远低于两端 git raw 上限）。
+    audio_tagger: {
+      id: 'audio_tagger',
+      name: '乐器组标签模型（AudioSet）',
+      note: 'MuScriptor 自动探测乐器组用 · 20.8 MB · CPU 约 0.3s/10s',
+      kind: 'transcribe',
+      arch: 'AudioSet zipformer-small (int8 ONNX)',
+      use: '转录前按段自动探测「乐器组」的标签模型，不参与 MIDI 生成。没装时退回 MuScriptor 探测器（更慢），不影响转录结果的可听性。',
+      dest: 'audio-tagger',
+      // 随包也带了一份（resources/models/audio-tagger）：所以即使没下载，功能可用、
+      // 界面也不会误报「未安装」；下载的是数据根里的更新副本，优先级更高。
+      bundled: 'audio-tagger',
+      url: 'https://github.com/monologue82/Models/releases/download/models-extra-v1/audio-tagger-20240415.zip',
+      // 国内优先：mirrorUrls 会把 mirrors 排在 url 之前
+      mirrors: ['https://cnb.cool/FuFuCloud-mirror/Models/-/releases/download/models-extra-v1/audio-tagger-20240415.zip'],
+      unpack: true,
+      unpackMarker: 'model.int8.onnx',
+      sha256: 'e2fa9affc4d42bcf6f8400e4d0def0dcdefd95202819b1b90cf75d1123653295',
+      size: 21820758,
+      minSize: 19000000,
       downloadable: true,
       runtime: 'muscriptor',
     },
@@ -417,6 +450,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       // 目录总大小（排除临时隐藏目录，如 .parts），用于展示
       const dirSize = (() => { try { let s = 0; const walk = (p) => { const st = fs.statSync(p); if (st.isFile()) s += st.size; else for (const f of fs.readdirSync(p)) { if (f === '.parts') continue; walk(path.join(p, f)); } }; walk(dest); return s; } catch (e) { return 0; } })();
       let exists = false, size = 0;
+      let fromBundle = false;      // true = 随包自带（不是用户下载的）
       if (m.type === 'ghsplit') {
         // 分卷下载：以最终合并产物为准，避免下载中的 .parts 被误判为「已就绪」
         const finalFile = path.join(dest, m.splitCat ? (m.outName || '') : 'model.safetensors');
@@ -430,6 +464,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
         //   用户一点开始才在引擎里报「未找到运行时」（这种不一致不报错，最难查）。
         const st = unpackEntryState(m, dest);
         exists = st.exists; size = st.size;
+        if (st.bundled) fromBundle = true;
       } else {
         exists = dirSize >= m.minSize; size = dirSize;
       }
@@ -442,6 +477,8 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
         downloadable: true, note: m.note, kind: m.kind, arch: m.arch, use: m.use, type: m.type, repo: m.repo, gated: !!m.gated, runtime: m.runtime,
         // sepReady/sepWhy 是转录页的加速状态徽章在读的（b749152），GSV 的 group 已随路线删除
         sepReady: sepInfo ? sepInfo.ready : undefined, sepWhy: sepInfo ? sepInfo.why : undefined,        url: m.url || undefined, external: !!m.external,
+        // 随包自带（如乐器组标签模型）：界面可显示「随包附带」，删除只删下载的副本
+        bundled: fromBundle || undefined,
       });
     }
     // 翻唱模型（用户导入的 RVC 模型，见 main/rvc.js）：不下载、不更新，只列出与删除
@@ -485,7 +522,11 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       let p = null;
       if (MODEL_REGISTRY[id]) p = path.join(modelsDir(), MODEL_REGISTRY[id].dest);
       else if (_msstRegistry[id]) p = path.join(modelsDir(), _msstRegistry[id].dest);
-      if (!p || !fs.existsSync(p)) return { ok: false, error: 'not found' };
+      if (!p || !fs.existsSync(p)) {
+        const sp = MODEL_REGISTRY[id];
+        if (sp && sp.bundled) return { ok: false, error: '该模型随包分发，没有下载副本可删' };
+        return { ok: false, error: 'not found' };
+      }
       // ★ 统一走 removeModelArtifacts：dest 之外连 `.oudep`（压缩包，MIROS 一个 5 GB）、
       //   `.parts`（分片目录）、`.tmp` / `.part`（半成品）一起清。
       //   以前失败一次下载就留几个 GB，而模型清单仍显示「未安装」，用户手动删目录也清不掉。
@@ -982,8 +1023,28 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     }
   }
 
+  /** 随包模型目录（安装版 resources/models，开发期仓库 resources/models） */
+  function bundledModelsDir() {
+    const cands = [];
+    try { if (process.resourcesPath) cands.push(path.join(process.resourcesPath, 'models')); } catch (_) {}
+    cands.push(path.join(__dirname, '..', 'resources', 'models'));
+    for (const c of cands) {
+      try { if (fs.statSync(c).isDirectory()) return c; } catch (_) {}
+    }
+    return '';
+  }
+
   /** 解包型条目「装没装好」的统一判据：marker 在 → 装好；否则看目录体积兜底。 */
   function unpackEntryState(m, dest) {
+    // 数据根里没有、但**随包带了一份**（spec.bundled = resources/models 下的相对目录）：
+    // 功能本身可用，不该显示「未安装」。典型：乐器组标签模型 27MB，随包兜底 + 可下载更新。
+    if (m.bundled && m.unpackMarker && !fs.existsSync(path.join(dest, m.unpackMarker))) {
+      const bd = bundledModelsDir();
+      if (bd && fs.existsSync(path.join(bd, m.bundled, m.unpackMarker))) {
+        const size = (() => { try { let s = 0; const walk = (q) => { const st = fs.statSync(q); if (st.isFile()) s += st.size; else for (const f of fs.readdirSync(q)) walk(path.join(q, f)); }; walk(path.join(bd, m.bundled)); return s; } catch (_) { return 0; } })();
+        return { exists: true, size, bundled: true };
+      }
+    }
     if (m.unpackMarker && fs.existsSync(path.join(dest, m.unpackMarker))) {
       const size = (() => { try { let s = 0; const walk = (q) => { const st = fs.statSync(q); if (st.isFile()) s += st.size; else for (const f of fs.readdirSync(q)) { if (f === '.parts') continue; walk(path.join(q, f)); } }; walk(dest); return s; } catch (e) { return 0; } })();
       return { exists: true, size };

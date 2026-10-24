@@ -49,16 +49,11 @@ AUDIOSET_TO_GROUPS = {
     "Synthesizer": ["synth_lead", "synth_pad"], "Sampler": ["synth_pad"],
 }
 
-MODEL_DIRS = {
-    "audioset": (
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "resources", "models", "audio-tagger"),
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "models", "audio-tagger"),
-    ),
-    "ced": (
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "resources", "models", "audio-tagger-ced"),
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "models", "audio-tagger-ced"),
-    ),
-}
+#: 随包分发的落点（安装版 resources/models/audio-tagger[-ced]）
+BUNDLED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "..", "resources", "models", "audio-tagger")
+BUNDLED_CED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               "..", "resources", "models", "audio-tagger-ced")
 ENV_DIRS = {"audioset": "FUFUMIDI_AUDIO_TAGGER_DIR", "ced": "FUFUMIDI_CED_TAGGER_DIR"}
 
 
@@ -69,12 +64,36 @@ def _model_file(d):
     return ""
 
 
+def model_dir_candidates(kind="audioset"):
+    """按优先级列出模型目录。
+
+    AudioSet（2026-10-24 起「下载来的副本优先」）：
+      ① FUFUMIDI_AUDIO_TAGGER_DIR
+      ② <FUFUMIDI_MODELS_DIR>/audio-tagger（资源中心下载副本）
+      ③ resources/models/audio-tagger（随包兜底）
+      ④ 源码仓库 models/audio-tagger
+    CED-Small 同构，目录名 audio-tagger-ced / FUFUMIDI_CED_TAGGER_DIR。
+    """
+    k = "ced" if kind == "ced" else "audioset"
+    out = []
+    env = os.environ.get(ENV_DIRS[k])
+    if env:
+        out.append(env)
+    models_dir = os.environ.get("FUFUMIDI_MODELS_DIR") or ""
+    if models_dir:
+        out.append(os.path.join(models_dir, "audio-tagger-ced" if k == "ced" else "audio-tagger"))
+    out.append(BUNDLED_CED_DIR if k == "ced" else BUNDLED_DIR)
+    out.append(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "..", "..", "models", "audio-tagger-ced" if k == "ced" else "audio-tagger"))
+    return out
+
+
 def find_model_dir(kind="audioset"):
-    env = os.environ.get(ENV_DIRS.get(kind, "FUFUMIDI_AUDIO_TAGGER_DIR"))
-    if env and os.path.isdir(env):
-        return env
-    for c in MODEL_DIRS.get(kind, ()):
-        c = os.path.abspath(c)
+    for c in model_dir_candidates(kind):
+        try:
+            c = os.path.abspath(c)
+        except Exception:
+            continue
         if _model_file(c):
             return c
     return ""
