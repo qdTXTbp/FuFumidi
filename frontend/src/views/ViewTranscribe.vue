@@ -1580,6 +1580,9 @@ async function decodeDuration(it) {
 }
 async function runBatch() {
   if (running.value) return;
+  // 当前界面是用户刚选的最终设置（例如 Medium）：先写回当前队列，
+  // 否则 runQueue 里的 loadQueueSettings(q) 会用旧快照把 Large 切回来。
+  saveQueue();
   if (!isDesktop) { toast(t('请使用桌面版 FuFumidi 进行转录'), 'warn'); return; }
   const activeQ = currentQueue();
   const chain = !!chainMode.value;
