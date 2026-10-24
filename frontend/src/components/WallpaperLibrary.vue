@@ -5,10 +5,14 @@ import { computed, onMounted, ref } from 'vue';
 import Icon from './Icon.vue';
 import { useAppStore } from '../stores/app';
 import { useSettingsStore } from '../stores/settings';
+import { useVizBgStore } from '../stores/vizbg';
 import { t } from '../core/i18n.js';
 
 const app = useAppStore();
 const settingsStore = useSettingsStore();
+const vizBg = useVizBgStore();
+const props = defineProps({ target: { type: String, default: 'app' } });
+const vizTarget = computed(() => props.target === 'viz');
 const bridge = window.fuBridge;
 // 同一会话内切走再回来不重新拉取（墙纸列表/文件夹扫描只在首开与手动刷新时执行）
 let _repoMemo = null, _folderMemo = null, _memoAt = 0;
@@ -39,12 +43,12 @@ const allItems = computed(() => {
   ];
   const remote = repo.value.filter(x => !x.local && x.video).map(x => ({ ...x, kind: 'video', local: false, _src: 'repo' }));
   const on = online.value.map(x => ({ ...x, local: false, _src: 'online' }));
-  if (source.value === 'repo') return remote;
+  if (source.value === 'repo') return remote.concat(repo.value.filter(x => x.local));
   if (source.value === 'online') return on;
   return local;
 });
 const shown = computed(() => allItems.value.filter(x => kindFilter.value === 'all' || kindOf(x) === kindFilter.value));
-const currentName = computed(() => String((settingsStore.settings && settingsStore.settings.custom_wallpaper) || '').replace(/^.*[\\/]/, ''));
+const currentName = computed(() => vizTarget.value ? (vizBg.wallName || (vizBg.bg.mode === 'image' ? String(vizBg.bg.path || '').replace(/^.*[\\/]/, '') : '')) : String((settingsStore.settings && settingsStore.settings.custom_wallpaper) || '').replace(/^.*[\\/]/, ''));
 
 async function loadRepo() {
   if (!bridge || !bridge.wallpaper) return;
@@ -71,6 +75,12 @@ async function searchOnline(more = false) {
 }
 function pickSource(s) { source.value = s; if (s === 'online' && !online.value.length) searchOnline(false); }
 async function applyLocal(path, kind) {
+  if (vizTarget.value) {
+    if (kind === 'image') await vizBg.setImagePath(path);
+    else await vizBg.setWall(path);
+    app.toast(t('已应用到音符瀑布背景'), 'ok');
+    return;
+  }
   const patch = { custom_wallpaper: path, wallpaper_enabled: true, wallpaper_kind: kind };
   settingsStore.setLocal(patch);
   try { await settingsStore.save(patch); } catch (e) {}
@@ -110,7 +120,10 @@ async function addFolder() {
 function removeFolder(dir) { folderPaths.value = folderPaths.value.filter(x => x !== dir); saveFolders(); scanFolders(); }
 function seekPreview(e) { try { if (e && e.target && e.target.readyState >= 1) e.target.currentTime = 0.5; } catch (err) {} }
 function openSite(url) { try { if (bridge && bridge.openExternal) bridge.openExternal(url); else window.open(url, '_blank'); } catch (e) {} }
-function isCurrent(x) { return !!(settingsStore.settings && settingsStore.settings.custom_wallpaper === (x.image || x.video || x.path)); }
+function isCurrent(x) {
+  if (vizTarget.value) return !!(vizBg.bg.wallPath && vizBg.bg.wallPath === (x.video || x.path)) || !!(vizBg.bg.path && vizBg.bg.path === (x.image || x.path));
+  return !!(settingsStore.settings && settingsStore.settings.custom_wallpaper === (x.image || x.video || x.path));
+}
 onMounted(async () => {
   await settingsStore.load();
   const fresh = _memoAt && Date.now() - _memoAt < 5 * 60 * 1000;

@@ -57,14 +57,34 @@ function registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEn
         filters: [{ name: 'PDF', extensions: ['pdf'] }],
       });
       if (r.canceled || !r.filePath) return { ok: false, canceled: true };
-      const data = await win.webContents.printToPDF({
-        printBackground: true,
-        pageSize: 'A4',
-        landscape: false,
-        margins: { marginType: 'default' },
-      });
-      await fs.promises.writeFile(r.filePath, data);
-      return { ok: true, path: r.filePath };
+      // 只在打印时把页面裁成乐谱本身：白底、黑谱、隐藏全部应用 UI，避免把深色工作区整页打进 PDF。
+      const printCss = `@media print {
+        @page { size: A4 portrait; margin: 12mm; }
+        html, body { background: #fff !important; }
+        body * { visibility: hidden !important; }
+        .score-view, .score-view * { visibility: visible !important; }
+        .score-view { position: absolute !important; inset: 0 auto auto 0 !important; width: 100% !important; height: auto !important; padding: 0 !important; gap: 0 !important; background: #fff !important; }
+        .score-head, .score-toolbar, .score-subbar, .score-legend { display: none !important; }
+        .score-scroll { position: static !important; overflow: visible !important; height: auto !important; max-height: none !important; padding: 0 !important; border: 0 !important; background: #fff !important; }
+        #abcScore { color: #000 !important; background: #fff !important; overflow: visible !important; }
+        #abcScore svg { display: block !important; width: 100% !important; height: auto !important; max-width: 100% !important; background: #fff !important; }
+        #abcScore svg * { fill: #000 !important; stroke: #000 !important; }
+      }`;
+      let cssKey = '';
+      try { cssKey = await win.webContents.insertCSS(printCss, { cssOrigin: 'user' }); } catch (e) {}
+      try {
+        const data = await win.webContents.printToPDF({
+          printBackground: true,
+          pageSize: 'A4',
+          landscape: false,
+          margins: { marginType: 'none' },
+          preferCSSPageSize: true,
+        });
+        await fs.promises.writeFile(r.filePath, data);
+        return { ok: true, path: r.filePath };
+      } finally {
+        if (cssKey) { try { await win.webContents.removeInsertedCSS(cssKey); } catch (e) {} }
+      }
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
 
@@ -91,6 +111,44 @@ function registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEn
      两件事都要做 —— 先标记 canceled，再 kill 子进程：只标记要等当前页跑完才停，
      只 kill 的话 onDone 会带回"引擎退出码 1"，界面会把它当失败弹错误。 */
   let activeRun = null;
+  // 乐谱 PDF：前端把已经栅格化成 A4 比例的谱面 PNG 页传进来，PIL 直接合成 PDF。
+  // 不再对主窗口 printToPDF，避免把深色 UI / 侧栏 / 播放条一起打进 PDF。
+  ipcMain.handle('score:exportPdfPages', async (_evt, opts) => {
+    try {
+      const pages = Array.isArray(opts && opts.pages) ? opts.pages.filter((x) => typeof x === 'string' && x.length > 32) : [];
+      if (!pages.length) return { ok: false, error: '没有可导出的乐谱页' };
+      const r = await dialog.showSaveDialog({
+        title: '导出乐谱 PDF',
+        defaultPath: path.join(app.getPath('downloads'), (opts.name || 'score') + '.pdf'),
+        filters: [{ name: 'PDF', extensions: ['pdf'] }],
+      });
+      if (r.canceled || !r.filePath) return { ok: false, canceled: true };
+      const tmpDir = path.join(Paths.tempDir(), 'fufumidi-score-pdf');
+      fs.mkdirSync(tmpDir, { recursive: true });
+      for (let i = 0; i < pages.length; i++) {
+        const b64 = String(pages[i]).split(',').pop() || '';
+        fs.writeFileSync(path.join(tmpDir, 'page-' + String(i + 1).padStart(3, '0') + '.png'), Buffer.from(b64, 'base64'));
+      }
+      const code = 'import glob, os, json\n' +
+        'from PIL import Image, ImageOps\n' +
+        'files = sorted(glob.glob(os.path.join(r' + JSON.stringify(tmpDir) + ', "page-*.png")))\n' +
+        'imgs = []\n' +
+        'for f in files:\n' +
+        '    im = Image.open(f).convert("RGB")\n' +
+        '    im = ImageOps.pad(im, (1240, 1754), color="white", method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))\n' +
+        '    imgs.append(im)\n' +
+        'if not imgs:\n' +
+        '    print(json.dumps({"ok": False, "err": "no pages"}))\n' +
+        'else:\n' +
+        '    imgs[0].save(r' + JSON.stringify(r.filePath) + ', "PDF", resolution=150, save_all=True, append_images=imgs[1:])\n' +
+        '    print(json.dumps({"ok": True, "out": r' + JSON.stringify(r.filePath) + '}))';
+      const rr = await runEngineInline(code);
+      try { for (const f of fs.readdirSync(tmpDir)) fs.unlinkSync(path.join(tmpDir, f)); } catch (e) {}
+      if (rr && rr.ok) return { ok: true, path: r.filePath };
+      return { ok: false, error: String((rr && rr.out) || 'PDF 合成失败').slice(-400) };
+    } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+  });
+
   ipcMain.handle('score:cancel', () => {
     if (!activeRun) return { ok: false, error: '没有正在进行的识别' };
     activeRun.canceled = true;

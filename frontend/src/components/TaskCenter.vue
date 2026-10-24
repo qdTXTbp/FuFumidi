@@ -91,6 +91,7 @@ onMounted(async () => {
     if (tasks && tasks.onUpdate && !off) off = tasks.onUpdate((ev) => tasksStore.applyEvent(ev));
   } catch (e) {}
   if (!_ball) defaultBall();
+  pos.value = clampBall(pos.value.x, pos.value.y);
   const onResize = () => { pos.value = clampBall(pos.value.x, pos.value.y); };
   window.addEventListener('resize', onResize);
   resizeOff = onResize;
