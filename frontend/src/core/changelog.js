@@ -6,6 +6,7 @@ import { cmpVersion } from './version.js';
 const CHANGELOG = {
   // 6.2.8：长音频批量/进度、模型选择保持、队列拖动、并集探测与转换页布局修复。
   '6.2.8': [
+    '转录时长按模型窗口长度 + 实测单窗口耗时估算，单曲、队列和多队列统一汇总。',
     '长音频 Large 模型固定 batch=1，逐块推进度；Medium/Small 保留 batch=4，避免首块长时间 0%。',
     '开始转录前把当前界面设置写回队列快照，手动选 Medium 后不会再被旧队列参数切回 Large。',
     '音频标签模型选择完整传入引擎（audio_tagger / probe_segment_sec），worker 与 spawn 回退路径都补齐。',
