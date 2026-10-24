@@ -59,6 +59,11 @@ function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngi
         denoise_mode: '--denoise-mode',
         // 识别片段长度：回退到命令行这条路径也要带，否则两条路径表现不一致
         segment_sec: '--segment-sec',
+        // 音频标签模型 / 分段探测长度：worker 路径走 engine.js map，spawn 回退路径也必须带上，
+        // 否则一旦 worker 失败回退，用户选的 CED-Small 会悄悄退回 AudioSet。
+        audio_tagger: '--audio-tagger',
+        probe_segment_sec: '--probe-segment-sec',
+        audio_tagger_window_sec: '--audio-tagger-window-sec',
       };
       for (const [k, flag] of Object.entries(map)) {
         if (cfg[k] !== undefined && cfg[k] !== null) args.push(flag, String(cfg[k]));

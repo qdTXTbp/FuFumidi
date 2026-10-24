@@ -1081,8 +1081,10 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                 if _tag_kind not in ("audioset", "ced"):
                     _tag_kind = "audioset"
                 import audio_tagger as _at
+                _requested_tag_kind = _tag_kind
                 if not _at.available(_tag_kind):
                     _tag_kind = "audioset" if _at.available("audioset") else _tag_kind
+                    _log(log_cb, "音频标签模型 %s 不可用，回退 %s" % (_requested_tag_kind, _tag_kind))
                 _tg = _at.get_tagger(_tag_kind) if _at.available(_tag_kind) else None
                 if _tg is not None:
                     _x, _sr = _sfp.read(wav_tmp, dtype="float32", always_2d=False)
@@ -1119,6 +1121,7 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                         _seg_plan = {"duration": _dur, "segments": _segs, "skipped_sec": 0.0}
                         _seg_pcm, _seg_sr = _x, _sr
                         constrain = None
+                        _log(log_cb, "分段探测使用音频标签模型：请求=%s 实际=%s" % (_requested_tag_kind, _tag_kind))
                         _log(log_cb, "分段探测完成（探测器=音频标签模型[%s]，%.1fs）：%d 段；稳定组=%s；按段约束已启用"
                              % (_tag_kind, time.perf_counter() - _t_segprobe,
                                 len(_segs), " / ".join(_keep) if _keep else "无"))
@@ -1261,10 +1264,16 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                             _torch_probe.cuda.empty_cache()
                     except Exception:
                         pass
-        if not constrain:
+        if _per_seg_constraints is not None:
+            _active = [i + 1 for i, g in enumerate(_per_seg_constraints) if g]
+            _log(log_cb, "分段乐器组约束已启用：第 %s 段（每段允许 %s）"
+                 % (" / ".join(str(i) for i in _active) if _active else "无",
+                    "；".join("段%d=%s" % (i + 1, " / ".join(g)) for i, g in enumerate(_per_seg_constraints) if g)))
+        elif not constrain:
             _log(log_cb, "未限定乐器组：模型自由判定（同一段旋律可能被写成多种音色）")
-        if constrain:
+        else:
             _log(log_cb, "旋律乐器组已锁定：" + " / ".join(constrain) + "（模型不会输出其它乐器）")
+
         t0 = time.perf_counter()
         data = None
         # ★ CUDA 运行期错误只重试一次 CPU（issue #20 的兜底：算力/驱动问题不该让整次转录失败）

@@ -188,6 +188,15 @@ def _resolve_params(args, mode):
     # 逗号分隔的组名=直接作为硬约束交给模型；不传=不干预。
     _mi = getattr(args, "muscriptor_instruments", None)
     if _mi: p["muscriptor_instruments"] = str(_mi)
+    # 音频标签模型 / 自动探测（分段）：CLI 与 worker 两条路径都必须进 params，
+    # 否则界面选的 CED-Small 会被引擎当成默认 AudioSet。
+    _at = getattr(args, "audio_tagger", None)
+    if _at: p["audio_tagger"] = str(_at)
+    _pss = getattr(args, "probe_segment_sec", None)
+    if _pss is not None: p["probe_segment_sec"] = float(_pss)
+    _atw = getattr(args, "audio_tagger_window_sec", None)
+    if _atw is not None: p["audio_tagger_window_sec"] = float(_atw)
+    if getattr(args, "audio_tagger_whole_song", False): p["audio_tagger_whole_song"] = True
     # 超长音符上限（仅 muscriptor 用到）：默认 15 秒由引擎侧兜底；
     # 这里显式取出，命令行与 worker 两条路径才都能覆盖它。
     _mh = getattr(args, "max_note_hold", None)
