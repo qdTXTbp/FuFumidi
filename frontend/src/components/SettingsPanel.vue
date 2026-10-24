@@ -451,13 +451,17 @@ function toggleCloseToTray() {
   app.toast(closeToTray.value ? t('最小化 / 关闭将隐藏到托盘后台播放') : t('关闭按钮将直接退出'), 'ok');
 }
 /* ---------------- 数据目录（依赖 / 环境 / 模型 / 缓存的统一落点） ---------------- */
-const dataRoot = reactive({ root: '', reason: '', installRoot: '', entries: [], busy: false });
+const dataRoot = reactive({ root: '', reason: '', from: '', lastRoot: '', installRoot: '', entries: [], busy: false });
 const REASON_TEXT = {
   'install-dir': t('工具目录（默认）'),
   'configured': t('自定义目录'),
   'configured-not-writable': t('自定义目录不可写，已回退'),
   'install-dir-not-writable': t('工具目录不可写，已回退到用户数据目录'),
   'no-writable-location': t('未找到可写位置，已回退到用户数据目录'),
+  // 2026-10-24：装到 Program Files 后旧数据还在便携目录里 —— 现在会自动认领回来，
+  // 这里如实告诉用户「用的是旧位置」，否则他会以为数据被清空了。
+  'adopted-previous': t('已沿用原数据目录（旧版本位置）'),
+  'user-data': t('用户数据目录（已有数据）'),
 };
 async function loadDataRoot() {
   try {
@@ -466,6 +470,8 @@ async function loadDataRoot() {
     if (r && r.ok) {
       dataRoot.root = r.root || '';
       dataRoot.reason = REASON_TEXT[r.reason] || r.reason || '';
+      dataRoot.from = r.from || '';
+      dataRoot.lastRoot = r.lastRoot || '';
       dataRoot.installRoot = r.installRoot || '';
       dataRoot.entries = Array.isArray(r.entries) ? r.entries : [];
     }
