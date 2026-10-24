@@ -205,7 +205,7 @@ function iconOf(k) { return KIND_ICON[k] || 'task'; }
 .tc-edge.left { left: 64px; border-radius: 0 var(--r-lg) var(--r-lg) 0; border-right: 1px solid var(--hairline); }
 .tc-edge.right { right: 0; border-radius: var(--r-lg) 0 0 var(--r-lg); border-left: 1px solid var(--hairline); }
 .tc-edge:hover { color: var(--accent-sky); }
-.tc-edge-badge { position: absolute; top: 4px; right: 2px; min-width: 14px; height: 14px; padding: 0 3px; border-radius: var(--r-sm); background: var(--accent-sapphire); color: var(--on-sapphire); font-size: 10px; line-height: 14px; }
+.tc-edge-badge { position: absolute; top: 4px; right: 2px; min-width: 14px; height: 14px; padding: 0 3px; border-radius: var(--r-sm); background: var(--accent-sapphire); color: var(--on-sapphire); font-size: var(--fs-xs); line-height: 14px; }
 .tc-panel { position: absolute; right: 0; bottom: 46px; width: 380px; max-height: 60vh; overflow-y: auto; padding: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-2); box-shadow: var(--shadow-lg); }
 .tc-panel.align-left { right: auto; left: 0; }
 .tc-panel.below { bottom: auto; top: 46px; }

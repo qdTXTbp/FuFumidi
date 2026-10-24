@@ -476,9 +476,9 @@ async function rasterizeSvg(svg, scale, tileH) {
   // 导出必须是白底黑谱：应用主题是深色，直接把 SVG 画到 canvas 上会得到黑谱 + 深底。
   const clone = svg.cloneNode(true);
   clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
-  clone.setAttribute('style', 'color:#000;background:#fff');
+  clone.setAttribute('style', 'color:#000;background:#fff'); /* ui-tokens-allow 导出克隆用纸白/墨黑，不随主题变 */
   const style = document.createElementNS('http://www.w3.org/2000/svg', 'style');
-  style.textContent = '*{fill:#000 !important;stroke:#000 !important;background:transparent !important;}';
+  style.textContent = '*{fill:#000 !important;stroke:#000 !important;background:transparent !important;}'; /* ui-tokens-allow 导出 SVG 双色描边：墨黑谱线 + 透明底 */
   clone.insertBefore(style, clone.firstChild);
   const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(clone)], { type: 'image/svg+xml' }));
   const img = new Image();
@@ -520,7 +520,7 @@ async function rasterizeSvg(svg, scale, tileH) {
     cv.height = Math.max(1, Math.round(sh * scale));
     const g = cv.getContext('2d');
     g.setTransform(scale, 0, 0, scale, 0, 0);
-    g.fillStyle = '#ffffff'; g.fillRect(0, 0, natW, sh);
+    g.fillStyle = '#ffffff'; g.fillRect(0, 0, natW, sh); /* ui-tokens-allow PNG 导出先铺纸白底 */
     g.drawImage(img, 0, sy, natW, sh, 0, 0, natW, sh);
     out.push(cv.toDataURL('image/png'));
   }
@@ -535,7 +535,7 @@ async function pageHasInk(dataUrl) {
     const cv = document.createElement('canvas');
     cv.width = 96; cv.height = 136;
     const g = cv.getContext('2d', { willReadFrequently: true });
-    g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height);
+    g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height); /* ui-tokens-allow PNG 导出纸白底 */
     g.drawImage(img, 0, 0, cv.width, cv.height);
     const d = g.getImageData(0, 0, cv.width, cv.height).data;
     for (let k = 0; k < d.length; k += 4) {
@@ -1066,19 +1066,19 @@ onBeforeUnmount(() => {
 .split-body svg { max-width: 100%; display: block; margin: 0 auto; background: var(--canvas); }
 
 /* ===== 6.2.0 乐谱页重排：页头 / 模式 / 动作 / 谱面 ===== */
-.score-view { display: flex; flex-direction: column; height: 100%; gap: 12px; padding: 12px 16px 10px; background: transparent; min-height: 0; }
-.score-head { display: flex; align-items: center; gap: 14px; padding: 15px 18px; border: 1px solid var(--hairline); border-radius: var(--r-lg); background: linear-gradient(120deg, color-mix(in srgb, var(--accent-sapphire) 15%, var(--surface)), color-mix(in srgb, var(--accent-sky) 5%, var(--surface)) 58%, var(--surface)); box-shadow: var(--shadow-sm); flex: none; }
-.score-emblem { width: 46px; height: 46px; flex: none; border-radius: 14px; display: grid; place-items: center; color: var(--accent-sky); background: color-mix(in srgb, var(--accent-sky) 12%, transparent); border: 1px solid color-mix(in srgb, var(--accent-sky) 24%, transparent); }
+.score-view { display: flex; flex-direction: column; height: 100%; gap: var(--sp-3); padding: 12px 16px 10px; background: transparent; min-height: 0; }
+.score-head { display: flex; align-items: center; gap: var(--sp-4); padding: 15px 18px; border: 1px solid var(--hairline); border-radius: var(--r-lg); background: linear-gradient(120deg, color-mix(in srgb, var(--accent-sapphire) 15%, var(--surface)), color-mix(in srgb, var(--accent-sky) 5%, var(--surface)) 58%, var(--surface)); box-shadow: var(--shadow-sm); flex: none; }
+.score-emblem { width: 46px; height: 46px; flex: none; border-radius: var(--r-lg); display: grid; place-items: center; color: var(--accent-sky); background: color-mix(in srgb, var(--accent-sky) 12%, transparent); border: 1px solid color-mix(in srgb, var(--accent-sky) 24%, transparent); }
 .score-head-copy { min-width: 0; flex: 1; }
 .score-kicker { font-size: var(--fs-xs); letter-spacing: .16em; color: var(--accent-sky); margin-bottom: 1px; }
-.score-title-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.score-title-row { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
 .score-title-row h1 { margin: 0; font-size: var(--fs-xl); line-height: 1.2; color: var(--text); }
 .score-mode-badge { padding: 1px 8px; border-radius: var(--r-pill); border: 1px solid color-mix(in srgb, var(--accent-sky) 30%, transparent); color: var(--accent-sky); background: color-mix(in srgb, var(--accent-sky) 8%, transparent); font-size: var(--fs-xs); }
 .score-badge-soft { padding: 1px 8px; border-radius: var(--r-pill); border: 1px solid var(--hairline); color: var(--text3); font-size: var(--fs-xs); }
 .score-head-copy p { margin: 3px 0 0; color: var(--text2); font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.score-head-actions { display: flex; align-items: center; gap: 8px; flex: none; }
-.score-toolbar { position: relative; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 8px 10px; border: 1px solid var(--hairline); border-radius: var(--r-lg); background: color-mix(in srgb, var(--surface) 72%, transparent); flex: none; }
-.score-field { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.score-head-actions { display: flex; align-items: center; gap: var(--sp-2); flex: none; }
+.score-toolbar { position: relative; display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; padding: 8px 10px; border: 1px solid var(--hairline); border-radius: var(--r-lg); background: color-mix(in srgb, var(--surface) 72%, transparent); flex: none; }
+.score-field { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
 .score-label { font-size: var(--fs-xs); color: var(--text3); white-space: nowrap; }
 .score-track .select-input { min-width: 150px; max-width: 220px; }
 .score-modes { display: flex; align-items: center; gap: 2px; padding: 3px; border: 1px solid var(--hairline); border-radius: var(--r-pill); background: color-mix(in srgb, var(--canvas) 45%, transparent); }
@@ -1086,11 +1086,11 @@ onBeforeUnmount(() => {
 .score-mode:hover { color: var(--text); background: color-mix(in srgb, var(--accent-sky) 8%, transparent); }
 .score-mode.on { color: var(--text); background: color-mix(in srgb, var(--accent-sapphire) 24%, var(--surface)); font-weight: 600; }
 .score-fontsize { height: 28px; margin-left: 4px; width: 88px; }
-.score-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+.score-actions { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; margin-left: auto; }
 .score-pop-wrap { position: relative; }
 .score-sep { width: 1px; height: 20px; background: var(--hairline); margin: 0 2px; }
-.score-subbar { display: flex; align-items: center; gap: 10px; padding: 0 4px; flex: none; min-height: 28px; }
-.score-live { display: inline-flex; align-items: center; gap: 7px; min-width: 0; color: var(--text2); font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.score-subbar { display: flex; align-items: center; gap: var(--sp-2); padding: 0 4px; flex: none; min-height: 28px; }
+.score-live { display: inline-flex; align-items: center; gap: var(--sp-2); min-width: 0; color: var(--text2); font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .score-live .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--text3); flex: none; }
 .score-live .pulse.on { background: var(--success-text); animation: pulse 1.4s var(--ease-in-out) infinite; }
 .score-spacer { flex: 1; }
@@ -1115,17 +1115,17 @@ onBeforeUnmount(() => {
 
 /* 乐谱分页预览：单页查看 + 缩略图条 */
 .pv-viewer-card { width: min(1080px, 96vw); max-height: 92vh; }
-.pv-title { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.pv-title { display: flex; align-items: baseline; gap: var(--sp-2); min-width: 0; }
 .pv-title small { color: var(--text3); font-family: var(--font-num); font-size: var(--fs-xs); }
-.pv-head-actions { display: flex; align-items: center; gap: 6px; }
-.pv-viewer { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; gap: 10px; padding: 14px 8px; background: color-mix(in srgb, var(--canvas) 60%, transparent); border-radius: var(--r-md); }
-.pv-paper { flex: 1; min-width: 0; height: 100%; max-height: 66vh; display: flex; align-items: center; justify-content: center; overflow: auto; background: #fff; border-radius: var(--r-sm); box-shadow: 0 10px 30px rgba(0,0,0,.18); padding: 10px; }
+.pv-head-actions { display: flex; align-items: center; gap: var(--sp-2); }
+.pv-viewer { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; gap: var(--sp-2); padding: 14px 8px; background: color-mix(in srgb, var(--canvas) 60%, transparent); border-radius: var(--r-md); }
+.pv-paper { flex: 1; min-width: 0; height: 100%; max-height: 66vh; display: flex; align-items: center; justify-content: center; overflow: auto; background: #fff; border-radius: var(--r-sm); box-shadow: 0 10px 30px rgba(0,0,0,.18); padding: 10px; } /* ui-tokens-allow 分页预览纸面（导出所见即所得，固定纸白） */
 .pv-paper img { max-width: 100%; max-height: 64vh; width: auto; height: auto; object-fit: contain; display: block; }
 .pv-arrow { flex: none; width: 34px; height: 46px; border: 1px solid var(--hairline); border-radius: var(--r-md); background: color-mix(in srgb, var(--surface) 80%, transparent); color: var(--text2); display: grid; place-items: center; cursor: pointer; }
 .pv-arrow:hover:not(:disabled) { color: var(--accent-sky); border-color: color-mix(in srgb, var(--accent-sky) 35%, var(--hairline)); }
 .pv-arrow:disabled { opacity: .3; cursor: default; }
-.pv-thumbs { flex: none; display: flex; gap: 8px; overflow-x: auto; padding: 8px 2px 2px; }
-.pv-thumb { position: relative; width: 74px; height: 100px; flex: none; padding: 0; border: 1px solid var(--hairline); border-radius: var(--r-sm); overflow: hidden; background: #fff; cursor: pointer; opacity: .72; }
+.pv-thumbs { flex: none; display: flex; gap: var(--sp-2); overflow-x: auto; padding: 8px 2px 2px; }
+.pv-thumb { position: relative; width: 74px; height: 100px; flex: none; padding: 0; border: 1px solid var(--hairline); border-radius: var(--r-sm); overflow: hidden; background: #fff; cursor: pointer; opacity: .72; } /* ui-tokens-allow 缩略图纸面 */
 .pv-thumb.on { border-color: var(--accent-sky); opacity: 1; box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-sky) 35%, transparent); }
 .pv-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .pv-thumb span { position: absolute; right: 3px; bottom: 3px; min-width: 16px; height: 16px; line-height: 16px; border-radius: var(--r-sm); background: color-mix(in srgb, var(--canvas) 72%, transparent); color: var(--text2); font: var(--fs-xs) var(--font-num); text-align: center; }
