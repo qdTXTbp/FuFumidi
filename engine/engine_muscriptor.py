@@ -1116,18 +1116,22 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                         except Exception:
                             pass
                     _allowed, _keep = _sp.build_constraints(_per_groups, max_groups=12)
-                    if any(_allowed):
-                        _per_seg_constraints = _allowed
-                        _seg_plan = {"duration": _dur, "segments": _segs, "skipped_sec": 0.0}
-                        _seg_pcm, _seg_sr = _x, _sr
-                        constrain = None
+                    _union = []
+                    for _pg in _per_groups:
+                        for _g in (_pg or []):
+                            if _g not in _union:
+                                _union.append(_g)
+                    if _union:
+                        constrain = _union
                         _log(log_cb, "分段探测使用音频标签模型：请求=%s 实际=%s" % (_requested_tag_kind, _tag_kind))
-                        _log(log_cb, "分段探测完成（探测器=音频标签模型[%s]，%.1fs）：%d 段；稳定组=%s；按段约束已启用"
+                        _log(log_cb, "分段探测完成（探测器=音频标签模型[%s]，%.1fs）：%d 段；稳定组=%s；全曲乐器组并集=%s"
                              % (_tag_kind, time.perf_counter() - _t_segprobe,
-                                len(_segs), " / ".join(_keep) if _keep else "无"))
+                                len(_segs), " / ".join(_keep) if _keep else "无",
+                                " / ".join(_union)))
                     else:
                         constrain = None
                         _log(log_cb, "分段探测未得到任何乐器组，本次不限制")
+                    _mode = "segprobe_done"
                     _mode = "segprobe_done"
                 else:
                     _log(log_cb, "分段探测不可用：音频标签模型未安装，本次不限制")
