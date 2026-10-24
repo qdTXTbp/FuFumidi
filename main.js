@@ -437,7 +437,12 @@ function engineDir() {
 async function prepareDataRoot() {
   let pending = [];
   try { pending = Paths.pendingMigration(); } catch (e) { console.warn('[data-root] 检查失败:', e && e.message); }
-  if (!pending.length) { console.log('[data-root] ' + Paths.dataRoot()); return; }
+  if (!pending.length) {
+    // 记下本次用的数据根：下次换安装位置/重装时靠它把旧目录找回来（见 paths.js rememberRoot）
+    try { Paths.rememberRoot(); } catch (_) {}
+    console.log('[data-root] ' + Paths.dataRoot() + ' (from=' + Paths.rootFrom() + ')');
+    return;
+  }
   const totalBytes = pending.reduce((a, b) => a + (b.size || 0), 0);
   const mb = Math.ceil(totalBytes / 1048576);
   let splash = null;
@@ -476,7 +481,8 @@ async function prepareDataRoot() {
     try { Paths.useLegacyFor(f.name, Paths.legacyPathOf(f.name)); } catch (_) {}
   }
   if (splash && !splash.isDestroyed()) { try { splash.destroy(); } catch (_) {} }
-  console.log('[data-root] root=' + Paths.dataRoot() + ' moved=[' + rep.moved.join(',') + '] failed=' + JSON.stringify(rep.failed));
+  try { Paths.rememberRoot(); } catch (_) {}
+  console.log('[data-root] root=' + Paths.dataRoot() + ' (from=' + Paths.rootFrom() + ') moved=[' + rep.moved.join(',') + '] failed=' + JSON.stringify(rep.failed));
 }
 function dataRootSplashHtml() {
   return '<!doctype html><html><head><meta charset="utf-8"><title>FuFumidi</title><style>'

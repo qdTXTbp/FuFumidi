@@ -1,7 +1,7 @@
 {
   "name": "fufumidi",
   "productName": "FuFumidi",
-  "version": "6.2.4",
+  "version": "6.2.5",
   "description": "离线 MIDI 播放 / 编辑 / 可视化 / 分析 / 乐谱 / 转录（音频转 MIDI）一体工具",
   "main": "main.js",
   "author": {
@@ -31,7 +31,7 @@
     "audit:ui-tokens": "node scripts/check-ui-tokens.mjs",
     "test:ui": "node --test \"frontend/tests/*.test.js\"",
     "test:e2e": "npm run build:ui && node scripts/e2e/run.mjs",
-    "test": "npm run test:rust && npm run test:ui && npm run test:plugin && npm run test:separate && npm run test:download && npm run test:autosave && npm run test:export && npm run test:taskcenter && npm run test:quality && npm run test:storage && npm run test:update-sign && npm run test:update-util && npm run test:platform && npm run test:plugin-host && npm run test:dawproject && npm run check:version && npm run test:usermeta && npm run test:speedtest && npm run test:feedback && npm run test:netlify && npm run test:worker",
+    "test": "npm run test:rust && npm run test:ui && npm run test:plugin && npm run test:separate && npm run test:download && npm run test:autosave && npm run test:export && npm run test:taskcenter && npm run test:quality && npm run test:storage && npm run test:update-sign && npm run test:update-util && npm run test:platform && npm run test:dataroot && npm run test:plugin-host && npm run test:dawproject && npm run check:version && npm run test:usermeta && npm run test:speedtest && npm run test:feedback && npm run test:netlify && npm run test:worker",
     "test:worker": "npm --prefix cloud-sync/worker run test:worker",
     "test:plugin": "node --test scripts/test-plugin-sandbox.mjs",
     "test:download": "node --test scripts/test-fast-download.mjs",
@@ -43,6 +43,7 @@
     "test:update-sign": "node --test scripts/test-update-sign.mjs",
     "test:omr": "node scripts/test-engine-omr.mjs",
     "test:platform": "node --test scripts/test-platform.mjs",
+    "test:dataroot": "node --test scripts/test-data-root-pick.mjs scripts/test-data-root-io.mjs",
     "test:plugin-host": "node --test scripts/test-plugin-host.mjs",
     "test:update-util": "node --test scripts/test-update-util.mjs",
     "test:dawproject": "node scripts/validate-dawproject.mjs",
