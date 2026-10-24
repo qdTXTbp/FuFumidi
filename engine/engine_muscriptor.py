@@ -1067,6 +1067,10 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         _mode, _groups = instrument_probe.parse_mode(params.get("muscriptor_instruments"))
         _groups = _sanitize_groups(_groups, log_cb, "手动/预设")
         constrain = _groups if _mode == "limit" else None
+        _seg_plan = None
+        _per_seg_constraints = None
+        _seg_pcm = None
+        _seg_sr = 0
         # ★ 2026-10-21 / 6.2.1 的「自动探测（分段）」恢复版：
         #   按固定段长切音频，每段独立用音频标签模型探测乐器组，再取各段的
         #   允许组并集作为全局硬约束。这样不会因为整曲只抽到一次 voice
