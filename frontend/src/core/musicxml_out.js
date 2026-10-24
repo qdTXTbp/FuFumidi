@@ -13,6 +13,22 @@ export function midiToPitch(m) {
   return { step: n[0], alter: n.length > 1 ? 1 : 0, octave: oct };
 }
 
+/** 导出 MusicXML 前把起止量化到 1/16 拍网格：演奏 MIDI 的微小时值不适合直接当记谱时值。
+ * 只影响导出的 MusicXML，不改应用内的音符/播放。 */
+function quantizeForNotation(song) {
+  const tpb = song.tpb || 480;
+  const grid = Math.max(1, Math.round(tpb / 16));
+  const tracks = (song.tracks || []).map((tr) => ({
+    ...tr,
+    notes: (tr.notes || []).map((n) => {
+      const start = Math.max(0, Math.round((n.start || 0) / grid) * grid);
+      const end = Math.max(start + grid, Math.round((n.end || start) / grid) * grid);
+      return { ...n, start, end };
+    }),
+  }));
+  return { ...song, tracks };
+}
+
 export function musicXmlType(duration, tpb) {
   const q = duration / Math.max(1, tpb);
   if (q >= 3.5) return { type: 'whole', dot: false };
@@ -81,6 +97,7 @@ export function metronomeXml(sig, bpmQuarter) {
 
 // 单轨 MusicXML（供 Verovio 渲染当前乐谱轨道）
 export function songToMusicXMLTrack(song, ti) {
+  song = quantizeForNotation(song);
   const tr = song.tracks[ti];
   const tpb = song.tpb || 480;
   const sig = song.sigMap[0] || { num: 4, den: 4 };
@@ -229,6 +246,7 @@ export function songToMusicXMLTrack(song, ti) {
  *   7. 每个音符带 xml:id，界面据此建立「SVG 元素 ↔ 音符」映射（多声部时按顺序数会对不上）。
  * ============================================================ */
 export function buildFullScore(song, opts) {
+  song = quantizeForNotation(song);
   const o = opts || {};
   const tpb = song.tpb || 480;
   const sig = (song.sigMap && song.sigMap[0]) || { num: 4, den: 4 };
