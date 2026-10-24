@@ -120,6 +120,7 @@ contextBridge.exposeInMainWorld('fuBridge', {
   },
   pickMusicXML: () => ipcRenderer.invoke('dialog:pickMusicXML'),
   exportScorePdf: () => ipcRenderer.invoke('score:exportPdf'),
+  exportScorePdfPages: (payload) => ipcRenderer.invoke('score:exportPdfPages', payload),
   transcodeVideo: (data, audio, opts) => ipcRenderer.invoke('video:transcode', { data, audio, ...(opts || {}) }),
   /* 流式导出：渲染进程用 WebCodecs 逐帧编码，边产边写临时文件，最后一次性封装成 MP4。
      为什么要流式：① 长片不再把整段视频堆在内存里（10 分钟 4K ≈ 1.2 GB）；② 编码产物是

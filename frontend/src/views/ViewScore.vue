@@ -50,6 +50,7 @@ const midiBusy = ref(false);
 const previewOpen = ref(false);
 const previewBusy = ref(false);
 const previewPages = ref([]);
+const previewIdx = ref(0);
 const splitOpen = ref(false);
 const splitContent = ref(null);
 
@@ -458,30 +459,92 @@ function dataUrlToBytes(dataUrl) {
   const b64 = String(dataUrl).split(',')[1] || '';
   return Array.from(atob(b64), c => c.charCodeAt(0));
 }
+/** 真正的谱面页 SVG：过滤 Verovio 里隐藏/装饰性的小 SVG（否则会生成 20×29 的空白页）。 */
+function scorePageSvgs() {
+  if (!scoreEl.value) return [];
+  return Array.from(scoreEl.value.querySelectorAll('svg')).filter((svg) => {
+    const w = svg.clientWidth || svg.getBoundingClientRect().width || parseFloat(svg.getAttribute('width')) || 0;
+    const h = svg.clientHeight || svg.getBoundingClientRect().height || parseFloat(svg.getAttribute('height')) || 0;
+    return w > 100 && h > 100;
+  });
+}
+
 async function rasterizeSvg(svg, scale, tileH) {
-  const w = svg.clientWidth || svg.getBoundingClientRect().width || parseFloat(svg.getAttribute('width')) || 986;
-  const h = svg.clientHeight || svg.getBoundingClientRect().height || parseFloat(svg.getAttribute('height')) || 600;
-  if (!w || !h) return [];
-  const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(svg)], { type: 'image/svg+xml' }));
+  const displayW = svg.clientWidth || svg.getBoundingClientRect().width || parseFloat(svg.getAttribute('width')) || 986;
+  const displayH = svg.clientHeight || svg.getBoundingClientRect().height || parseFloat(svg.getAttribute('height')) || 600;
+  if (!displayW || !displayH) return [];
+  // 导出必须是白底黑谱：应用主题是深色，直接把 SVG 画到 canvas 上会得到黑谱 + 深底。
+  const clone = svg.cloneNode(true);
+  clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  clone.setAttribute('style', 'color:#000;background:#fff');
+  const style = document.createElementNS('http://www.w3.org/2000/svg', 'style');
+  style.textContent = '*{fill:#000 !important;stroke:#000 !important;background:transparent !important;}';
+  clone.insertBefore(style, clone.firstChild);
+  const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(clone)], { type: 'image/svg+xml' }));
   const img = new Image();
   await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
   URL.revokeObjectURL(url);
+  // 按图片自然像素裁切；不能按 SVG 的 CSS 宽度裁，否则只会截到左侧一条。
+  const natW = img.naturalWidth || Math.round(displayW * 2);
+  const natH = img.naturalHeight || Math.round(displayH * 2);
+  const ratioX = natW / Math.max(1, displayW);
+  const ratioY = natH / Math.max(1, displayH);
+  // 分页优先在「系统」边界断开，不把一行五线谱从中间切到两页。
+  const sr = svg.getBoundingClientRect();
+  const systems = Array.from(svg.querySelectorAll('g.system')).map((g) => {
+    const r = g.getBoundingClientRect();
+    return { top: r.top - sr.top, bottom: r.bottom - sr.top };
+  }).filter((x) => Number.isFinite(x.top) && Number.isFinite(x.bottom) && x.bottom > x.top);
+  const groups = [];
+  if (systems.length > 1 && tileH < displayH) {
+    const target = Math.max(240, tileH);
+    let i = 0;
+    while (i < systems.length) {
+      const start = Math.max(0, systems[i].top - 8);
+      let end = systems[i].bottom;
+      let j = i;
+      while (j + 1 < systems.length && systems[j + 1].bottom - start <= target) { j++; end = systems[j].bottom; }
+      if (end - start > target) end = start + target;
+      groups.push({ start, end: Math.min(displayH, end + 8) });
+      i = j + 1;
+    }
+  } else {
+    groups.push({ start: 0, end: displayH });
+  }
   const out = [];
-  let off = 0;
-  while (off < h) {
-    const th = Math.min(tileH, h - off);
+  for (const group of groups) {
+    const sy = Math.max(0, group.start * ratioY);
+    const sh = Math.max(1, (group.end - group.start) * ratioY);
     const cv = document.createElement('canvas');
-    cv.width = Math.max(1, Math.round(w * scale));
-    cv.height = Math.max(1, Math.round(th * scale));
+    cv.width = Math.max(1, Math.round(natW * scale));
+    cv.height = Math.max(1, Math.round(sh * scale));
     const g = cv.getContext('2d');
     g.setTransform(scale, 0, 0, scale, 0, 0);
-    g.fillStyle = cssVar('--canvas', '#ffffff'); g.fillRect(0, 0, w, th);
-    g.drawImage(img, 0, off, w, th, 0, 0, w, th);
+    g.fillStyle = '#ffffff'; g.fillRect(0, 0, natW, sh);
+    g.drawImage(img, 0, sy, natW, sh, 0, 0, natW, sh);
     out.push(cv.toDataURL('image/png'));
-    off += th;
   }
   return out;
 }
+
+/** 判断一页是否真的有墨迹：纯白页（SVG 末尾空白）不进入预览/PDF。 */
+async function pageHasInk(dataUrl) {
+  try {
+    const img = new Image();
+    await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = dataUrl; });
+    const cv = document.createElement('canvas');
+    cv.width = 96; cv.height = 136;
+    const g = cv.getContext('2d', { willReadFrequently: true });
+    g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height);
+    g.drawImage(img, 0, 0, cv.width, cv.height);
+    const d = g.getImageData(0, 0, cv.width, cv.height).data;
+    for (let k = 0; k < d.length; k += 4) {
+      if (d[k] < 225 || d[k + 1] < 225 || d[k + 2] < 225) return true;
+    }
+  } catch (e) {}
+  return false;
+}
+
 async function exportStaffPng() {
   const el = scoreEl.value;
   if (!el) return;
@@ -576,14 +639,28 @@ async function exportMusicXML() {
 /* ---------------- PDF 导出（IPC printToPDF） ---------------- */
 async function exportPdf() {
   const b = window.fuBridge;
-  if (!b || !b.exportScorePdf) { toast(t('当前环境不支持 PDF 导出'), 'warn'); return; }
+  if (!isStaffLike.value) { toast(t('请先切换到五线谱或总谱模式'), 'warn'); return; }
+  const svgs = scoreEl.value ? scorePageSvgs() : [];
+  if (!svgs.length) { toast(t('请先渲染乐谱'), 'warn'); return; }
+  exporting.value = true;
   try {
-    const r = await b.exportScorePdf();
+    const base = (song.value ? song.value.name : 'score').replace(/\.[^.]+$/, '');
+    const pages = [];
+    for (const svg of svgs) {
+      const w = svg.clientWidth || svg.getBoundingClientRect().width || parseFloat(svg.getAttribute('width')) || 986;
+      const tileH = Math.max(240, Math.round(w * 1.414));
+      pages.push(...await rasterizeSvg(svg, 2, tileH));
+    }
+    const inkPages = [];
+    for (const page of pages) { if (page && await pageHasInk(page)) inkPages.push(page); }
+    if (!inkPages.length) { toast(t('没有可导出的乐谱'), 'warn'); return; }
+    if (!b || !b.exportScorePdfPages) { toast(t('当前环境不支持 PDF 导出'), 'warn'); return; }
+    const r = await b.exportScorePdfPages({ name: base, pages: inkPages });
     if (r && r.ok) toast(t('已导出乐谱 PDF：') + r.path, 'ok');
-    else if (r && !r.canceled) toast(t('PDF 导出失败'), 'warn');
+    else if (r && !r.canceled) toast(t('PDF 导出失败：') + ((r && r.error) || ''), 'warn');
   } catch (e) {
     toast(t('PDF 导出失败：') + String(e.message || e), 'warn');
-  }
+  } finally { exporting.value = false; }
 }
 
 /* ---------------- 乐谱分屏（点击音符定位） ---------------- */
@@ -612,41 +689,36 @@ function openScoreSplit() {
 
 /* ---------------- 分页预览（SVG 栅格化为 PNG 图集弹窗） ---------------- */
 async function previewScore() {
-  if (mode.value !== 'staff') { toast(t('请先切换至五线谱模式'), 'warn'); return; }
-  const svgs = scoreEl.value ? Array.from(scoreEl.value.querySelectorAll('svg')) : [];
+  if (!isStaffLike.value) { toast(t('请先切换到五线谱或总谱模式'), 'warn'); return; }
+  const svgs = scoreEl.value ? scorePageSvgs() : [];
   if (!svgs.length) { toast(t('请先渲染五线谱'), 'warn'); return; }
   previewOpen.value = true;
   previewBusy.value = true;
   previewPages.value = [];
+  previewIdx.value = 0;
   try {
-    const scale = 1.5, tileH = 9000;
     const pages = [];
     for (const svg of svgs) {
       const w = svg.clientWidth || svg.getBoundingClientRect().width || parseFloat(svg.getAttribute('width')) || 986;
       const h = svg.clientHeight || svg.getBoundingClientRect().height || parseFloat(svg.getAttribute('height')) || 600;
       if (!w || !h) continue;
-      const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(svg)], { type: 'image/svg+xml' }));
-      const img = new Image();
-      await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
-      URL.revokeObjectURL(url);
-      let off = 0;
-      while (off < h) {
-        const th = Math.min(tileH, h - off);
-        const cv = document.createElement('canvas');
-        cv.width = Math.max(1, Math.round(w * scale)); cv.height = Math.max(1, Math.round(th * scale));
-        const g = cv.getContext('2d');
-        g.setTransform(scale, 0, 0, scale, 0, 0);
-        g.fillStyle = cssVar('--canvas', '#ffffff'); g.fillRect(0, 0, w, th);
-        g.drawImage(img, 0, off, w, th, 0, 0, w, th);
-        pages.push(cv.toDataURL('image/png'));
-        off += th;
-      }
+      // 按 A4 比例切页：白底黑谱，和 PDF 导出共用同一套 rasterizeSvg。
+      const tileH = Math.max(240, Math.round(w * 1.414));
+      pages.push(...await rasterizeSvg(svg, 1.8, tileH));
     }
-    if (!pages.length) throw new Error('empty');
-    previewPages.value = pages;
+    const valid = [];
+    for (const page of pages) { if (page && await pageHasInk(page)) valid.push(page); }
+    if (!valid.length) throw new Error('empty');
+    previewPages.value = valid;
+    previewIdx.value = 0;
   } catch (e) {
     toast(t('预览失败：') + String(e.message || e), 'warn');
   } finally { previewBusy.value = false; }
+}
+
+function previewStep(d) {
+  if (!previewPages.value.length) return;
+  previewIdx.value = Math.max(0, Math.min(previewPages.value.length - 1, previewIdx.value + d));
 }
 
 /* ---------------- 点击定位播放头 ---------------- */
@@ -854,19 +926,28 @@ onBeforeUnmount(() => {
 
     <Transition name="ov">
       <div v-if="previewOpen" class="pv-overlay" @click.self="previewOpen = false">
-      <div class="pv-card">
+      <div class="pv-card pv-viewer-card">
         <div class="pv-head">
-          <b>{{ t('乐谱分页预览') }}</b>
-          <button class="icon-btn" @click="previewOpen = false" :title="t('关闭')"><Icon name="plus" :size="14" style="transform:rotate(45deg)" /></button>
+          <div class="pv-title"><b>{{ t('乐谱分页预览') }}</b><small v-if="previewPages.length">{{ previewIdx + 1 }} / {{ previewPages.length }}</small></div>
+          <div class="pv-head-actions">
+            <button v-if="previewPages.length > 1" class="btn sm ghost" @click="previewStep(-1)" :disabled="previewIdx === 0">{{ t('上一页') }}</button>
+            <button v-if="previewPages.length > 1" class="btn sm ghost" @click="previewStep(1)" :disabled="previewIdx >= previewPages.length - 1">{{ t('下一页') }}</button>
+            <button class="icon-btn" @click="previewOpen = false" :title="t('关闭')"><Icon name="plus" :size="14" style="transform:rotate(45deg)" /></button>
+          </div>
         </div>
         <div class="pv-body">
           <div v-if="previewBusy" class="score-empty">{{ t('正在生成预览…') }}</div>
-          <template v-else>
-            <div v-for="(p, i) in previewPages" :key="i" class="pv-page">
-              <div class="pv-page-name">{{ t('第 ') }}{{ i + 1 }}{{ t(' 页') }}</div>
-              <img :src="p" alt="score page" />
-            </div>
-          </template>
+          <div v-else-if="!previewPages.length" class="score-empty">{{ t('没有可预览的乐谱页') }}</div>
+          <div v-else class="pv-viewer">
+            <button class="pv-arrow" :disabled="previewIdx === 0" @click="previewStep(-1)" :title="t('上一页')"><Icon name="back" :size="18" /></button>
+            <div class="pv-paper"><img :src="previewPages[previewIdx]" alt="score page" /></div>
+            <button class="pv-arrow" :disabled="previewIdx >= previewPages.length - 1" @click="previewStep(1)" :title="t('下一页')"><Icon name="forward" :size="18" /></button>
+          </div>
+        </div>
+        <div v-if="previewPages.length > 1" class="pv-thumbs">
+          <button v-for="(p, i) in previewPages" :key="i" class="pv-thumb" :class="{ on: i === previewIdx }" @click="previewIdx = i">
+            <img :src="p" alt="" /><span>{{ i + 1 }}</span>
+          </button>
         </div>
       </div>
       </div>
@@ -1030,5 +1111,23 @@ onBeforeUnmount(() => {
   .score-actions { margin-left: 0; }
   .score-track .select-input { max-width: 160px; }
 }
+
+
+/* 乐谱分页预览：单页查看 + 缩略图条 */
+.pv-viewer-card { width: min(1080px, 96vw); max-height: 92vh; }
+.pv-title { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.pv-title small { color: var(--text3); font-family: var(--font-num); font-size: var(--fs-xs); }
+.pv-head-actions { display: flex; align-items: center; gap: 6px; }
+.pv-viewer { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; gap: 10px; padding: 14px 8px; background: color-mix(in srgb, var(--canvas) 60%, transparent); border-radius: var(--r-md); }
+.pv-paper { flex: 1; min-width: 0; height: 100%; max-height: 66vh; display: flex; align-items: center; justify-content: center; overflow: auto; background: #fff; border-radius: var(--r-sm); box-shadow: 0 10px 30px rgba(0,0,0,.18); padding: 10px; }
+.pv-paper img { max-width: 100%; max-height: 64vh; width: auto; height: auto; object-fit: contain; display: block; }
+.pv-arrow { flex: none; width: 34px; height: 46px; border: 1px solid var(--hairline); border-radius: var(--r-md); background: color-mix(in srgb, var(--surface) 80%, transparent); color: var(--text2); display: grid; place-items: center; cursor: pointer; }
+.pv-arrow:hover:not(:disabled) { color: var(--accent-sky); border-color: color-mix(in srgb, var(--accent-sky) 35%, var(--hairline)); }
+.pv-arrow:disabled { opacity: .3; cursor: default; }
+.pv-thumbs { flex: none; display: flex; gap: 8px; overflow-x: auto; padding: 8px 2px 2px; }
+.pv-thumb { position: relative; width: 74px; height: 100px; flex: none; padding: 0; border: 1px solid var(--hairline); border-radius: var(--r-sm); overflow: hidden; background: #fff; cursor: pointer; opacity: .72; }
+.pv-thumb.on { border-color: var(--accent-sky); opacity: 1; box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-sky) 35%, transparent); }
+.pv-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pv-thumb span { position: absolute; right: 3px; bottom: 3px; min-width: 16px; height: 16px; line-height: 16px; border-radius: var(--r-sm); background: color-mix(in srgb, var(--canvas) 72%, transparent); color: var(--text2); font: var(--fs-xs) var(--font-num); text-align: center; }
 
 </style>
