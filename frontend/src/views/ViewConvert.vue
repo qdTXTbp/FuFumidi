@@ -1093,7 +1093,7 @@ async function renderVideo() {
         <canvas ref="vePreviewEl" class="ve-preview-canvas"></canvas>
         <div v-if="!song" class="ve-preview-empty">{{ t('加载曲目后显示实时预览') }}</div>
       </div>
-      <div class="form-grid" style="grid-template-columns:repeat(3,1fr)">
+      <div class="form-grid ve-form-grid">
         <div class="field-row">
           <label>{{ t('音色风格') }}</label>
           <select class="select-input" v-model="preset" style="min-width:150px">
@@ -1250,7 +1250,9 @@ async function renderVideo() {
 /* 转换页进度/完成提示显隐过渡 */
 .cv-enter-active, .cv-leave-active { transition: opacity var(--motion-base) var(--ease-out), transform var(--motion-base) var(--ease-spring); }
 .cv-enter-from, .cv-leave-to { opacity: 0; transform: translateY(6px); }
-.ve-card { margin-top: 0; padding: 18px; }
+.ve-card { margin-top: 0; padding: 18px; min-width: 0; }
+.ve-form-grid { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); min-width: 0; }
+.ve-form-grid .field-row { min-width: 0; }
 .ve-head { display: flex; flex-direction: column; gap: var(--sp-1); }
 .ve-head b { font-size: var(--fs-lg); color: var(--ink); }
 .ve-preview-wrap { position: relative; width: 100%; background: var(--surface-soft); border: 1px solid var(--hairline); border-radius: var(--r-md); overflow: hidden; }
