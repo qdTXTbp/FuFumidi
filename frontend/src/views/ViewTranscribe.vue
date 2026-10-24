@@ -914,7 +914,42 @@ const sortedQueue = computed(() => {
    ★ 只在「默认顺序」下可拖：按名称/类型/时长是**显示层**排序，拖出来的顺序会立刻被排序覆盖，
      看着像没生效。非默认顺序时右下角给一句提示。 */
 const dragItemId = ref(0);
-function clearTrDragMarks() {
+const dragQueueId = ref(0);
+const queueDropId = ref(0);
+function qDragStart(q, e) {
+  if (running.value) return;
+  dragQueueId.value = q.id;
+  if (e && e.dataTransfer) {
+    e.dataTransfer.effectAllowed = 'move';
+    try { e.dataTransfer.setData('text/plain', String(q.id)); } catch (err) {}
+  }
+}
+function qDragOver(e, q) {
+  if (!dragQueueId.value || dragQueueId.value === q.id) return;
+  const r = e.currentTarget.getBoundingClientRect();
+  queueDropId.value = q.id;
+  e.currentTarget.classList.toggle('tr-q-drag-before', (e.clientY - r.top) < r.height / 2);
+  e.currentTarget.classList.toggle('tr-q-drag-after', (e.clientY - r.top) >= r.height / 2);
+}
+function qDragLeave(e) { e.currentTarget.classList.remove('tr-q-drag-before', 'tr-q-drag-after'); if (queueDropId.value) queueDropId.value = 0; }
+function qDragEnd() { dragQueueId.value = 0; queueDropId.value = 0; document.querySelectorAll('.tr-q-drag-before,.tr-q-drag-after').forEach((x) => x.classList.remove('tr-q-drag-before', 'tr-q-drag-after')); }
+function qDrop(e, target) {
+  e.stopPropagation();
+  const id = dragQueueId.value;
+  const r = e.currentTarget.getBoundingClientRect();
+  const before = (e.clientY - r.top) < r.height / 2;
+  qDragEnd();
+  if (!id || !target || id === target.id || running.value) return;
+  const from = queues.findIndex((q) => q.id === id);
+  if (from < 0) return;
+  const [moved] = queues.splice(from, 1);
+  let to = queues.findIndex((q) => q.id === target.id);
+  if (to < 0) to = queues.length;
+  if (!before) to += 1;
+  queues.splice(to, 0, moved);
+  persistQueues();
+  toast(t('队列顺序已更新'), 'ok');
+}function clearTrDragMarks() {
   document.querySelectorAll('.tr-batch-item').forEach(x => x.classList.remove('tr-drag-before', 'tr-drag-after'));
 }
 function trDragStart(it, e) {
@@ -1960,9 +1995,12 @@ onBeforeUnmount(() => {
       <!-- 多队列：切队列 = 切模型与参数（每个队列自带一份设置） -->
       <div v-if="queues.length" class="tr-queues">
         <span class="fb-label" style="margin:0">{{ t('队列') }}</span>
-        <button v-for="q in queues" :key="q.id" class="fu-ctl fu-ctl--sm tr-pill" :class="{ active: q.id === activeQid }"
-                :title="t('切换到这个队列（模型与参数一起切）') + ' · ' + queueSummary(q)"
-                @click="switchQueue(q)">
+        <button v-for="q in queues" :key="q.id" class="fu-ctl fu-ctl--sm tr-pill" :class="{ active: q.id === activeQid, dragging: dragQueueId === q.id }"
+                :draggable="!running"
+                :title="t('切换到这个队列（模型与参数一起切）；拖动可调整队列顺序') + ' · ' + queueSummary(q)"
+                @click="switchQueue(q)"
+                @dragstart="qDragStart(q, $event)" @dragover.prevent="qDragOver($event, q)"
+                @dragleave="qDragLeave($event)" @drop.stop.prevent="qDrop($event, q)" @dragend="qDragEnd()">
           {{ q.name }}<i v-if="q.id === runningQueueId" class="tr-q-run" :title="t('正在转录')">▶</i><i v-if="queueCount(q)" class="tr-q-n">{{ queueCount(q) }}</i>
         </button>
         <button class="btn sm ghost" @click="addQueue"><Icon name="plus" :size="13" />{{ t('新建队列') }}</button>
@@ -1983,10 +2021,11 @@ onBeforeUnmount(() => {
         </label>
         <span class="fb-hint" v-if="currentQueue()">{{ t('本队列：') }}{{ queueSummary(currentQueue()) }} · {{ targetName(queueTarget(currentQueue())) }}</span>
       </div>
+      <div v-if="queue.length" class="fb-hint" style="margin:0 0 4px">{{ sort === 'default' ? t('按住左侧 ⋮⋮ 拖动即可调整转录顺序') : t('拖动排序需切回「默认顺序」') }}</div>
       <div v-if="queue.length" class="tr-batch-list">
         <div class="tr-batch-item" v-for="it in sortedQueue" :key="it.id"
              :draggable="sort === 'default'" :class="{ dragging: dragItemId === it.id }"
-             @dragstart="trDragStart(it, $event)" @dragover.prevent="trDragOver($event, it)"
+             @dragstart="trDragStart(it, $event)" @dragenter.prevent="trDragOver($event, it)" @dragover.prevent="trDragOver($event, it)"
              @dragleave="trDragLeave($event)" @drop.stop.prevent="trDrop($event, it)" @dragend="trDragEnd()">
           <span class="tb-grip" :title="sort === 'default' ? t('拖动排序') : t('拖动排序需切回「默认顺序」')" aria-hidden="true">⋮⋮</span>
           <span class="tb-name" :title="it.path">{{ it.name }}</span>
@@ -2520,8 +2559,15 @@ onBeforeUnmount(() => {
 .fb-hint { font-size: var(--fs-xs); color: var(--stone); margin-top: 1px; }
 .tr-batch-ctls { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
 .tr-batch-list { border: 1px solid var(--hairline); border-radius: var(--r-md); background: var(--canvas); overflow-y: auto; overflow-x: hidden; max-height: min(48vh, 420px); scrollbar-width: thin; scrollbar-gutter: stable; }
-.tr-batch-item { display: flex; align-items: center; gap: var(--sp-2); padding: 6px 10px; border-bottom: 1px solid var(--hairline-soft); font-size: var(--fs-sm); }
+.tr-batch-item { display: flex; cursor: grab; align-items: center; gap: var(--sp-2); padding: 6px 10px; border-bottom: 1px solid var(--hairline-soft); font-size: var(--fs-sm); }
 .tr-batch-item:last-child { border-bottom: none; }
+.tr-batch-item.dragging { opacity: .55; }
+.tr-batch-item.tr-drag-before { box-shadow: inset 0 2px 0 var(--brand-blue); }
+.tr-batch-item.tr-drag-after { box-shadow: inset 0 -2px 0 var(--brand-blue); }
+.tr-pill[draggable="true"] { cursor: grab; }
+.tr-pill.dragging { opacity: .55; }
+.tr-pill.tr-q-drag-before { box-shadow: inset 3px 0 0 var(--brand-blue); }
+.tr-pill.tr-q-drag-after { box-shadow: inset -3px 0 0 var(--brand-blue); }
 .tb-name { flex: 1; min-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
 .tb-bar { width: 120px; height: 6px; border-radius: var(--r-pill); background: var(--surface-soft); overflow: hidden; flex: none; }
 .tb-bar i { display: block; height: 100%; background: var(--brand-blue); border-radius: var(--r-pill); transition: transform var(--motion-base) var(--ease-out); }
