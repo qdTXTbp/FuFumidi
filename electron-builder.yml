@@ -59,6 +59,14 @@ files:
   - "!.gitattributes"
   - "!.gitignore"
   - "!package-lock.json"
+  # ★ 2026-10-24：日志一律不进包。以前根目录的 *.log 会被打进 app.asar，
+  #   而构建脚本又把「本次构建日志」重定向到根目录 —— 打包时它还在增长，
+  #   electron-builder 先 stat 后 read，实际写入字节比记录的多，
+  #   于是那个文件的 asar 记录 size 偏小、**其后所有文件偏移整体错位**
+  #   （实测 6.2.3 首次构建错位 142 字节，asar 直接不可读：app 起不来）。
+  #   排除掉 + 构建日志写到仓库外，两道一起上。
+  - "!*.log"
+  - "!_*"
   # sql.js 只用到 dist/sql-wasm.js（包 main）+ sql-wasm.wasm（main/db.js:38 locateFile）。
   # 其余 16 个文件是 asm/browser/debug/zip 变体，实测 23.4MB，一个都加载不到：
   #   dist 里 18 个文件、仅 2 个可达 —— 逐个排除比「排除整个目录再放行两个」安全，
