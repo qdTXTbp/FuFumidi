@@ -15,6 +15,9 @@ import { zhToHant } from './zhHant.js';
 import { I18N_JA } from './i18n_ja.js';
 
 export const I18N_MAP = {
+  '固定长度': "Fixed length",
+  '探测长度': "Probe length",
+  '整首 = 扫描全曲；固定长度 = 按总时长均匀抽样（内部 10s 窗口）': "Whole song = scan the full track; fixed length = sample evenly up to the given duration (10s model windows)",
   '整首 = 扫描全曲窗口；固定窗口 = 按窗口大小抽样': "Whole song = scan all windows of the full track; fixed window = sample at the given window size",
   '固定窗口': "Fixed window",
   '探测窗口': "Probe window",

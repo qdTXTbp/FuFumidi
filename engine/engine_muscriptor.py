@@ -1144,10 +1144,11 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                 if _tagger is not None:
                     _tag_window = float((params or {}).get('audio_tagger_window_sec') or 60.0)
                     _tag_whole = bool((params or {}).get('audio_tagger_whole_song'))
+                    _tag_probe_windows = None if _tag_whole else max(1, int(round(_tag_window / 10.0)))
                     _groups, _gsc, _prs = _tagger.probe_groups(
                         wav_tmp, min_score=0.05,
-                        max_windows=None if _tag_whole else 3,
-                        window_sec=_tag_window)
+                        max_windows=_tag_probe_windows,
+                        window_sec=10.0)
                 else:
                     _pr = instrument_probe.probe(_probe_model, wav_tmp, log=log_cb)
                     _groups = _pr.get("groups") or []

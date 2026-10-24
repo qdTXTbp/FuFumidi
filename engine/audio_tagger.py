@@ -228,31 +228,36 @@ class Tagger:
                     scores[label] = float(prob)
         return scores
 
-    def probe_groups(self, wav_path, min_score=0.10, max_groups=10, max_windows=None, window_sec=60.0):
-        """返回 (groups, score_map, reason)。供 engine_muscriptor 调用。"""
+    def probe_groups(self, wav_path, min_score=0.10, max_groups=10, max_windows=None, window_sec=10.0):
+        """返回 (groups, score_map, reason)。
+
+        window_sec 是单个模型窗口（强制 <=10s）；max_windows=None 表示
+        扫描整首的所有 10s 窗口，否则均匀抽 N 个窗口。调用方把
+        「探测总长度」换算成窗口数（60s -> 6 个 10s 窗口）。
+        """
         try:
             y, sr = _read_audio(wav_path)
+            win_sec = max(1.0, min(10.0, float(window_sec)))
             if max_windows:
-                win = int(max(1.0, float(window_sec)) * sr)
+                win = int(win_sec * sr)
                 n = max(1, int(max_windows))
                 if len(y) > win:
                     starts = [int(round(i * (len(y) - win) / max(1, n - 1))) for i in range(n)] if n > 1 else [0]
                     parts = [y[max(0, st):st + win] for st in starts]
                     scores = {}
                     for part in parts:
-                        sc = self.tag_windows(part, sr, window_sec=window_sec)
+                        sc = self.tag_windows(part, sr, window_sec=win_sec)
                         for k, v in sc.items():
                             if v > scores.get(k, 0.0):
                                 scores[k] = v
                 else:
-                    scores = self.tag_windows(y, sr, window_sec=window_sec)
+                    scores = self.tag_windows(y, sr, window_sec=win_sec)
             else:
-                scores = self.tag_windows(y, sr, window_sec=window_sec)
+                scores = self.tag_windows(y, sr, window_sec=win_sec)
             groups, agg = groups_from_scores(scores, min_score=min_score, max_groups=max_groups)
             return groups, agg, "ok"
         except Exception as e:  # noqa: BLE001
             return [], {}, (self.kind + "-tagger: " + str(e)[:180])
-
 
 _DEFAULT = {}
 

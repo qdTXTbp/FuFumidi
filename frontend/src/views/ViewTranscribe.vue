@@ -2349,15 +2349,15 @@ onBeforeUnmount(() => {
           </div>
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
             <label>
-              <span><b>{{ t('音频标签探测长度') }}</b><small class="fb-hint" style="margin-left:6px">{{ t('整首 = 扫描全曲窗口；固定窗口 = 按窗口大小抽样') }}</small></span>
+              <span><b>{{ t('音频标签探测长度') }}</b><small class="fb-hint" style="margin-left:6px">{{ t('整首 = 扫描全曲；固定长度 = 按总时长均匀抽样（内部 10s 窗口）') }}</small></span>
               <select v-model="tagWholeSong" class="select-input" style="width:auto;padding:2px 6px;font-size:var(--fs-xs)">
-                <option :value="false">{{ t('固定窗口') }}</option>
+                <option :value="false">{{ t('固定长度') }}</option>
                 <option :value="true">{{ t('整首') }}</option>
               </select>
             </label>
           </div>
           <div class="tr-slider" v-if="mode === 'universal' && umodel === 'muscriptor' && !tagWholeSong">
-            <label>{{ t('探测窗口') }}<b>{{ tagWindowSec }}s</b></label>
+            <label>{{ t('探测长度') }}<b>{{ tagWindowSec }}s</b></label>
             <NumSlider v-model="tagWindowSec" :min="5" :max="60" :step="5" unit="s" />
           </div>
           <div class="tr-switch" style="display:block" v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'limit'">
