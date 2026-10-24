@@ -49,25 +49,39 @@ AUDIOSET_TO_GROUPS = {
     "Synthesizer": ["synth_lead", "synth_pad"], "Sampler": ["synth_pad"],
 }
 
-MODEL_DIR_CANDIDATES = (
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "resources", "models", "audio-tagger"),
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "models", "audio-tagger"),
-)
+MODEL_DIRS = {
+    "audioset": (
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "resources", "models", "audio-tagger"),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "models", "audio-tagger"),
+    ),
+    "ced": (
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "resources", "models", "audio-tagger-ced"),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "models", "audio-tagger-ced"),
+    ),
+}
+ENV_DIRS = {"audioset": "FUFUMIDI_AUDIO_TAGGER_DIR", "ced": "FUFUMIDI_CED_TAGGER_DIR"}
 
 
-def find_model_dir():
-    env = os.environ.get("FUFUMIDI_AUDIO_TAGGER_DIR")
+def _model_file(d):
+    for name in ("model.int8.onnx", "model.onnx"):
+        if d and os.path.isfile(os.path.join(d, name)):
+            return os.path.join(d, name)
+    return ""
+
+
+def find_model_dir(kind="audioset"):
+    env = os.environ.get(ENV_DIRS.get(kind, "FUFUMIDI_AUDIO_TAGGER_DIR"))
     if env and os.path.isdir(env):
         return env
-    for c in MODEL_DIR_CANDIDATES:
+    for c in MODEL_DIRS.get(kind, ()):
         c = os.path.abspath(c)
-        if os.path.isfile(os.path.join(c, "model.int8.onnx")):
+        if _model_file(c):
             return c
     return ""
 
 
-def labels_path(model_dir=None):
-    d = model_dir or find_model_dir()
+def labels_path(model_dir=None, kind="audioset"):
+    d = model_dir or find_model_dir(kind)
     return os.path.join(d, "class_labels_indices.csv") if d else ""
 
 
@@ -84,12 +98,7 @@ def load_labels(path=None):
 
 
 def groups_from_scores(scores, min_score=0.10, max_groups=10, always_keep=("drums",)):
-    """把 标签→概率 映射成有序乐器组（纯函数，可单测）。
-
-    · 同一组取它所有映射标签里的最高概率；
-    · 低于 min_score 的组丢弃（阈值偏保守，宁可少锁也不要把长尾关掉）；
-    · 鼓只要命中就保留（节奏骨架）。
-    """
+    """把 标签→概率 映射成有序乐器组（纯函数，可单测）。"""
     agg = {}
     for label, score in (scores or {}).items():
         try:
@@ -100,7 +109,6 @@ def groups_from_scores(scores, min_score=0.10, max_groups=10, always_keep=("drum
             if sc > agg.get(g, 0.0):
                 agg[g] = sc
     keep = [g for g, sc in sorted(agg.items(), key=lambda kv: (-kv[1], kv[0])) if sc >= min_score]
-    # 鼓只在达到阈值时才强留（此前把 0.001 的 Drum 标签也留下，会锁成只有鼓）
     if any(agg.get(g, 0.0) >= min_score for g in always_keep):
         for g in always_keep:
             if g in agg and g not in keep and agg[g] >= min_score:
@@ -132,16 +140,43 @@ def _fbank(y, sr=16000):
                        window_type="povey", round_to_power_of_two=True)
 
 
+def _ced_feats(y, sr=16000):
+    """CED-Small 的预处理：与 CED 官方 onnx 推理脚本对齐。
+
+    16 kHz / 512 点 FFT / 160 hop / 64 mel / fmin=0 / fmax=8000，不做中心填充；
+    线性 mel 后转 dB，并做 max-120dB 截断。输出 [1, 64, T]。
+    不要换成 kaldi fbank：CED 官方导出用的是 torchaudio 的 MelSpectrogram，
+    两者窗函数/归一化不同，onnx 输出会变成全 1e-6 的噪声。
+    """
+    import numpy as np
+    import torch
+    import torchaudio.transforms as aud
+    wav = torch.from_numpy(np.asarray(y, dtype=np.float32))
+    if sr != 16000:
+        import torchaudio
+        wav = torchaudio.functional.resample(wav, sr, 16000)
+    front_end = torch.nn.Sequential(
+        aud.MelSpectrogram(f_min=0, sample_rate=16000, win_length=512,
+                           center=False, n_fft=512, f_max=8000,
+                           hop_length=160, n_mels=64),
+        aud.AmplitudeToDB(top_db=120),
+    )
+    mel = front_end(wav).unsqueeze(0).numpy().astype(np.float32)
+    return mel
+
+
 class Tagger:
-    def __init__(self, model_dir=None):
-        self.model_dir = model_dir or find_model_dir()
+    def __init__(self, model_dir=None, kind="audioset"):
+        self.kind = "ced" if kind == "ced" else "audioset"
+        self.model_dir = model_dir or find_model_dir(self.kind)
         self.labels = load_labels(os.path.join(self.model_dir, "class_labels_indices.csv"))
         self._sess = None
+        self._input_names = []
 
     def available(self):
         try:
             import onnxruntime  # noqa: F401
-            return bool(self.model_dir and self.labels)
+            return bool(self.model_dir and self.labels and _model_file(self.model_dir))
         except Exception:
             return False
 
@@ -155,13 +190,23 @@ class Tagger:
             except Exception:
                 pass
             self._sess = ort.InferenceSession(
-                os.path.join(self.model_dir, "model.int8.onnx"),
+                _model_file(self.model_dir),
                 sess_options=opts, providers=["CPUExecutionProvider"])
+            self._input_names = [x.name for x in self._sess.get_inputs()]
         return self._sess
+
+    def _feeds(self, seg, sr):
+        import numpy as np
+        sess = self._session()
+        if self.kind == "ced":
+            x = _ced_feats(seg, sr)
+            return {self._input_names[0]: x}
+        fb = _fbank(seg, sr)
+        x = fb.numpy()[None, :, :].astype("float32")
+        return {"x": x, "x_lens": np.array([x.shape[1]], dtype="int64")}
 
     def tag_windows(self, y, sr=16000, window_sec=10.0, hop_sec=5.0):
         """逐 10s 窗口推理，返回 {label: max_prob}。"""
-        import numpy as np
         sess = self._session()
         win = int(window_sec * sr)
         hop = int(hop_sec * sr)
@@ -176,57 +221,55 @@ class Tagger:
             seg = y[st:st + win]
             if len(seg) < sr // 2:
                 continue
-            fb = _fbank(seg, sr)
-            x = fb.numpy()[None, :, :].astype("float32")
-            out = sess.run(None, {"x": x, "x_lens": np.array([x.shape[1]], dtype="int64")})[0][0]
+            out = sess.run(None, self._feeds(seg, sr))[0][0]
             for idx, prob in enumerate(out.tolist()):
                 label = self.labels.get(idx)
                 if label and prob > scores.get(label, 0.0):
                     scores[label] = float(prob)
         return scores
 
-    def probe_groups(self, wav_path, min_score=0.10, max_groups=10, max_windows=None):
-        """返回 (groups, score_map, reason)。供 engine_muscriptor 调用。
-
-        max_windows 用于整首歌的全局预分析：只抽均匀分布的 N 个 10s 窗口，
-        避免对 3 分钟歌跑 35 个窗口（虽然每次 0.3s，但没必要）。
-        """
+    def probe_groups(self, wav_path, min_score=0.10, max_groups=10, max_windows=None, window_sec=60.0):
+        """返回 (groups, score_map, reason)。供 engine_muscriptor 调用。"""
         try:
             y, sr = _read_audio(wav_path)
             if max_windows:
-                win = int(10.0 * sr)
+                win = int(max(1.0, float(window_sec)) * sr)
                 n = max(1, int(max_windows))
                 if len(y) > win:
                     starts = [int(round(i * (len(y) - win) / max(1, n - 1))) for i in range(n)] if n > 1 else [0]
                     parts = [y[max(0, st):st + win] for st in starts]
                     scores = {}
                     for part in parts:
-                        sc = self.tag_windows(part, sr)
+                        sc = self.tag_windows(part, sr, window_sec=window_sec)
                         for k, v in sc.items():
                             if v > scores.get(k, 0.0):
                                 scores[k] = v
                 else:
-                    scores = self.tag_windows(y, sr)
+                    scores = self.tag_windows(y, sr, window_sec=window_sec)
             else:
-                scores = self.tag_windows(y, sr)
+                scores = self.tag_windows(y, sr, window_sec=window_sec)
             groups, agg = groups_from_scores(scores, min_score=min_score, max_groups=max_groups)
             return groups, agg, "ok"
         except Exception as e:  # noqa: BLE001
-            return [], {}, ("audio-tagger: " + str(e)[:180])
+            return [], {}, (self.kind + "-tagger: " + str(e)[:180])
 
 
-_DEFAULT = None
+_DEFAULT = {}
 
 
-def default_tagger():
-    global _DEFAULT
-    if _DEFAULT is None:
-        _DEFAULT = Tagger()
-    return _DEFAULT
+def default_tagger(kind="audioset"):
+    k = "ced" if kind == "ced" else "audioset"
+    if k not in _DEFAULT:
+        _DEFAULT[k] = Tagger(kind=k)
+    return _DEFAULT[k]
 
 
-def available():
+def get_tagger(kind="audioset"):
+    return default_tagger(kind)
+
+
+def available(kind="audioset"):
     try:
-        return default_tagger().available()
+        return default_tagger(kind).available()
     except Exception:
         return False

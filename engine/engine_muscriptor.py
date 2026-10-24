@@ -1080,13 +1080,22 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
             # ★ 方案 B：优先用**专用音频标签模型**（AudioSet zipformer-small，26MB ONNX，
             #   CPU 0.3s/10s），不再拿 MuScriptor-small 做 3×20s 预分析。
             #   它只输出乐器组，不参与 MIDI 生成；置信度不足时宁可不锁定，也不硬塞。
-            _tagger = None
             try:
                 import audio_tagger as _audio_tagger
-                if _audio_tagger.available():
-                    _tagger = _audio_tagger.default_tagger()
-                    _probe_label = "音频标签模型（AudioSet）"
-                    _log(log_cb, "自动探测使用专用音频标签模型（AudioSet zipformer-small，CPU；不占主模型）")
+                # ★ 音频标签模型可选：AudioSet zipformer-small（默认，内置）或 CED-Small。
+                #   选择只影响「自动探测乐器组」，不参与 MIDI 生成；缺失时回退 AudioSet。
+                _tag_kind = str((params or {}).get("audio_tagger") or (params or {}).get("tag_model") or "audioset").strip().lower()
+                if _tag_kind not in ("audioset", "ced"):
+                    _tag_kind = "audioset"
+                if _audio_tagger.available(_tag_kind):
+                    _tagger = _audio_tagger.get_tagger(_tag_kind)
+                    _tag_label = "CED-Small" if _tag_kind == "ced" else "AudioSet zipformer-small"
+                    _probe_label = "音频标签模型（%s）" % _tag_label
+                    _log(log_cb, "自动探测使用专用音频标签模型（%s，CPU；不占主模型）" % _tag_label)
+                elif _tag_kind != "audioset" and _audio_tagger.available("audioset"):
+                    _tagger = _audio_tagger.get_tagger("audioset")
+                    _probe_label = "音频标签模型（AudioSet；CED 未安装）"
+                    _log(log_cb, "CED-Small 不可用，回退 AudioSet zipformer-small（CPU；不占主模型）")
             except Exception as _e:  # noqa: BLE001
                 _tagger = None
                 _log(log_cb, "音频标签模型不可用，退回 MuScriptor 探测器：%s" % str(_e)[:120])
@@ -1133,8 +1142,12 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
             try:
                 _t_probe = time.perf_counter()
                 if _tagger is not None:
-                    _groups, _gsc, _prs = _tagger.probe_groups(wav_tmp, min_score=0.05,
-                                                               max_windows=3)
+                    _tag_window = float((params or {}).get('audio_tagger_window_sec') or 60.0)
+                    _tag_whole = bool((params or {}).get('audio_tagger_whole_song'))
+                    _groups, _gsc, _prs = _tagger.probe_groups(
+                        wav_tmp, min_score=0.05,
+                        max_windows=None if _tag_whole else 3,
+                        window_sec=_tag_window)
                 else:
                     _pr = instrument_probe.probe(_probe_model, wav_tmp, log=log_cb)
                     _groups = _pr.get("groups") or []

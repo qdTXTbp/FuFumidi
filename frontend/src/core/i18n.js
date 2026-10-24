@@ -15,6 +15,22 @@ import { zhToHant } from './zhHant.js';
 import { I18N_JA } from './i18n_ja.js';
 
 export const I18N_MAP = {
+  '整首 = 扫描全曲窗口；固定窗口 = 按窗口大小抽样': "Whole song = scan all windows of the full track; fixed window = sample at the given window size",
+  '固定窗口': "Fixed window",
+  '探测窗口': "Probe window",
+  '音频标签探测长度': "Audio tagging probe length",
+  '整首 = 全曲均匀采样；固定窗口 = 按窗口大小抽样': "Whole song = sample evenly across the full track; fixed window = sample at the given window size",
+  '固定分段': "Fixed segments",
+  'AudioSet zipformer-small（内置）': "AudioSet zipformer-small (built in)",
+  'CED-Small（约 23 MB）': "CED-Small (~23 MB)",
+  '按住左侧 ⋮⋮ 拖动即可调整转录顺序': "Drag the ⋮⋮ handle on the left to reorder the transcription queue",
+  '队列顺序已更新': "Queue order updated",
+  '切换到这个队列（模型与参数一起切）；拖动可调整队列顺序': "Switch to this queue (model and parameters switch together); drag to reorder",
+  '拖动队列可调整顺序转录顺序': "Drag queues to change the chained transcription order",
+  '音频标签模型': "Audio tagging model",
+  '整首（不切分）': "Whole song (no segmentation)",
+  '只用于自动探测乐器组': "Only used for automatic instrument-group detection",
+  '自动探测乐器组': "Auto-detect instrument groups",
   '当前环境不支持组件安装': "This environment does not support component installation",
   '缺失组件已全部安装': "All missing components installed",
   '这些组件直接在变谱页下载，装在数据根的 omr 目录，不需要打开资源中心。没装也能用内置识谱，只是精度低一档、读不出乐器名与速度记号。': "These components can be downloaded right here and are stored in the omr folder under the data root; no need to open Resources. Built-in OMR still works without them, with lower accuracy and without instrument/tempo text.",

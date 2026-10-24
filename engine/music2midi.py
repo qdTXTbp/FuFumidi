@@ -474,6 +474,12 @@ def build_parser():
     g.add_argument("--no-melodia", action="store_true", help="关闭旋律增强")
     g.add_argument("--beat-grid", action="store_true",
                    help="[muscriptor] 加载 Beat This! 权重做节拍网格检测（未下载/失败时自动跳过）")
+    g.add_argument("--audio-tagger-window-sec", dest="audio_tagger_window_sec", type=float, default=None,
+                   help="[muscriptor] 音频标签探测窗口长度（秒）")
+    g.add_argument("--audio-tagger-whole-song", dest="audio_tagger_whole_song", action="store_true",
+                   help="[muscriptor] 音频标签探测使用整首（全曲均匀采样）")
+    g.add_argument("--audio-tagger", dest="audio_tagger", default=None,
+                   help="[muscriptor] 音频标签模型：audioset（默认）或 ced")
     g.add_argument("--muscriptor-instruments", dest="muscriptor_instruments", default=None,
                    help="[muscriptor] 乐器组硬约束：逗号分隔的组名（voice / acoustic_piano /"
                         " clean_electric_guitar / synth_lead / flutes / organ / drums …，"
@@ -574,6 +580,9 @@ def cmd_worker():
                 # 旋律乐器组：漏掉这一项时界面选了「人声」也传不进引擎，
                 # 模型仍会自由改判乐器（甩葱歌那类「同一旋律换音色」的根因）。
                 muscriptor_instruments=req.get('muscriptor_instruments'),
+                audio_tagger=req.get('audio_tagger'),
+                audio_tagger_window_sec=req.get('audio_tagger_window_sec'),
+                audio_tagger_whole_song=bool(req.get('audio_tagger_whole_song')),
                 # 节拍网格检测开关：漏了这一项时模板/界面勾了也传不进引擎，
                 # 引擎会一直按默认关闭处理（日志固定输出「已关闭节拍网格检测」）。
                 beat_grid=bool(req.get('beat_grid')),

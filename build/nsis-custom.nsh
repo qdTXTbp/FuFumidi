@@ -34,6 +34,24 @@
   DeleteRegKey HKLM "Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\ee90ae64-4313-5a31-857b-d4c295bf71e7"
 !macroend
 
+; ---------- 2) 已有 E 盘安装时，更新继续装回 E 盘 ----------
+; 背景：6.2.4 的 NSIS 安装器默认安装到 Program Files；用户原本的
+; E:\Midi\FuFumidi 便携安装被当成“另一份程序”，更新后数据根也跟着
+; 切到 %APPDATA%，看起来模型/音色全丢。
+; customInit 在 electron-builder 判定完安装模式之后、页面显示之前执行，
+; 这里强制沿用已有的 E 盘安装目录并切回 current-user，避免更新再生成
+; 一份 Program Files 副本，也避免触发管理员提权。
+; 只有 E:\Midi\FuFumidi\FuFumidi.exe 已存在时才生效，不影响全新机器。
+!macro customInit
+  IfFileExists "E:\Midi\FuFumidi\FuFumidi.exe" 0 fu_keep_default_install
+    StrCpy $INSTDIR "E:\Midi\FuFumidi"
+    StrCpy $installMode "CurrentUser"
+    StrCpy $hasPerMachineInstallation "0"
+    StrCpy $hasPerUserInstallation "1"
+    SetShellVarContext current
+  fu_keep_default_install:
+!macroend
+
 ; ---------- 2) 卸载首页：把「是否保留数据」做成一个**页面** ----------
 ; 这一步替换 electron-builder 默认的卸载欢迎页（assistedInstaller.nsh:67-71：
 ; 定义了 customUnWelcomePage 就不再插 MUI_UNPAGE_WELCOME）。

@@ -41,16 +41,7 @@ void (async () => {
 })();
 const perf = ref('quality');             // quality | balanced | fast
 const perfHint = ref('');
-/* 识别片段长度（秒）：每种模型一次喂给模型识别的音频长度。
-   ★ 2026-10-23 重新定位为**可选、默认不开启**（用户「改成不强制开启分段识别，
-   允许用户手动切换」）：
-     · 0 = 模型默认 —— 用各模型的原生块长（= 训练块长），整曲一次推理。
-       这是默认值，也是 2026-10-21「取消分块转录」后的行为。
-     · >0 = 用户显式开启分段识别。实测按固定长度切片再合并会让**块与块之间
-       质量参差不齐**（接缝重复音、换音色、延音被切断），所以默认关、并写明代价。
-   ★ 预设一律不写这个键 —— 6.1.x 的预设给每个模型都写了值，切模型就自动套上，
-     那正是「强制开启」。这条由 engine/tests/test_transcribe_options.py 固化。 */
-const segmentSec = ref(0);
+
 /* 转录前降噪：默认 off（保持旧输出完全一致）。选项来自引擎 audio_chain：
    off / light（谱减）/ strong（UVR-DeNoise 模型，需资源中心下载）。
    2026-10-15 实测降噪在部分素材会增加噪声引起的假音符，所以默认关、并写明代价。 */
@@ -63,15 +54,7 @@ function setMemoryMode(v) {
   memoryMode.value = ['auto', 'low', 'allow'].includes(v) ? v : 'auto';
   try { localStorage.setItem('fufumidi_memory_mode', memoryMode.value); } catch (e) {}
 }
-/** 各模型推荐片段长度（= 训练块长；见各引擎源码/配置）。
- *  只在用户显式开启分段识别时作为「推荐」标注显示，**不写进预设**。 */
-const SEG_RECOMMEND = computed(() => {
-  if (mode.value === 'universal') return umodel.value === 'basic' ? 0 : 5;
-  if (pmodel.value === 'aria') return 30;
-  if (pmodel.value === 'transkun') return 16;
-  if (pmodel.value === 'hft') return 0;
-  return 10;
-});
+
 const bassBoost = ref(false);            // 低音增强（仅 basic 子模型）：关闭 melodia trick 以保留低音声部
 // 多条弯音曲线（仅 basic 子模型）：basic-pitch 唯一没转发的用户可见参数。
 // 开了以后同一音符可以挂多条弯音（颤音/滑音），**会真的落进导出的 MIDI**。
@@ -101,6 +84,10 @@ const msPrelude = ref(true);             // 跨块延音缝合（默认开；关
 //   耗时 +3.6s，F1 还低于全局探测）。
 const msMode = ref('none');
 const msGroups = ref(['voice', 'drums']);
+// 音频标签模型：只用于「自动探测乐器组」，不参与 MIDI 生成。
+const tagModel = ref('audioset'); // audioset | ced
+const tagWholeSong = ref(false); // 音频标签探测：整首 / 固定窗口
+const tagWindowSec = ref(60);   // 固定窗口长度（秒，默认 60）
 function toggleMsGroup(id) {
   const i = msGroups.value.indexOf(id);
   if (i >= 0) { if (msGroups.value.length > 1) msGroups.value.splice(i, 1); return; }
@@ -122,6 +109,7 @@ const MS_GROUPS = [
   { id: 'orchestra_hit', cn: '管弦齐奏' },
 ];
 const msInstrValue = computed(() => {
+  if (msMode.value === 'probe') return 'probe';
   if (msMode.value === 'limit') return msGroups.value.join(',');
   return 'none';
 });
@@ -605,10 +593,6 @@ const WEB_MODEL_DEFAULTS = () => ({
 // 网页版内置预设（与 engine/presets.py 的 _builtin_presets 一一对应；名字必须逐字一致）。
 // 无桥接时 loadPresets 用这份数据填充，避免「应用预设」因列表为空而失效。
 // 判据同引擎侧：最高质量 + 保证稳定性，不考虑速度性能（perf=quality / fp32 / 中性解码值）。
-// ★ 2026-10-23：这份表**一律不写 segment_sec**（识别片段长度）。用户明确「改成不强制
-//   开启分段识别，允许用户手动切换」—— 6.1.x 给每个模型都写了值（MuScriptor 5s /
-//   钢琴 10s / Aria 30s…），切模型就自动套上，那就是强制开启。现在默认 0 = 模型
-//   原生块长，要不要分段由用户在高级参数里自己决定。
 const WEB_BUILTIN_PRESETS = () => {
   const basic = {
     model: 'basic', onset_threshold: 0.5, frame_threshold: 0.3, minimum_note_length: 128,
@@ -1211,12 +1195,6 @@ function collectPresetParams() {
     tempo: iv(exportTempo.value),
     denoise_mode: denoiseMode.value || 'off',
   };
-  // ★ 识别片段长度：**只有用户显式调离 0 才写进预设/请求**。0 = 不传 = 模型原生
-  //   块长。这样「保存预设」不会把分段识别悄悄固化进去（用户 2026-10-23：
-  //   改成不强制开启分段识别，允许用户手动切换）。
-  if (mode.value !== 'separate' && Number(segmentSec.value) > 0) {
-    p.segment_sec = Number(segmentSec.value);
-  }
   if (mode.value === 'universal') {
     Object.assign(p, {
       model: umodel.value,
@@ -1230,6 +1208,9 @@ function collectPresetParams() {
     if (umodel.value === 'muscriptor') Object.assign(p, {
       model_size: msSize.value,
       muscriptor_instruments: msInstrValue.value,
+      audio_tagger: tagModel.value,
+      audio_tagger_whole_song: tagWholeSong.value,
+      audio_tagger_window_sec: Number(tagWindowSec.value),
       temperature: Number(msTemp.value), cfg_coef: Number(msCfg.value),
       beam_size: iv(msBeam.value), prelude_forcing: msPrelude.value,
       precision: msPrec.value,
@@ -1313,15 +1294,20 @@ function applyPresetParams(p, opts) {
   if (has('muscriptor_instruments') && typeof pr.muscriptor_instruments === 'string') {
     const v = pr.muscriptor_instruments.trim();
     if (!v || v === 'none') msMode.value = 'none';
+    else if (v === 'probe') msMode.value = 'probe';
     else {
       const groups = v.split(',').map((s) => s.trim()).filter((g) => MS_GROUPS.some((x) => x.id === g));
       if (groups.length) { msGroups.value = groups; msMode.value = 'limit'; }
     }
   }
+  if (has('audio_tagger') && ['audioset', 'ced'].indexOf(String(pr.audio_tagger)) >= 0) tagModel.value = String(pr.audio_tagger);
+  if (has('audio_tagger_whole_song')) tagWholeSong.value = !!pr.audio_tagger_whole_song;
+  if (has('audio_tagger_window_sec')) {
+    const _tw = clamp(Math.round(numOr('audio_tagger_window_sec', 60)), 5, 60);
+    // 旧构建把默认值写成了 10s；新默认 60s，老队列/预设迁移一次。
+    tagWindowSec.value = _tw === 10 ? 60 : _tw;
+  }
   if (has('precision') && ['fp32', 'fp16'].indexOf(pr.precision) >= 0) msPrec.value = pr.precision;
-  // 识别片段长度：0 = 模型默认（不开启）。老预设没有这个键时保留当前值；
-  //   带了就按它来（兼容 6.1.x 及更早写死了值的预设，用户可自己调回 0）。
-  if (has('segment_sec')) segmentSec.value = clamp(Math.round(numOr('segment_sec', 0)), 0, 120);
   // 降噪档位：只认引擎支持的三个值；老预设没有这个键时保持当前值（默认 off）
   if (has('denoise_mode') && ['off', 'light', 'strong'].indexOf(String(pr.denoise_mode)) >= 0) {
     denoiseMode.value = String(pr.denoise_mode);
@@ -1492,6 +1478,9 @@ function collectParams() {
       cfg.model_size = msSize.value;
       cfg.beat_grid = beatGrid.value;
       cfg.muscriptor_instruments = msInstrValue.value;
+      cfg.audio_tagger = tagModel.value;
+      cfg.audio_tagger_whole_song = tagWholeSong.value;
+      cfg.audio_tagger_window_sec = Number(tagWindowSec.value);
       // 乐器组约束：'none' / '人声,鼓' 这样的组名列表。
       // 注意这条链路有三跳（渲染端 → 主进程 worker 请求体 → 引擎），少任何一跳界面选了都不生效。
       // ★ 2026-10-14 更正：这段注释原先描述的是**已被移除**的批量推理行为
@@ -1528,9 +1517,6 @@ function collectParams() {
   }
   // 转录前降噪（默认 off = 旧行为；只有显式选择才发送）
   if (mode.value !== 'separate' && denoiseMode.value && denoiseMode.value !== 'off') cfg.denoise_mode = denoiseMode.value;
-  // ★ 识别片段长度：**只有用户显式调离 0 才发送**。0 = 不传 = 模型原生块长
-  //   （用户 2026-10-23：改成不强制开启分段识别，允许用户手动切换）。
-  if (mode.value !== 'separate' && Number(segmentSec.value) > 0) cfg.segment_sec = Number(segmentSec.value);
   if (mode.value !== 'separate' && memoryMode.value) cfg.memory_mode = memoryMode.value;
   if (mode.value === 'separate') {
     cfg.with_drums = drums.value;
@@ -2262,15 +2248,7 @@ onBeforeUnmount(() => {
                  实测 30 秒样例 71 → 8037 个音符、3 分钟样例 47967 个 / 517 秒。 -->
 
           </div>
-          <!-- ★ 识别片段长度：**默认 0 = 不开启**（用户 2026-10-23「改成不强制开启
-               分段识别，允许用户手动切换」）。调离 0 才按固定长度切片识别再合并，
-               实测块与块之间质量参差不齐（接缝重复音 / 换音色 / 延音被切断），
-               所以默认关并写明代价；0 时各模型用原生训练块长、整曲一次推理。 -->
-          <div class="tr-slider" v-if="mode !== 'separate'" data-guide="segment-sec">
-            <label>{{ t('识别片段长度') }}<b>{{ segmentSec > 0 ? segmentSec + 's' : t('模型默认（不开启）') }}{{ segmentSec > 0 && SEG_RECOMMEND > 0 ? ' · ' + t('推荐') + ' ' + SEG_RECOMMEND + 's' : '' }}</b></label>
-            <NumSlider v-model="segmentSec" :min="0" :max="60" :step="1" unit="s" :aria-label="t('识别片段长度')" />
-            <small v-if="segmentSec > 0" style="color:var(--t-warn)">{{ t('分段识别可能让块与块之间质量参差不齐（接缝重复音 / 换音色 / 延音被切断）；0 = 用模型原生块长，效果最稳。') }}</small>
-          </div>
+
           <div class="tr-switch" v-if="mode !== 'separate'" data-guide="memory-mode">
             <label>
               <span><b>{{ t('显存策略') }}</b></span>
@@ -2356,8 +2334,31 @@ onBeforeUnmount(() => {
               <select v-model="msMode" class="select-input" style="width:auto;padding:2px 6px;font-size:var(--fs-xs)">
                 <option value="none">{{ t('不限定') }}</option>
                 <option value="limit">{{ t('限定乐器组') }}</option>
+                <option value="probe">{{ t('自动探测乐器组') }}</option>
               </select>
             </label>
+          </div>
+          <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
+            <label>
+              <span><b>{{ t('音频标签模型') }}</b><small class="fb-hint" style="margin-left:6px">{{ t('只用于自动探测乐器组') }}</small></span>
+              <select v-model="tagModel" class="select-input" style="width:auto;padding:2px 6px;font-size:var(--fs-xs)">
+                <option value="audioset">{{ t('AudioSet zipformer-small（内置）') }}</option>
+                <option value="ced">{{ t('CED-Small（约 23 MB）') }}</option>
+              </select>
+            </label>
+          </div>
+          <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
+            <label>
+              <span><b>{{ t('音频标签探测长度') }}</b><small class="fb-hint" style="margin-left:6px">{{ t('整首 = 扫描全曲窗口；固定窗口 = 按窗口大小抽样') }}</small></span>
+              <select v-model="tagWholeSong" class="select-input" style="width:auto;padding:2px 6px;font-size:var(--fs-xs)">
+                <option :value="false">{{ t('固定窗口') }}</option>
+                <option :value="true">{{ t('整首') }}</option>
+              </select>
+            </label>
+          </div>
+          <div class="tr-slider" v-if="mode === 'universal' && umodel === 'muscriptor' && !tagWholeSong">
+            <label>{{ t('探测窗口') }}<b>{{ tagWindowSec }}s</b></label>
+            <NumSlider v-model="tagWindowSec" :min="5" :max="60" :step="5" unit="s" />
           </div>
           <div class="tr-switch" style="display:block" v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'limit'">
             <div style="display:flex;flex-wrap:wrap;gap:var(--sp-2);max-height:150px;overflow:auto;padding:2px 0">

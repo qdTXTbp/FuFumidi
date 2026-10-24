@@ -22,23 +22,6 @@ export default async function (app) {
   const hint = await app.eval('(() => { const e = document.querySelector(".tr-queues"); return e ? e.innerText : ""; })()');
   app.assert(hint.indexOf('本队列') >= 0, '队列摘要显示产物歌单');
 
-  // ★ 识别片段长度：**默认不开启**（用户 2026-10-23「改成不强制开启分段识别，
-  //   允许用户手动切换」）。断言三件事：控件在、默认 0（模型默认）、能手动调。
-  const seg = await app.eval('(() => { const w = document.querySelector("[data-guide=segment-sec]"); const r = w && w.querySelector("input[type=range]"); return { has: !!w, hasRange: !!r, value: r ? r.value : "", text: w ? w.innerText.slice(0, 200) : "" }; })()');
-  app.assert(seg.has && seg.hasRange, '有「识别片段长度」滑条控件：' + JSON.stringify(seg));
-  app.assert(seg.text.indexOf('识别片段长度') >= 0 || seg.text.indexOf('Recognition segment length') >= 0, '控件标题正确：' + seg.text);
-  app.assert(Number(seg.value) === 0, '识别片段长度默认为 0（不开启）：' + seg.value);
-  app.assert(seg.text.indexOf('模型默认') >= 0 || seg.text.indexOf('Model default') >= 0, '默认档显示「模型默认」：' + seg.text.slice(0, 120));
-
-  // 手动调到 5s 应立即生效（这就是"允许用户手动切换"）
-  await app.eval('(() => { const r = document.querySelector("[data-guide=segment-sec] input[type=range]"); const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set; setter.call(r, "5"); r.dispatchEvent(new Event("input", { bubbles: true })); r.dispatchEvent(new Event("change", { bubbles: true })); return true; })()');
-  await new Promise((r) => setTimeout(r, 300));
-  const segText = await app.eval('(() => document.querySelector("[data-guide=segment-sec]").innerText)()');
-  app.assert(/5\s*s/.test(segText) || segText.indexOf('5s') >= 0, '手动调后片段长度滑条显示 5s：' + segText.slice(0, 120));
-  // 调回 0 = 关闭（回到模型原生块长）
-  await app.eval('(() => { const r = document.querySelector("[data-guide=segment-sec] input[type=range]"); const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set; setter.call(r, "0"); r.dispatchEvent(new Event("input", { bubbles: true })); r.dispatchEvent(new Event("change", { bubbles: true })); return true; })()');
-  await new Promise((r) => setTimeout(r, 200));
-
   // 降噪选项（默认「关闭」）与显存策略（默认「自动」）
   const denoise = await app.eval('(() => { const w=document.querySelector("[data-guide=denoise-mode]"); const s=w&&w.querySelector("select"); return { has: !!w, value: s?s.value:"", opts: s?[...s.options].map(o=>o.value):[] }; })()');
   app.assert(denoise.has && denoise.value === 'off', '降噪默认关闭：' + JSON.stringify(denoise));
