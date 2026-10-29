@@ -237,7 +237,7 @@ onMounted(async () => {
 .ap-row-tight { margin-top: var(--sp-3); }
 
 .ap-mask { position: fixed; inset: 0; z-index: var(--z-overlay); background: color-mix(in srgb, var(--canvas) 38%, transparent); }
-.ap-drawer { position: absolute; right: 0; top: 0; bottom: 0; width: min(520px, 94vw); overflow-y: auto; background-color: color-mix(in srgb, var(--canvas) 92%, transparent); backdrop-filter: var(--glass-blur); border-left: 1px solid color-mix(in srgb, var(--ornament) 34%, var(--hairline)); box-shadow: var(--sh-3); padding: var(--sp-5); color: var(--text); animation: ap-in var(--motion-base) var(--ease-out); }
+.ap-drawer { position: absolute; right: 0; top: 0; bottom: 0; overflow-y: auto; background-color: color-mix(in srgb, var(--canvas) 92%, transparent); backdrop-filter: var(--glass-blur); border-left: 1px solid color-mix(in srgb, var(--ornament) 34%, var(--hairline)); box-shadow: var(--sh-3); padding: var(--sp-5); color: var(--text); animation: ap-in var(--motion-base) var(--ease-out); }
 @keyframes ap-in { from { opacity: 0; transform: translateX(18px); } to { opacity: 1; transform: none; } }
 .ap-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-3); margin-bottom: var(--sp-5); }
 .ap-eyebrow { color: var(--accent-sky); font: var(--fs-xs) var(--font-num); letter-spacing: .16em; }

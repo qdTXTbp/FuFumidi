@@ -1012,12 +1012,6 @@ async function renderVideo() {
           </select>
         </div>
         <div class="field-row">
-          <label>{{ t('渲染范围') }}</label>
-          <select class="select-input" v-model="range" disabled>
-            <option value="full">{{ t('整首歌曲') }}</option>
-          </select>
-        </div>
-        <div class="field-row">
           <label>{{ t('导出格式') }}</label>
           <select class="select-input" v-model="exp.format">
             <option v-for="f in EXPORT_FORMATS" :key="f.id" :value="f.id">{{ f.label }}</option>
