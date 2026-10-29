@@ -506,6 +506,9 @@ function onKey(e) {
     if (v) app.setView(v.id);
     return;
   }
+  // 设置/对话框/右键菜单打开时，全局播放/快进/换歌不应被按键触发。
+  const modalOpen = !!(document.querySelector('.overlay, .ed-modal-mask, [role="dialog"][aria-modal="true"]'));
+  if (modalOpen && !e.ctrlKey && !e.metaKey && e.key !== 'Escape') return;
   // 忽略输入框内的快捷键（方向键在输入框里要能移光标，见 isEditableTarget 的说明）
   if (isEditableTarget(e.target)) return;
   // 编辑器/调教画布内部：数字键 1..9 是时值/力度快捷键、N/P 是编辑动作，
