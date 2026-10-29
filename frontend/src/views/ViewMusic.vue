@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, nextTick } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import Icon from '../components/Icon.vue';
 import ViewPlay from './ViewPlay.vue';
@@ -23,6 +23,24 @@ function select(id) {
   tab.value = id;
   router.replace({ query: { ...route.query, tab: id } });
 }
+/** 分组页签的键盘模型：左右/上下键切换、Home/End 到首尾（role=tablist 的约定） */
+function onTabKey(e, i) {
+  const n = tabs.length;
+  let next = -1;
+  if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = (i + 1) % n;
+  else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = (i - 1 + n) % n;
+  else if (e.key === 'Home') next = 0;
+  else if (e.key === 'End') next = n - 1;
+  if (next < 0 || next === i) return;
+  e.preventDefault(); e.stopPropagation();
+  select(tabs[next].id);
+  // tabindex 只在激活页签上，切完把焦点跟过去（否则焦点留在 tabindex=-1 的按钮上）
+  const root = e.currentTarget && e.currentTarget.parentElement;
+  nextTick(() => {
+    const els = root ? root.querySelectorAll('.gp-tab') : [];
+    if (els[next]) els[next].focus();
+  });
+}
 watch(() => route.query.tab, (v) => {
   const id = String(v || '');
   if (validTab(id)) tab.value = id;
@@ -30,8 +48,10 @@ watch(() => route.query.tab, (v) => {
 </script>
 <template>
   <div class="group-page">
-    <div class="group-tabs">
-      <button v-for="x in tabs" :key="x.id" class="gp-tab" :class="{ on: tab === x.id }" @click="select(x.id)">
+    <div class="group-tabs" role="tablist" :aria-label="t('视图')">
+      <button v-for="(x, i) in tabs" :key="x.id" class="gp-tab" role="tab"
+              :class="{ on: tab === x.id }" :aria-selected="tab === x.id ? 'true' : 'false'" :tabindex="tab === x.id ? 0 : -1"
+              @click="select(x.id)" @keydown="onTabKey($event, i)">
         <Icon :name="x.ic" :size="14" /> {{ t(x.label) }}
       </button>
     </div>

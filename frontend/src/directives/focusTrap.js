@@ -22,6 +22,9 @@ export const vFocusTrap = {
     };
     el.addEventListener('keydown', onKey);
     el._focusTrapCleanup = () => el.removeEventListener('keydown', onKey);
+    // 关闭后把焦点还给「打开它的那个控件」：否则焦点落在被移除的节点上，
+    // 浏览器把焦点丢回 body，键盘用户要重新 Tab 走一整套界面才能回到原处。
+    try { el._focusTrapPrev = document.activeElement; } catch (e) { el._focusTrapPrev = null; }
     requestAnimationFrame(() => {
       if (!el.contains(document.activeElement)) {
         const first = el.querySelector(FOCUSABLE);
@@ -31,5 +34,9 @@ export const vFocusTrap = {
   },
   unmounted(el) {
     if (el._focusTrapCleanup) el._focusTrapCleanup();
+    try {
+      const prev = el._focusTrapPrev;
+      if (prev && prev !== document.body && prev.isConnected && typeof prev.focus === 'function') prev.focus();
+    } catch (e) { /* 打开者已不在文档里（切视图等），不强行找落点 */ }
   },
 };

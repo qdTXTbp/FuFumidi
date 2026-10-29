@@ -119,7 +119,14 @@ function onDocDown(e) {
   if (tgt && tgt.closest && tgt.closest('.lib-filter-pop')) return;
   closeFilter();
 }
-function onDocKey(e) { if (e.key === 'Escape') closeFilter(); }
+// Esc：浮层自上而下关闭（筛选 → 右键菜单）。菜单用键盘打开后焦点在菜单里，
+// 这里的捕获阶段兜底保证「焦点不巧落回行/遮罩」时 Esc 仍然有效。
+function onDocKey(e) {
+  if (e.key !== 'Escape') return;
+  closeFilter();
+  if (plMenu.value) closePlMenu();
+  if (songMenu.value) closeSongMenu();
+}
 function tagValuesOf(id) {
   const tg = app.songTags(id) || {};
   if (filterKind.value === 'tag') return cleanTags(tg.tags);
@@ -319,23 +326,102 @@ function bmDragEnd() { bmDragId.value = null; bmDragOverId.value = null; }
 
 /* ---------------- 歌单右键菜单 ---------------- */
 const plMenu = ref(null); // { x, y, pl }
+// 菜单的来源行：关闭时把焦点还回去（键盘打开菜单的必要条件）
+const menuReturnEl = ref(null);
 /* ★ 落点按**真实尺寸**夹（旧版猜 130/246 高：菜单一变长，底部就落到窗口外点不到，
    用户 2026-10-14 报的就是这个）。见 core/menu.js。 */
 const plMenuEl = ref(null);
 const plMenuPos = ref(null);
 const songMenuEl = ref(null);
 const songMenuPos = ref(null);
-async function placeMenu(el, pos, m) {
+/** 菜单打开时把焦点放进去：鼠标右键与 Shift+F10 走同一条路，键盘才按得到菜单项 */
+async function placeMenu(el, pos, m, focusFirst) {
   await nextTick();
   const p = fitMenu(el.value, m.x, m.y);
   if (p) pos.value = p;
+  if (focusFirst && el.value) {
+    await nextTick();   // 位置写入后菜单才从 visibility:hidden 变可见，隐藏元素 focus() 无效
+    const first = el.value.querySelector('button:not([disabled])');
+    if (first) first.focus();
+  }
+}
+/** 关闭菜单后把焦点还给打开它的那一行（否则焦点跟着被移除的节点掉回 body） */
+function restoreMenuFocus() {
+  const el = menuReturnEl.value;
+  menuReturnEl.value = null;
+  try { if (el && el.isConnected && typeof el.focus === 'function') el.focus(); } catch (e) {}
+}
+/** 键盘打开菜单的落点：行左下角，别落在窗口左上角 */
+function menuAnchor(el) {
+  try {
+    const r = el.getBoundingClientRect();
+    return { x: Math.round(r.left + 12), y: Math.round(r.bottom - 2) };
+  } catch (e) { return { x: 12, y: 12 }; }
 }
 function openPlMenu(e, pl) {
-  plMenu.value = { x: e.clientX, y: e.clientY, pl };
+  const pt = (e.clientX || e.clientY) ? { x: e.clientX, y: e.clientY } : menuAnchor(e.currentTarget);
+  menuReturnEl.value = e.currentTarget || null;
+  plMenu.value = { x: pt.x, y: pt.y, pl };
   plMenuPos.value = null;
-  placeMenu(plMenuEl, plMenuPos, plMenu.value);
+  placeMenu(plMenuEl, plMenuPos, plMenu.value, true);
 }
-function closePlMenu() { plMenu.value = null; plMenuPos.value = null; }
+function closePlMenu() { plMenu.value = null; plMenuPos.value = null; restoreMenuFocus(); }
+
+/* ---------------- 浮层的键盘模型（P1-3 / P1-4） ----------------
+   曲库行与歌单行原来是 div + @click，键盘完全够不到。这里只补语义与键位，
+   不动任何布局：元素仍是 div，行内样式、命中区、拖动排序都不变。
+   · 曲目行 = listbox 的 option：Enter/Space 选中（批量模式切换勾选），Ctrl+Enter 播放（双击的等价物），
+     Shift+F10 打开右键菜单；
+   · 歌单/智能视图 = button：Enter/Space 切换，Shift+F10 打开歌单菜单；
+   · 所有处理都先判 e.target === e.currentTarget：行内还有收藏 / 加歌单 / 编辑 / 删除按钮，
+     它们的回车不能被整行抢走。 */
+function onViewKey(e, id) {
+  if (e.target !== e.currentTarget) return;
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); playlist.select(id); }
+}
+function onPlaylistKey(e, pl) {
+  if (e.target !== e.currentTarget) return;
+  if (e.key === 'F10' && e.shiftKey) { e.preventDefault(); e.stopPropagation(); openPlMenu(e, pl); return; }
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); playlist.select(pl.id); }
+}
+function onSongRowKey(e, s) {
+  if (e.target !== e.currentTarget) return;
+  if (e.key === 'F10' && e.shiftKey) { e.preventDefault(); e.stopPropagation(); openSongMenu(e, s); return; }
+  // listbox 的方向键：上下移动焦点（不顺手切歌 —— 选中即加载曲目，方向键不该触发重活）
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    const el = e.key === 'ArrowDown' ? e.currentTarget.nextElementSibling : e.currentTarget.previousElementSibling;
+    if (el && el.focus) { e.preventDefault(); e.stopPropagation(); el.focus(); }
+    return;
+  }
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault(); e.stopPropagation();
+    if (!playlist.batchOn) playSong(s.id);
+    return;
+  }
+  if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault(); e.stopPropagation();
+    if (playlist.batchOn) batchToggle(s.id); else selectSong(s.id);
+  }
+}
+/** 菜单内的方向键 / Home / End 移动，Esc 关闭并把焦点还给来源行（role=menu 的键盘约定） */
+function onMenuKey(e, elRef, close) {
+  if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); return; }
+  // 非模态菜单：Tab 收起菜单并把焦点还给来源行，不把焦点困在浮层里（也不留给已移除的节点）
+  if (e.key === 'Tab') { e.preventDefault(); close(); return; }
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return;
+  e.preventDefault(); e.stopPropagation();
+  // 模板里传进来的是「已解包的 DOM 元素」，脚本里传进来的是 ref —— 两种都认
+  const root = elRef && elRef.value ? elRef.value : (elRef && elRef.querySelector ? elRef : null);
+  if (!root) return;
+  const items = Array.from(root.querySelectorAll('button:not([disabled])'));
+  if (!items.length) return;
+  const i = items.indexOf(document.activeElement);
+  let n = 0;
+  if (e.key === 'ArrowUp') n = i <= 0 ? items.length - 1 : i - 1;
+  else if (e.key === 'ArrowDown') n = (i < 0 || i === items.length - 1) ? 0 : i + 1;
+  else if (e.key === 'End') n = items.length - 1;
+  items[n].focus();
+}
 function plMenuStyle() {
   const p = plMenuPos.value;
   return p ? { left: p.left + 'px', top: p.top + 'px' } : { left: '0px', top: '0px', visibility: 'hidden' };
@@ -347,14 +433,16 @@ const SONG_SUB_W = 168;
 const songMenu = ref(null);   // { x, y, s }
 const songSub = ref(false);   // 「添加到歌单」子菜单是否展开
 function openSongMenu(e, s) {
-  songMenu.value = { x: e.clientX, y: e.clientY, s };
+  const pt = (e.clientX || e.clientY) ? { x: e.clientX, y: e.clientY } : menuAnchor(e.currentTarget);
+  menuReturnEl.value = e.currentTarget || null;
+  songMenu.value = { x: pt.x, y: pt.y, s };
   songSub.value = false;
   songMenuPos.value = null;
-  placeMenu(songMenuEl, songMenuPos, songMenu.value);
+  placeMenu(songMenuEl, songMenuPos, songMenu.value, true);
   // 批量模式下右键任意一行，先把它纳入勾选集合，菜单随后可直接操作
   if (playlist.batchOn && !batchIsSel(s.id)) batchToggle(s.id);
 }
-function closeSongMenu() { songMenu.value = null; songSub.value = false; songMenuPos.value = null; }
+function closeSongMenu() { songMenu.value = null; songSub.value = false; songMenuPos.value = null; restoreMenuFocus(); }
 function songMenuStyle() {
   const p = songMenuPos.value;
   return p ? { left: p.left + 'px', top: p.top + 'px' } : { left: '0px', top: '0px', visibility: 'hidden' };
@@ -798,22 +886,27 @@ const showAuth = ref(false);
         </div>
       </div>
       <div v-if="plCreating" class="pl-new">
-        <input v-model="newPlName" class="text-input" style="flex:1;padding:var(--sp-1) var(--sp-2);font-size:var(--fs-sm)" :placeholder="t('歌单名')" @keydown.enter="onNewPlKey" @keydown.esc="onNewPlKey" autofocus />
+        <input v-model="newPlName" class="text-input" style="flex:1;padding:var(--sp-1) var(--sp-2);font-size:var(--fs-sm)" :placeholder="t('歌单名')" :aria-label="t('歌单名')" @keydown.enter="onNewPlKey" @keydown.esc="onNewPlKey" autofocus />
         <button class="btn sm" style="padding:3px var(--sp-3)" @click="createPl()">{{ t('确定') }}</button>
       </div>
 
       <template v-if="!plCollapsed">
       <div class="pl-grid" data-guide="sidebar-views">
-        <div class="pl-item" :title="t('全部曲目')" :class="{ on: isAllView }" @click="playlist.select('all')">
+        <!-- 智能视图：div 保留（命中区/图标排版不动），补 button 语义 + 键盘 -->
+        <div class="pl-item" role="button" tabindex="0" :title="t('全部曲目')" :class="{ on: isAllView }"
+             :aria-current="isAllView ? 'true' : undefined" @click="playlist.select('all')" @keydown="onViewKey($event, 'all')">
           <Icon name="music" :size="13" /><span class="pl-sr">{{ t('全部曲目') }}</span><em>{{ state.songs.length }}</em>
         </div>
-        <div class="pl-item" :title="t('收藏')" :class="{ on: isFavView }" @click="playlist.select('favorites')">
+        <div class="pl-item" role="button" tabindex="0" :title="t('收藏')" :class="{ on: isFavView }"
+             :aria-current="isFavView ? 'true' : undefined" @click="playlist.select('favorites')" @keydown="onViewKey($event, 'favorites')">
           <Icon name="heart" :size="13" /><span class="pl-sr">{{ t('收藏') }}</span><em>{{ playlist.favorites.length }}</em>
         </div>
-        <div class="pl-item" :title="t('最近播放')" :class="{ on: playlist.activePlaylistId === 'recent' }" @click="playlist.select('recent')">
+        <div class="pl-item" role="button" tabindex="0" :title="t('最近播放')" :class="{ on: playlist.activePlaylistId === 'recent' }"
+             :aria-current="playlist.activePlaylistId === 'recent' ? 'true' : undefined" @click="playlist.select('recent')" @keydown="onViewKey($event, 'recent')">
           <Icon name="clock" :size="13" /><span class="pl-sr">{{ t('最近播放') }}</span>
         </div>
-        <div class="pl-item" :title="t('最常播放')" :class="{ on: playlist.activePlaylistId === 'most' }" @click="playlist.select('most')">
+        <div class="pl-item" role="button" tabindex="0" :title="t('最常播放')" :class="{ on: playlist.activePlaylistId === 'most' }"
+             :aria-current="playlist.activePlaylistId === 'most' ? 'true' : undefined" @click="playlist.select('most')" @keydown="onViewKey($event, 'most')">
           <Icon name="zap" :size="13" /><span class="pl-sr">{{ t('最常播放') }}</span>
         </div>
       </div>
@@ -821,6 +914,7 @@ const showAuth = ref(false);
       <div class="pl-playlist-scroll">
       <div class="pl-item pl-playlist" v-for="(pl, plIdx) in playlist.playlists" :key="pl.id"
            :title="plIdx < 9 ? t('快捷键 ') + (plIdx + 1) : ''"
+           role="button" tabindex="0" :aria-current="playlist.activePlaylistId === pl.id ? 'true' : undefined"
            :class="{ on: playlist.activePlaylistId === pl.id, dragging: plDragId === pl.id, dragTarget: plOverId === pl.id, dragable: canReorderPlaylists }"
            :draggable="canReorderPlaylists"
            @dragstart="plDragStart(pl)"
@@ -829,6 +923,7 @@ const showAuth = ref(false);
            @drop.stop.prevent="plDrop($event, pl.id)"
            @dragend="resetPlDrag()"
            @contextmenu.prevent="openPlMenu($event, pl)"
+           @keydown="onPlaylistKey($event, pl)"
            @click="playlist.select(pl.id)">
         <span v-if="canReorderPlaylists" class="pl-drag"><Icon name="drag" :size="12" /></span>
         <span v-if="plIdx < 9" class="pl-key">{{ plIdx + 1 }}</span>
@@ -861,8 +956,13 @@ const showAuth = ref(false);
         <button class="btn sm ghost" @click="exitBatch">{{ t('完成') }}</button>
       </div>
 
-      <div class="song-list" role="list" :class="{ 'drag-active': dragId && canReorder && !playlist.batchOn }" @dragover.prevent="dragOverList" @drop.prevent.stop="dropOnList">
+      <!-- 曲目行：listbox + option（P1-3）。行内仍有收藏/加歌单/编辑/删除按钮，键盘处理判 e.target 避免抢键 -->
+      <div class="song-list" role="listbox" :aria-label="t('曲库')" :aria-multiselectable="playlist.batchOn ? 'true' : undefined"
+           :class="{ 'drag-active': dragId && canReorder && !playlist.batchOn }" @dragover.prevent="dragOverList" @drop.prevent.stop="dropOnList">
         <div class="song-item" v-for="(s, i) in visibleSongs" :key="s.id"
+           role="option" tabindex="0" :aria-selected="playlist.batchOn ? batchIsSel(s.id) : s.id === state.currentId"
+           :aria-label="s.name"
+           @keydown="onSongRowKey($event, s)"
            :class="{ active: s.id === state.currentId, dragging: dragId === s.id, dragTarget: dragOverId === s.id, 'batch-sel': playlist.batchOn && batchIsSel(s.id) }"
            :draggable="canReorder && !playlist.batchOn"
            @dragstart="dragStart(s, $event)"
@@ -928,7 +1028,7 @@ const showAuth = ref(false);
   <Teleport to="body">
     <!-- 添加到歌单 -->
     <Transition name="ov">
-      <div v-if="addToPlFor" class="ed-modal-mask" role="dialog" aria-modal="true" :aria-label="t('添加到歌单')" @click.self="closeAddToPl" @keydown.esc="closeAddToPl">
+      <div v-if="addToPlFor" class="ed-modal-mask" v-focus-trap role="dialog" aria-modal="true" :aria-label="t('添加到歌单')" @click.self="closeAddToPl" @keydown.esc="closeAddToPl">
         <div class="ed-modal" style="width:min(320px,92vw)">
           <div class="ed-modal-head">
             <b>{{ t('添加到歌单') }}</b>
@@ -953,7 +1053,7 @@ const showAuth = ref(false);
 
     <!-- 重命名歌单 -->
     <Transition name="ov">
-      <div v-if="renameTarget" class="ed-modal-mask" role="dialog" aria-modal="true" :aria-label="t('重命名歌单')" @click.self="closeRename" @keydown.esc="closeRename">
+      <div v-if="renameTarget" class="ed-modal-mask" v-focus-trap role="dialog" aria-modal="true" :aria-label="t('重命名歌单')" @click.self="closeRename" @keydown.esc="closeRename">
         <div class="ed-modal" style="width:min(320px,92vw)">
           <div class="ed-modal-head"><b>{{ t('重命名歌单') }}</b><button class="icon-btn" style="margin-left:auto" :title="t('关闭')" :aria-label="t('关闭')" @click="closeRename"><Icon name="close" :size="14" /></button></div>
           <div style="padding:var(--sp-4) var(--sp-1) var(--sp-1)">
@@ -969,7 +1069,7 @@ const showAuth = ref(false);
 
     <!-- 编辑信息：重命名 + 艺术家/专辑/流派 + 自定义标签 -->
     <Transition name="ov">
-      <div v-if="infoTarget" class="ed-modal-mask" role="dialog" aria-modal="true" :aria-label="t('编辑信息')" @click.self="closeInfo" @keydown.esc="closeInfo">
+      <div v-if="infoTarget" class="ed-modal-mask" v-focus-trap role="dialog" aria-modal="true" :aria-label="t('编辑信息')" @click.self="closeInfo" @keydown.esc="closeInfo">
         <div class="ed-modal" style="width:min(430px,94vw)">
           <div class="ed-modal-head">
             <b>{{ t('编辑信息') }}</b>
@@ -1016,7 +1116,7 @@ const showAuth = ref(false);
 
     <!-- 确认弹窗 -->
     <Transition name="ov">
-      <div v-if="confirmDlg" class="ed-modal-mask ed-modal-top" role="dialog" aria-modal="true" :aria-label="confirmDlg.title" @click.self="closeConfirm" @keydown.esc="closeConfirm">
+      <div v-if="confirmDlg" class="ed-modal-mask ed-modal-top" v-focus-trap role="dialog" aria-modal="true" :aria-label="confirmDlg.title" @click.self="closeConfirm" @keydown.esc="closeConfirm">
         <div class="ed-modal" style="width:min(340px,92vw)">
           <div class="ed-modal-head"><b>{{ confirmDlg.title }}</b><button class="icon-btn" style="margin-left:auto" :title="t('关闭')" :aria-label="t('关闭')" @click="closeConfirm"><Icon name="close" :size="14" /></button></div>
           <div style="padding:var(--sp-4) var(--sp-1) var(--sp-1);line-height:1.6;color:var(--ink)" class="small">{{ confirmDlg.msg }}</div>
@@ -1031,7 +1131,8 @@ const showAuth = ref(false);
     <!-- 歌单右键菜单 -->
     <Transition name="ov">
       <div v-if="plMenu" class="pl-ctx-mask" @click.self="closePlMenu" @contextmenu.prevent="closePlMenu">
-        <div ref="plMenuEl" class="pl-ctx-menu" :style="plMenuStyle()">
+        <div ref="plMenuEl" class="pl-ctx-menu" :style="plMenuStyle()" role="menu" :aria-label="t('歌单')"
+             @keydown="onMenuKey($event, plMenuEl, closePlMenu)">
           <button class="pl-ctx-item" @click="openBatchManager(plMenu.pl); closePlMenu()">{{ t('批量管理歌单') }}</button>
           <button class="pl-ctx-item" @click="openRename(plMenu.pl); closePlMenu()">{{ t('重命名') }}</button>
           <button class="pl-ctx-item danger" @click="deletePl(plMenu.pl); closePlMenu()">{{ t('删除歌单') }}</button>
@@ -1042,7 +1143,8 @@ const showAuth = ref(false);
     <!-- 曲目右键菜单（二级界面：曲目列表） -->
     <Transition name="ov">
       <div v-if="songMenu" class="pl-ctx-mask" @click.self="closeSongMenu" @contextmenu.prevent="closeSongMenu">
-        <div ref="songMenuEl" class="pl-ctx-menu song-ctx" :style="songMenuStyle()">
+        <div ref="songMenuEl" class="pl-ctx-menu song-ctx" :style="songMenuStyle()" role="menu" :aria-label="t('操作')"
+             @keydown="onMenuKey($event, songMenuEl, closeSongMenu)">
           <button class="pl-ctx-item" @click="playSong(songMenu.s.id); closeSongMenu()">{{ t('播放') }}</button>
           <div class="ctx-sub-wrap" @mouseenter="songSub = true" @mouseleave="songSub = false">
             <button class="pl-ctx-item ctx-has-sub" @click="openAddToPl(songMenu.s.id); closeSongMenu()">
@@ -1074,7 +1176,7 @@ const showAuth = ref(false);
 
     <!-- 歌单批量管理子页面（4.0.0 式管理菜单） -->
     <Transition name="ov">
-      <div v-if="batchManagerOpen" class="ed-modal-mask" role="dialog" aria-modal="true" :aria-label="t('批量管理歌单')" @click.self="closeBatchManager" @keydown.esc="closeBatchManager">
+      <div v-if="batchManagerOpen" class="ed-modal-mask" v-focus-trap role="dialog" aria-modal="true" :aria-label="t('批量管理歌单')" @click.self="closeBatchManager" @keydown.esc="closeBatchManager">
         <div class="ed-modal" style="width:min(560px,92vw)">
           <div class="ed-modal-head">
             <b>{{ t('批量管理歌单') }} · {{ batchManagerPl && batchManagerPl.name }}</b>

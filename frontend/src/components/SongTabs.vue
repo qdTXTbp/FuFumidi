@@ -15,12 +15,82 @@ const router = useRouter();
 const visible = computed(() => store.tabs.length >= 1);
 const dragIndex = ref(-1);
 const tabMenu = ref(null);
+const tabMenuEl = ref(null);
+const allMenuEl = ref(null);
+const allBtnEl = ref(null);
+// 关闭菜单后焦点回到打开它的控件（标签 / 「全部标签」按钮）：否则焦点掉回 body
+const menuReturnEl = ref(null);
 const scrollEl = ref(null);
 const canLeft = ref(false);
 const canRight = ref(false);
 const allMenu = ref(false);
-function openTabMenu(e, tb) { tabMenu.value = { x: e.clientX, y: e.clientY, tab: tb }; }
-function closeTabMenu() { tabMenu.value = null; }
+function menuPoint(el) {
+  try { const r = el.getBoundingClientRect(); return { x: Math.round(r.left), y: Math.round(r.bottom + 2) }; }
+  catch (err) { return { x: 12, y: 12 }; }
+}
+/** 右键与 Shift+F10 共用：给菜单一个落点，并记住来源控件 */
+function openTabMenu(e, tb) {
+  const pt = (e.clientX || e.clientY) ? { x: e.clientX, y: e.clientY } : menuPoint(e.currentTarget);
+  menuReturnEl.value = e.currentTarget || null;
+  tabMenu.value = { x: pt.x, y: pt.y, tab: tb };
+  focusMenu(tabMenuEl);
+}
+function closeTabMenu() { tabMenu.value = null; restoreMenuFocus(); }
+async function focusMenu(elRef) {
+  await nextTick();
+  const el = elRef && elRef.value;
+  if (!el) return;
+  const first = el.querySelector('button:not([disabled])');
+  if (first) first.focus();
+}
+function restoreMenuFocus() {
+  const el = menuReturnEl.value;
+  menuReturnEl.value = null;
+  try { if (el && el.isConnected && typeof el.focus === 'function') el.focus(); } catch (e) {}
+}
+/** 菜单内方向键 / Home / End；Esc 关闭并还焦点；Tab 离开即收起（非模态菜单的约定） */
+function onMenuKey(e, elRef, close) {
+  if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); return; }
+  if (e.key === 'Tab') { e.preventDefault(); close(); return; }
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return;
+  e.preventDefault(); e.stopPropagation();
+  // 模板里 ref 会被解包成 DOM 元素，脚本里是 ref 对象 —— 两种都认
+  const root = elRef && elRef.value ? elRef.value : (elRef && elRef.querySelector ? elRef : null);
+  if (!root) return;
+  const items = Array.from(root.querySelectorAll('button:not([disabled])'));
+  if (!items.length) return;
+  const i = items.indexOf(document.activeElement);
+  let n = 0;
+  if (e.key === 'ArrowUp') n = i <= 0 ? items.length - 1 : i - 1;
+  else if (e.key === 'ArrowDown') n = (i < 0 || i === items.length - 1) ? 0 : i + 1;
+  else if (e.key === 'End') n = items.length - 1;
+  items[n].focus();
+}
+/** 标签栏的键盘模型：tablist 用左右方向键在标签间移动并切换，Home/End 到首尾，Delete 关闭 */
+function onTabKey(e, tb, i) {
+  const list = store.tabs;
+  if (!list.length) return;
+  if (e.key === 'F10' && e.shiftKey) { e.preventDefault(); e.stopPropagation(); openTabMenu(e, tb); return; }
+  let next = -1;
+  if (e.key === 'ArrowRight') next = (i + 1) % list.length;
+  else if (e.key === 'ArrowLeft') next = (i - 1 + list.length) % list.length;
+  else if (e.key === 'Home') next = 0;
+  else if (e.key === 'End') next = list.length - 1;
+  if (next >= 0) {
+    e.preventDefault(); e.stopPropagation();
+    const target = list[next];
+    if (!target) return;
+    pick(target.id);
+    // 切换后焦点跟到新标签（tabindex 只在激活项上，不然焦点会留在 -1 的节点上）
+    nextTick(() => {
+      const root = scrollEl.value;
+      const el = root && root.querySelectorAll('.song-tab')[next];
+      if (el && el.focus) el.focus();
+    });
+    return;
+  }
+  if (e.key === 'Delete') { e.preventDefault(); e.stopPropagation(); closeTab(e, tb.id); }
+}
 async function menuGroup() { const tb = tabMenu.value && tabMenu.value.tab; closeTabMenu(); if (tb) await editGroup(tb); }
 function menuUngroup() { const tb = tabMenu.value && tabMenu.value.tab; closeTabMenu(); if (!tb) return; delete groups.value[tb.id]; try { localStorage.setItem(GROUP_KEY, JSON.stringify(groups.value)); } catch (e) {} }
 function menuClose() { const tb = tabMenu.value && tabMenu.value.tab; closeTabMenu(); if (tb) closeTab({ stopPropagation() {} }, tb.id); }
@@ -63,8 +133,13 @@ function ensureActiveVisible() {
 }
 function togglePin(id) { store.togglePin(id); nextTick(updateArrows); }
 function closeRight(id) { store.closeRight(id); if (store.activeId) pick(store.activeId); }
-function openAllMenu() { allMenu.value = !allMenu.value; }
-function pickFromAll(id) { allMenu.value = false; pick(id); }
+function openAllMenu() {
+  allMenu.value = !allMenu.value;
+  if (allMenu.value) { menuReturnEl.value = allBtnEl.value; focusMenu(allMenuEl); }
+  else restoreMenuFocus();
+}
+function closeAllMenu() { allMenu.value = false; restoreMenuFocus(); }
+function pickFromAll(id) { closeAllMenu(); pick(id); }
 
 async function pick(id) {
   if (!store.activate(id)) return;
@@ -111,6 +186,11 @@ async function cycle(dir) {
 }
 function onKeydown(e) {
   if (isEditableTarget(e.target)) return;
+  // Esc 关掉本组件自己的两个浮层，再交给全局（App.vue 的 Esc 白名单不含它们）
+  if (e.key === 'Escape') {
+    if (tabMenu.value) { e.preventDefault(); e.stopPropagation(); closeTabMenu(); return; }
+    if (allMenu.value) { e.preventDefault(); e.stopPropagation(); closeAllMenu(); return; }
+  }
   const mod = e.ctrlKey || e.metaKey;
   if (mod && !e.altKey && String(e.key).toLowerCase() === 'w' && store.activeId) {
     e.preventDefault();
@@ -142,7 +222,8 @@ watch(() => store.tabs.length, () => nextTick(() => { updateArrows(); ensureActi
       <div v-for="(tb, i) in store.tabs" :key="tb.id" class="song-tab" :class="{ on: store.activeId === tb.id, dragging: dragIndex === i, over: dragOver === i, pinned: tb.pinned }"
            :style="{ '--tab-group': groupColor(tb.id) }"
            role="tab" :aria-selected="store.activeId === tb.id" :tabindex="store.activeId === tb.id ? 0 : -1" :data-song-id="tb.id" :title="tb.name + (groupOf(tb.id) ? ' · ' + groupOf(tb.id) : '')"
-           draggable="true" @click="pick(tb.id)" @keydown.enter="pick(tb.id)" @keydown.space.prevent="pick(tb.id)"
+           draggable="true" @click="pick(tb.id)" @keydown.enter="pick(tb.id)" @keydown.space.stop.prevent="pick(tb.id)"
+           @keydown="onTabKey($event, tb, i)"
            @auxclick="$event.button === 1 && closeTab($event, tb.id)"
            @contextmenu.prevent="openTabMenu($event, tb)" @dragstart="onDragStart($event, i)" @dragover="onDragOver($event, i)" @drop="onDrop($event, i)" @dragend="onDragEnd">
         <Icon v-if="tb.pinned" name="pin" :size="10" class="st-pin" />
@@ -155,13 +236,14 @@ watch(() => store.tabs.length, () => nextTick(() => { updateArrows(); ensureActi
       </div>
     </div>
     <button class="st-arrow" :disabled="!canRight" :title="t('向右滚动标签')" :aria-label="t('向右滚动标签')" @click="scrollTabs(1)"><Icon name="forward" :size="12" /></button>
-    <button class="st-tool st-all" :title="t('全部标签')" :aria-label="t('全部标签')" @click="openAllMenu"><Icon name="menu" :size="14" /><span>{{ store.tabs.length }}</span></button>
+    <button ref="allBtnEl" class="st-tool st-all" :title="t('全部标签')" :aria-label="t('全部标签')" aria-haspopup="menu" :aria-expanded="allMenu ? 'true' : 'false'" @click="openAllMenu"><Icon name="menu" :size="14" /><span>{{ store.tabs.length }}</span></button>
     <button v-if="store.tabs.length" class="st-tool" :title="t('关闭全部标签（保留固定）')" :aria-label="t('关闭全部标签（保留固定）')" @click="closeAll"><Icon name="close" :size="12" /></button>
   </div>
 
   <Teleport to="body">
     <div v-if="tabMenu" class="st-menu-mask" @click="closeTabMenu" @contextmenu.prevent="closeTabMenu"></div>
-    <div v-if="tabMenu" class="st-menu" :style="{ left: tabMenu.x + 'px', top: tabMenu.y + 'px' }">
+    <div v-if="tabMenu" ref="tabMenuEl" class="st-menu" role="menu" :aria-label="t('操作')" :style="{ left: tabMenu.x + 'px', top: tabMenu.y + 'px' }"
+         @keydown="onMenuKey($event, tabMenuEl, closeTabMenu)">
       <button class="st-menu-item" @click="menuPin"><Icon name="pin" :size="12" /> {{ tabMenu.tab.pinned ? t('取消固定') : t('固定标签') }}</button>
       <button class="st-menu-item" @click="menuGroup"><Icon name="folder" :size="12" /> {{ t('设置分组') }}</button>
       <button v-if="groupOf(tabMenu.tab.id)" class="st-menu-item" @click="menuUngroup"><Icon name="minus" :size="12" /> {{ t('取消分组') }}</button>
@@ -170,9 +252,10 @@ watch(() => store.tabs.length, () => nextTick(() => { updateArrows(); ensureActi
       <button class="st-menu-item" @click="menuCloseOthers"><Icon name="close" :size="12" /> {{ t('关闭其他标签') }}</button>
       <button class="st-menu-item" @click="menuCloseRight"><Icon name="forward" :size="12" /> {{ t('关闭右侧标签') }}</button>
     </div>
-    <div v-if="allMenu" class="st-menu-mask" @click="allMenu = false"></div>
-    <div v-if="allMenu" class="st-menu st-all-menu">
-      <div class="st-menu-title">{{ t('全部标签') }}（{{ store.tabs.length }}）</div>
+    <div v-if="allMenu" class="st-menu-mask" @click="closeAllMenu"></div>
+    <div v-if="allMenu" ref="allMenuEl" class="st-menu st-all-menu" role="menu" :aria-label="t('全部标签')"
+         @keydown="onMenuKey($event, allMenuEl, closeAllMenu)">
+      <div class="st-menu-title" role="presentation">{{ t('全部标签') }}（{{ store.tabs.length }}）</div>
       <button v-for="tb in store.tabs" :key="tb.id" class="st-menu-item st-all-item" :class="{ on: store.activeId === tb.id }" @click="pickFromAll(tb.id)">
         <Icon :name="tb.pinned ? 'pin' : 'music'" :size="12" />
         <span class="st-all-name">{{ tb.name }}</span>

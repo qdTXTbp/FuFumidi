@@ -234,7 +234,7 @@ function rebuildTempoMap(s) {
 /** 速度改动统一入口：快照 → 原地改 tempoMap → 重算 sec → 刷新播放器 */
 function commitTempo(mutate) {
   const s = song.value; if (!s || !s.tempoMap) return;
-  editor.value?.pushStateForTrack(-1);
+  editor.value?.pushStateForTrack(-1, '速度');
   mutate(s.tempoMap);
   rebuildTempoMap(s);
   editor.value?.notifyExternalEdit();
@@ -1076,8 +1076,8 @@ function drumClick(e) {
   const ri = Math.floor(y / rowH), bi = Math.floor(x / colW);
   if (ri < 0 || ri >= rows || bi < 0 || bi >= beats) return;
   const midi = DRUM_PITCHES[ri], tick = Math.round(bi * tpb);
-  editor.value?.pushStateForTrack(drumTrack.value);
   const hit = tr.notes.find(n => n.midi === midi && Math.abs(n.start - tick) < tpb / 8);
+  editor.value?.pushStateForTrack(drumTrack.value, hit ? '删除音符' : '添加音符');
   if (hit) { const i = tr.notes.indexOf(hit); if (i >= 0) tr.notes.splice(i, 1); }
   else tr.notes.push({ start: tick, end: tick + Math.round(tpb / 2), midi, vel: 100 });
   tr.notes.sort((a, b) => a.start - b.start);
@@ -1089,7 +1089,7 @@ function drumClear() {
   const tr = s.tracks[drumTrack.value]; if (!tr) return;
   const hits = tr.notes.filter(n => DRUM_PITCHES.includes(n.midi));
   if (hits.length) {
-    editor.value?.pushStateForTrack(drumTrack.value);
+    editor.value?.pushStateForTrack(drumTrack.value, '删除音符');
     removeNotes([tr], new Set(hits));
     editor.value?.notifyExternalEdit();
     drawDrum();
@@ -1161,7 +1161,7 @@ function writeChordTrackToMidi() {
   if (!tr) return;
   const markers = chordMarkersOf(list);
   const ti = s.tracks.indexOf(tr);
-  editor.value?.pushStateForTrack(ti);
+  editor.value?.pushStateForTrack(ti, '和弦');
   tr.events = mergeChordMarkers(tr.events || [], markers);
   try { editor.value?.notifyExternalEdit?.(); } catch (e) {}
   onModified();
@@ -1255,7 +1255,19 @@ const helpOpen = ref(false);
 
 // 撤销历史快照
 function openHistory() { historyOpen.value = true; }
-const historyList = computed(() => (editor.value ? editor.value.historySnapshots() : []).slice().reverse());
+/* 依赖 historyOpen：撤销栈是普通数组（不是响应式的），computed 若只依赖 editor，
+   第一次打开后就会一直缓存旧列表 —— 再点「历史」看到的还是上一次的快照。 */
+const historyList = computed(() => {
+  if (!historyOpen.value) return [];
+  return (editor.value ? editor.value.historySnapshots() : []).slice().reverse();
+});
+/** 快照体积的人类可读写法（历史面板用） */
+function fmtBytes(n) {
+  const v = Math.max(0, Number(n) || 0);
+  if (v < 1024) return v + ' B';
+  if (v < 1024 * 1024) return (v / 1024).toFixed(v < 10 * 1024 ? 1 : 0) + ' KB';
+  return (v / (1024 * 1024)).toFixed(v < 10 * 1024 * 1024 ? 1 : 0) + ' MB';
+}
 
 /* ---- 批量操作 ---- */
 function selectChordBatch() {
@@ -1275,7 +1287,7 @@ function deleteShortNotes() {
   const sec = 0.08, bpm = s.initialBpm || 120;
   const short = tr.notes.filter(n => (n.end - n.start) / s.tpb * (60 / bpm) < sec);
   if (!short.length) { toast(t('当前轨道没有短于 80ms 的音符'), 'ok'); return; }
-  editor.value.pushStateForTrack(trackIndex.value);
+  editor.value.pushStateForTrack(trackIndex.value, '删除音符');
   removeNotes([tr], new Set(short));
   editor.value.notifyExternalEdit();
   toast(t('已删除 ') + short.length + t(' 个短音'), 'ok');
@@ -1285,7 +1297,7 @@ function loudScale(f) {
   if (!tr) return;
   const arr = editor.value?.selCount() ? editor.value.selRef() : tr.notes;
   if (!arr.length) { toast(t('没有可处理的音符'), 'warn'); return; }
-  editor.value.pushStateForTrack(trackIndex.value);
+  editor.value.pushStateForTrack(trackIndex.value, '力度');
   // 选区可能是整轨（一屏几万个音符），此时直接对全轨生效，省掉 Set 与逐音符成员判断
   const sel = arr === tr.notes ? null : new Set(arr);
   for (const n of tr.notes) if (!sel || sel.has(n)) n.vel = clamp(Math.round(n.vel * f), 1, 127);
@@ -1362,7 +1374,7 @@ function addAccompaniment() {
     }
   }
   const nextIdx = s.tracks.length;
-  editor.value.pushStateForTrack(-1); // 全量快照，撤销可还原新增轨道
+  editor.value.pushStateForTrack(-1, '智能伴奏'); // 全量快照，撤销可还原新增轨道
   s.tracks.push({ index: nextIdx, name: t('智能贝斯'), ch: 2, program: 33, isDrum: false, notes: bass, events: [], ccs: [] });
   s.tracks.push({ index: nextIdx + 1, name: t('智能分解和弦'), ch: 1, program: 26, isDrum: false, notes: arp, events: [], ccs: [] });
   s.tracks.push({ index: nextIdx + 2, name: t('智能铺底'), ch: 3, program: 49, isDrum: false, notes: pad, events: [], ccs: [] });
@@ -1386,7 +1398,7 @@ function applySmartQuantize() {
   const strength = (sqStrength.value || 0) / 100;
   const notes = editor.value?.selCount() ? editor.value.selRef() : s.tracks.reduce((a, t) => a.concat(t.notes), []);
   if (!notes.length) { toast(t('没有可处理的音符'), 'warn'); return; }
-  editor.value.pushStateForTrack(editor.value?.selCount() ? trackIndex.value : -1);
+  editor.value.pushStateForTrack(editor.value?.selCount() ? trackIndex.value : -1, '量化');
   let count = 0;
   for (const n of notes) {
     const ideal = Math.round(n.start / gridTicks) * gridTicks;
@@ -1424,7 +1436,7 @@ function applyLogic() {
   const actVal = parseFloat(logicActVal.value) || 0;
   const cond = logicCond.value, action = logicAction.value;
   // 先在修改前入栈：之前是改完才 push，撤销拿到的已经是“改后状态”，逻辑编辑器等于撤不回。
-  editor.value.pushStateForTrack(logicTarget.value === 'all' ? -1 : trackIndex.value);
+  editor.value.pushStateForTrack(logicTarget.value === 'all' ? -1 : trackIndex.value, '编辑');
   let changed = 0;
   if (action === 'delete') {
     // 删除目标内满足条件的音符。此前对每个音符做 tracks.find(t => t.notes.includes(n)) +
@@ -1485,7 +1497,7 @@ function runMacro(name) {
   const s = song.value; if (!s) return;
   const selection = name === 'normalize_vel' && editor.value?.selCount() ? editor.value.selRef() : null;
   const script = macroToCmd(name);
-  editor.value.pushStateForTrack(name === 'normalize_vel' && editor.value?.selCount() ? trackIndex.value : -1);
+  editor.value.pushStateForTrack(name === 'normalize_vel' && editor.value?.selCount() ? trackIndex.value : -1, '宏');
   const result = applyMacroScript(s, script, { selection });
   if (name === 'normalize_vel' && !result.changed) {
     toast(t('没有可处理的音符'), 'err');
@@ -1508,7 +1520,7 @@ function runCustomMacro(cmd) {
   const lines = parseMacroScript(cmd);
   if (recording.value) for (const line of lines) recordCmd(line);
   const selection = editor.value?.selCount() ? editor.value.selRef() : null;
-  editor.value.pushStateForTrack(-1);
+  editor.value.pushStateForTrack(-1, '宏');
   const result = applyMacroScript(s, lines, { selection });
   editor.value.notifyExternalEdit();
   macroOpen.value = false;
@@ -1663,7 +1675,7 @@ const ccListItems = computed(() => {
 function openCCList() { ccListOpen.value = true; }
 function delCCItem(i) {
   const tr = song.value?.tracks[trackIndex.value]; if (!tr) return;
-  editor.value.pushStateForTrack(trackIndex.value);
+  editor.value.pushStateForTrack(trackIndex.value, 'CC');
   tr.ccs.splice(i, 1);
   editor.value.notifyExternalEdit();
 }
@@ -1681,7 +1693,7 @@ function addLyricToSel() {
   const notes = editor.value?.selNotes();
   if (!notes || !notes.length) return;
   const tr = s.tracks[trackIndex.value];
-  editor.value.pushStateForTrack(trackIndex.value);
+  editor.value.pushStateForTrack(trackIndex.value, '歌词');
   for (const n of notes) tr.events.push({ tick: n.start, type: 'lyric', text });
   tr.events.sort((a, b) => a.tick - b.tick);
   editor.value.notifyExternalEdit();
@@ -2460,7 +2472,7 @@ onBeforeUnmount(() => {
             <option v-for="sc in SCALE_TYPES" :key="sc[0]" :value="sc[0]">{{ t(sc[1]) }}</option>
           </select>
           <input v-if="scaleType === 'custom'" v-model="customDegText" class="text-input" style="width:110px"
-                 :placeholder="t('音级 0,2,4,7,9')" :title="t('自定义音级（相对主音的半音，逗号分隔）')" />
+                 :placeholder="t('音级 0,2,4,7,9')" :title="t('自定义音级（相对主音的半音，逗号分隔）')" :aria-label="t('自定义音级（相对主音的半音，逗号分隔）')" />
           <select class="select-input" v-model="scaleMode" style="width:auto" :title="t('调内编辑模式：高亮调内音 / 拖拽与新建只落在调内音')">
             <option v-for="m in SCALE_MODE_OPTIONS()" :key="m[0]" :value="m[0]">{{ m[1] }}</option>
           </select>
@@ -2852,7 +2864,8 @@ onBeforeUnmount(() => {
 
     <!-- 快捷键一览（M1）：以前只藏在按钮 title 里，等于没有 -->
     <Transition name="ov">
-    <div v-if="shortcutsOpen" class="ed-modal-mask" @click.self="shortcutsOpen = false">
+    <div v-if="shortcutsOpen" class="ed-modal-mask" v-focus-trap role="dialog" aria-modal="true"
+         :aria-label="t('快捷键一览')" @click.self="shortcutsOpen = false" @keydown.esc="shortcutsOpen = false">
       <div class="ed-modal ed-keys">
         <div class="ed-modal-head">
           <b>{{ t('快捷键一览') }}</b><span class="muted small">{{ t('编辑工作台 · 按 ? 或 F1 开关 · Esc 关闭') }}</span>
@@ -2874,7 +2887,8 @@ onBeforeUnmount(() => {
 
     <!-- 力度曲线弹窗 -->
     <Transition name="ov">
-    <div v-if="vcOpen" class="ed-modal-mask" @click.self="vcOpen = false">
+    <div v-if="vcOpen" class="ed-modal-mask" v-focus-trap role="dialog" aria-modal="true"
+         :aria-label="t('力度曲线')" @click.self="vcOpen = false" @keydown.esc="vcOpen = false">
       <div class="ed-modal">
         <div class="ed-modal-head">
           <b>{{ t('力度曲线') }}</b><span class="muted small">{{ t('在画布上拖拽绘制力度包络，应用到选区 ') }}{{ vcVals.length }}{{ t(' 个音符') }}</span>
@@ -2892,7 +2906,8 @@ onBeforeUnmount(() => {
 
     <!-- 鼓组命名（M4）：GM 名字只是默认值 -->
     <Transition name="ov">
-    <div v-if="drumNameOpen" class="ed-modal-mask" @click.self="drumNameOpen = false">
+    <div v-if="drumNameOpen" class="ed-modal-mask" v-focus-trap role="dialog" aria-modal="true"
+         :aria-label="t('鼓组命名')" @click.self="drumNameOpen = false" @keydown.esc="drumNameOpen = false">
       <div class="ed-modal">
         <div class="ed-modal-head">
           <b>{{ t('鼓组命名') }}</b><span class="muted small">{{ t('留空则用 GM 默认名；只保存在本机') }}</span>
@@ -2915,7 +2930,8 @@ onBeforeUnmount(() => {
 
     <!-- 列表编辑器弹窗 -->
     <Transition name="ov">
-    <div v-if="listOpen" class="ed-modal-mask" @click.self="cancelList">
+    <div v-if="listOpen" class="ed-modal-mask" v-focus-trap role="dialog" aria-modal="true"
+         :aria-label="t('列表编辑器')" @click.self="cancelList" @keydown.esc="cancelList">
       <div class="ed-modal" @keydown.esc.stop="cancelList" @keydown.enter.stop="applyList">
         <div class="ed-modal-head">
           <b>{{ t('列表编辑器') }}</b><span class="muted small">{{ t('精确修改选中 ') }}{{ listDraft.length }}{{ t(' 个音符（单位：tick）· 改动即时生效，回车应用，Esc 还原') }}</span>
@@ -2945,7 +2961,8 @@ onBeforeUnmount(() => {
     </Transition>
     <!-- 智能量化弹窗 -->
     <Transition name="ov">
-    <div v-if="sqOpen" class="ed-modal-mask" @click.self="sqOpen = false">
+    <div v-if="sqOpen" class="ed-modal-mask" v-focus-trap role="dialog" aria-modal="true"
+         :aria-label="t('智能量化')" @click.self="sqOpen = false" @keydown.esc="sqOpen = false">
       <div class="ed-modal">
         <div class="ed-modal-head"><b>{{ t('智能量化') }}</b><span class="muted small">{{ t('网格 + Groove 模板') }}</span><button class="icon-btn" style="margin-left:auto" @click="sqOpen = false"><Icon name="minus" :size="14" /></button></div>
         <div class="adv-form-grid">
@@ -2972,7 +2989,8 @@ onBeforeUnmount(() => {
 
     <!-- 逻辑编辑器弹窗 -->
     <Transition name="ov">
-    <div v-if="logicOpen" class="ed-modal-mask" @click.self="logicOpen = false">
+    <div v-if="logicOpen" class="ed-modal-mask" v-focus-trap role="dialog" aria-modal="true"
+         :aria-label="t('逻辑编辑器')" @click.self="logicOpen = false" @keydown.esc="logicOpen = false">
       <div class="ed-modal">
         <div class="ed-modal-head"><b>{{ t('逻辑编辑器') }}</b><span class="muted small">{{ t('批量规则处理音符') }}</span><button class="icon-btn" style="margin-left:auto" @click="logicOpen = false"><Icon name="minus" :size="14" /></button></div>
         <div class="adv-form-grid">
@@ -3004,7 +3022,8 @@ onBeforeUnmount(() => {
 
     <!-- 宏面板弹窗 -->
     <Transition name="ov">
-    <div v-if="macroOpen" class="ed-modal-mask" @click.self="macroOpen = false">
+    <div v-if="macroOpen" class="ed-modal-mask" v-focus-trap role="dialog" aria-modal="true"
+         :aria-label="t('宏面板')" @click.self="macroOpen = false" @keydown.esc="macroOpen = false">
       <div class="ed-modal">
         <div class="ed-modal-head"><b>{{ t('宏面板') }}</b><span class="muted small">{{ t('一键执行常用批量处理，操作进入撤销历史') }}</span><button class="icon-btn" style="margin-left:auto" @click="macroOpen = false"><Icon name="minus" :size="14" /></button></div>
         <div class="macro-list">
@@ -3032,8 +3051,8 @@ onBeforeUnmount(() => {
           </div>
           <div v-if="!customMacros.length" class="muted small">{{ t('暂无自定义宏') }}</div>
           <div class="macro-add">
-            <input v-model="macroName" class="num-input" :placeholder="t('宏名称')" style="flex:1" />
-            <input v-model="macroCmd" class="num-input" :placeholder="t('命令：transpose 12 / quantize 8 / normalize')" style="flex:2" />
+            <input v-model="macroName" class="num-input" :placeholder="t('宏名称')" :aria-label="t('宏名称')" style="flex:1" />
+            <input v-model="macroCmd" class="num-input" :placeholder="t('命令：transpose 12 / quantize 8 / normalize')" :aria-label="t('命令：transpose 12 / quantize 8 / normalize')" style="flex:2" />
             <button class="btn sm primary" @click="addCustomMacro">{{ t('添加') }}</button>
           </div>
           <div class="adv-form-sec-title">{{ t('宏指令说明') }}</div>
@@ -3051,7 +3070,8 @@ onBeforeUnmount(() => {
 
     <!-- Key Switch 映射弹窗 -->
     <Transition name="ov">
-    <div v-if="ksOpen" class="ed-modal-mask" @click.self="ksOpen = false">
+    <div v-if="ksOpen" class="ed-modal-mask" v-focus-trap role="dialog" aria-modal="true"
+         :aria-label="t('演奏法库 / Key Switch 映射')" @click.self="ksOpen = false" @keydown.esc="ksOpen = false">
       <div class="ed-modal" style="width:min(560px,92vw)">
         <div class="ed-modal-head"><b>{{ t('演奏法库 / Key Switch 映射') }}</b><span class="muted small">{{ t('为 C-2 ~ C0（MIDI 0-24）命名技法') }}</span><button class="icon-btn" style="margin-left:auto" @click="ksOpen = false"><Icon name="minus" :size="14" /></button></div>
         <div class="row" style="gap:var(--sp-2)">
@@ -3064,7 +3084,7 @@ onBeforeUnmount(() => {
           <button v-if="ksPreset && !(articulations.find(a => a.id === ksPreset) || {}).builtin" class="btn sm danger" @click="delArticulationLib(ksPreset)">{{ t('删除库') }}</button>
         </div>
         <div class="row" style="gap:var(--sp-2)">
-          <input v-model="ksLibName" class="num-input" :placeholder="t('库名称（另存当前映射）')" style="flex:1" />
+          <input v-model="ksLibName" class="num-input" :placeholder="t('库名称（另存当前映射）')" :aria-label="t('库名称（另存当前映射）')" style="flex:1" />
           <button class="btn sm primary" @click="saveArticulationLib">{{ t('另存为库') }}</button>
         </div>
         <!-- 技法动作（§3.7）：键位名 + PC + CC + 力度系数。真实音源除了键位还要收 PC/CC，
@@ -3090,16 +3110,16 @@ onBeforeUnmount(() => {
         <div class="ks-list">
           <div v-for="m in 25" :key="m - 1" class="ks-row">
             <span class="ks-label">MIDI {{ m - 1 }}</span>
-            <input v-model="ksDraft[m - 1]" class="num-input" :placeholder="t('技法名（如 Legato）')" style="flex:1" />
-            <input class="num-input ks-num" type="number" min="0" max="127" :placeholder="t('无')"
+            <input v-model="ksDraft[m - 1]" class="num-input" :placeholder="t('技法名（如 Legato）')" :aria-label="t('技法名') + ' MIDI ' + (m - 1)" style="flex:1" />
+            <input class="num-input ks-num" type="number" min="0" max="127" :placeholder="t('无')" :aria-label="t('技法切换时发 Program Change（音色号 0-127）') + ' MIDI ' + (m - 1)"
                    :value="exprDraft[m - 1]?.pc ?? ''" @change="setExprField(m - 1, 'pc', $event.target.value)" />
-            <input class="num-input ks-num" type="number" min="0" max="127" :placeholder="t('无')"
+            <input class="num-input ks-num" type="number" min="0" max="127" :placeholder="t('无')" :aria-label="t('技法切换时发一条 CC：控制器号') + ' MIDI ' + (m - 1)"
                    :value="exprDraft[m - 1]?.cc?.n ?? ''" @change="setExprField(m - 1, 'ccn', $event.target.value)" />
-            <input class="num-input ks-num" type="number" min="0" max="127" :placeholder="t('无')"
+            <input class="num-input ks-num" type="number" min="0" max="127" :placeholder="t('无')" :aria-label="t('CC 的值（0-127）') + ' MIDI ' + (m - 1)"
                    :value="exprDraft[m - 1]?.cc?.v ?? ''" @change="setExprField(m - 1, 'ccv', $event.target.value)" />
-            <input class="num-input ks-num" type="number" min="0.1" max="2" step="0.05" :placeholder="t('1.0')"
+            <input class="num-input ks-num" type="number" min="0.1" max="2" step="0.05" :placeholder="t('1.0')" :aria-label="t('力度系数：这次切换到下次切换之间的音符速度乘它（0.1~2）') + ' MIDI ' + (m - 1)"
                    :value="exprDraft[m - 1]?.vel ?? ''" @change="setExprField(m - 1, 'vel', $event.target.value)" />
-            <input class="num-input ks-num" type="number" min="0" max="15" :placeholder="t('跟音符')"
+            <input class="num-input ks-num" type="number" min="0" max="15" :placeholder="t('跟音符')" :aria-label="t('动作走哪条通道（0-15，留空 = 跟音符）') + ' MIDI ' + (m - 1)"
                    :value="exprDraft[m - 1]?.ch ?? ''" @change="setExprField(m - 1, 'ch', $event.target.value)" />
           </div>
         </div>
@@ -3110,7 +3130,8 @@ onBeforeUnmount(() => {
 
     <!-- CC 事件列表弹窗 -->
     <Transition name="ov">
-    <div v-if="ccListOpen" class="ed-modal-mask" @click.self="ccListOpen = false">
+    <div v-if="ccListOpen" class="ed-modal-mask" v-focus-trap role="dialog" aria-modal="true"
+         :aria-label="t('CC 控制器事件')" @click.self="ccListOpen = false" @keydown.esc="ccListOpen = false">
       <div class="ed-modal">
         <div class="ed-modal-head"><b>{{ t('CC 控制器事件') }}</b><span class="muted small">{{ t('当前轨道 ') }}{{ ccListItems.length }}{{ t(' 条') }}</span><button class="icon-btn" style="margin-left:auto" @click="ccListOpen = false"><Icon name="minus" :size="14" /></button></div>
         <div class="ed-list-scroll" style="max-height:50vh">
@@ -3130,13 +3151,14 @@ onBeforeUnmount(() => {
 
     <!-- 撤销历史弹窗 -->
     <Transition name="ov">
-    <div v-if="historyOpen" class="ed-modal-mask" @click.self="historyOpen = false">
+    <div v-if="historyOpen" class="ed-modal-mask" v-focus-trap role="dialog" aria-modal="true"
+         :aria-label="t('撤销历史')" @click.self="historyOpen = false" @keydown.esc="historyOpen = false">
       <div class="ed-modal">
         <div class="ed-modal-head"><b>{{ t('撤销历史') }}</b><span class="muted small">{{ t('点击条目回退到该状态') }}</span><button class="icon-btn" style="margin-left:auto" @click="historyOpen = false"><Icon name="minus" :size="14" /></button></div>
         <div class="ks-list">
           <div v-for="(h, i) in historyList" :key="i" class="ks-row">
             <span class="ks-label">#{{ historyList.length - i }}</span>
-            <span class="muted small">{{ t('轨道 ') }}{{ h.ti + 1 }} · {{ h.notes }}{{ t(' 个音符 · ') }}{{ new Date(h.at).toLocaleTimeString() }}</span>
+            <span class="muted small"><b>{{ t(h.label) }}</b> · {{ h.ti >= 0 ? t('轨道 ') + (h.ti + 1) : t('全部') }} · {{ h.notes }}{{ t(' 个音符 · ') }}{{ fmtBytes(h.bytes) }} · {{ h.at ? new Date(h.at).toLocaleTimeString() : '—' }}</span>
             <button class="btn sm" @click="historyOpen = false">{{ t('撤销') }}</button>
           </div>
           <div v-if="!historyList.length" class="muted small">{{ t('暂无撤销记录') }}</div>
@@ -3147,10 +3169,11 @@ onBeforeUnmount(() => {
 
     <!-- 歌词编辑弹窗 -->
     <Transition name="ov">
-    <div v-if="lyricOpen" class="ed-modal-mask" @click.self="lyricOpen = false">
+    <div v-if="lyricOpen" class="ed-modal-mask" v-focus-trap role="dialog" aria-modal="true"
+         :aria-label="t('添加歌词')" @click.self="lyricOpen = false" @keydown.esc="lyricOpen = false">
       <div class="ed-modal">
         <div class="ed-modal-head"><b>{{ t('添加歌词') }}</b><span class="muted small">{{ t('为选中的 ') }}{{ editor?.selCount() || 0 }}{{ t(' 个音符添加歌词') }}</span><button class="icon-btn" style="margin-left:auto" @click="lyricOpen = false"><Icon name="minus" :size="14" /></button></div>
-        <input v-model="lyricText" class="num-input" :placeholder="t('输入歌词（如：爱）')" @keyup.enter="addLyricToSel" style="width:100%;padding:8px" />
+        <input v-model="lyricText" class="num-input" :placeholder="t('输入歌词（如：爱）')" :aria-label="t('输入歌词（如：爱）')" @keyup.enter="addLyricToSel" style="width:100%;padding:8px" />
         <div class="ed-modal-foot">
           <button class="btn sm" @click="lyricOpen = false">{{ t('取消') }}</button>
           <button class="btn sm primary" @click="addLyricToSel">{{ t('添加') }}</button>
@@ -3161,7 +3184,8 @@ onBeforeUnmount(() => {
 
     <!-- 编辑说明弹窗 -->
     <Transition name="ov">
-    <div v-if="helpOpen" class="ed-modal-mask" @click.self="helpOpen = false">
+    <div v-if="helpOpen" class="ed-modal-mask" v-focus-trap role="dialog" aria-modal="true"
+         :aria-label="t('编辑功能说明')" @click.self="helpOpen = false" @keydown.esc="helpOpen = false">
       <div class="ed-modal" style="width:min(680px,92vw)">
         <div class="ed-modal-head"><b>{{ t('编辑功能说明') }}</b><button class="icon-btn" style="margin-left:auto" @click="helpOpen = false"><Icon name="minus" :size="14" /></button></div>
         <div class="help-scroll">
@@ -3183,8 +3207,8 @@ onBeforeUnmount(() => {
 
     <!-- 钢琴卷帘右键菜单 -->
     <Transition name="ov">
-      <div v-if="ctxMenu" class="ctx-mask" @click.self="closeCtxMenu" @contextmenu.prevent="closeCtxMenu">
-        <div ref="ctxEl" class="ctx-menu" :style="ctxMenuStyle()">
+      <div v-if="ctxMenu" class="ctx-mask" @click.self="closeCtxMenu" @contextmenu.prevent="closeCtxMenu" @keydown.esc="closeCtxMenu">
+        <div ref="ctxEl" class="ctx-menu" role="menu" :aria-label="t('操作')" :style="ctxMenuStyle()">
           <button class="ctx-item" @click="ctxCut"><span>{{ t('剪切') }}</span></button>
           <button class="ctx-item" @click="ctxCopy"><span>{{ t('复制') }}</span><span class="ctx-k">Ctrl+C</span></button>
           <button class="ctx-item" @click="ctxPaste"><span>{{ t('粘贴到指针处') }}</span><span class="ctx-k">Ctrl+V</span></button>

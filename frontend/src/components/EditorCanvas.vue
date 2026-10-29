@@ -242,6 +242,20 @@ function scaleSnapPitch(midi, tick) {
 /* ---------------- 撤销 / 重做 ---------------- */
 const undoStack = [];
 const redoStack = [];
+/* 撤销栈的两道闸：条数上限 + 内存预算。
+   整轨深拷贝（大曲目一份就可能是十几 MB）的旧上限是「80 份」，等于把内存交给曲目大小决定。
+   · bytes 按快照载荷的 JSON 长度估算（cloneMeasured 顺手量出来，不额外遍历）；
+   · 总预算 32MB，超了从最老的一份开始丢；
+   · 单条超过 8MB 的「超大快照」最多留最近 2 条；
+   · 最新一条即使自己就超预算也要留下（否则刚做完的编辑立刻不可撤销）。
+   undo / redo 两个栈受同一套规则约束。 */
+const HISTORY_LIMIT = 80;
+const HISTORY_BUDGET_BYTES = 32 * 1024 * 1024;
+const HISTORY_HUGE_BYTES = 8 * 1024 * 1024;
+const HISTORY_HUGE_KEEP = 2;
+const HISTORY_MIN_KEEP = 1;
+/* 入栈序号：条数会被预算裁剪，长按取消不能再用 undoStack.length 判断「这次交互有没有入栈」 */
+let historySeq = 0;
 /* 速度轨（M5）：tempoMap 不在 notes/ccs 快照里，所以快照要单独带一份 —— 否则改速度不可撤销。
    注意 secToTick/baseSec 是**闭包捕获了 tempoMap 那个数组对象**的，恢复时必须原地改数组
    （tm.length = 0 + push），换数组引用等于没改。 */
@@ -255,11 +269,78 @@ function tempoRestore(s, arr) {
   tm.length = 0;
   for (const p of arr) tm.push({ ...p });
 }
-function pushState() {
+/* 深拷贝 + 体积估算一次做完：和原来的 clone 一样只走一遍 stringify/parse，
+   字符串长度就是载荷的 JSON 体量（快照里没有多字节文本，UTF-16 长度≈字节数，够预算用）。 */
+function cloneMeasured(v) {
+  const json = JSON.stringify(v);
+  return { value: JSON.parse(json), bytes: json.length };
+}
+function snapshotMeta(label, bytes, noteCount) {
+  return { label: label || '编辑', at: Date.now(), bytes, noteCount };
+}
+/** 单轨快照（ti = 轨道下标） */
+function makeTrackSnapshot(ti, label) {
+  const tr = song()?.tracks?.[ti];
+  if (!tr) return null;
+  const notes = cloneMeasured(tr.notes);
+  const ccs = cloneMeasured(tr.ccs || []);
+  const tempo = tempoSnap();
+  return {
+    ti,
+    tempo,
+    notes: notes.value,
+    ccs: ccs.value,
+    ...snapshotMeta(label, notes.bytes + ccs.bytes + (tempo ? tempo.length * 24 : 0), notes.value.length),
+  };
+}
+/** 全量快照（ti = -1：跨轨 / 新增删除轨道的场景） */
+function makeAllSnapshot(label) {
+  const s = song();
+  if (!s || !s.tracks) return null;
+  let bytes = 0, noteCount = 0;
+  const all = s.tracks.map((t) => {
+    const notes = cloneMeasured(t.notes);
+    const ccs = cloneMeasured(t.ccs || []);
+    bytes += notes.bytes + ccs.bytes;
+    noteCount += notes.value.length;
+    return { notes: notes.value, ccs: ccs.value };
+  });
+  const tempo = tempoSnap();
+  return {
+    ti: -1,
+    tempo,
+    all,
+    ...snapshotMeta(label, bytes + (tempo ? tempo.length * 24 : 0), noteCount),
+  };
+}
+/** 栈裁剪：条数上限 → 超大单条 → 总内存预算（都从最老开始丢） */
+function trimHistoryStack(stack) {
+  while (stack.length > HISTORY_LIMIT) stack.shift();
+  let huge = 0;
+  for (let i = stack.length - 1; i >= 0; i--) {
+    if ((stack[i].bytes || 0) > HISTORY_HUGE_BYTES) {
+      huge++;
+      if (huge > HISTORY_HUGE_KEEP) stack.splice(i, 1);
+    }
+  }
+  let total = 0;
+  for (const s of stack) total += s.bytes || 0;
+  while (total > HISTORY_BUDGET_BYTES && stack.length > HISTORY_MIN_KEEP) {
+    total -= (stack.shift().bytes || 0);
+  }
+}
+function pushSnapshot(stack, snap) {
+  if (!snap) return false;
+  stack.push(snap);
+  historySeq++;
+  trimHistoryStack(stack);
+  return true;
+}
+/** 记录「修改前」的轨道快照；label 只用于历史面板展示，不影响撤销语义 */
+function pushState(label) {
   const tr = curTrack(); if (!tr) return;
-  if (isMultiEdit()) { pushStateForTrack(-1); return; }   // 跨轨：存全量，撤销才盖得住
-  undoStack.push({ ti: props.trackIndex, tempo: tempoSnap(), notes: JSON.parse(JSON.stringify(tr.notes)), ccs: JSON.parse(JSON.stringify(tr.ccs || [])) });
-  if (undoStack.length > 80) undoStack.shift();
+  if (isMultiEdit()) { pushStateForTrack(-1, label); return; }   // 跨轨：存全量，撤销才盖得住
+  pushSnapshot(undoStack, makeTrackSnapshot(props.trackIndex, label));
   redoStack.length = 0;
 }
 function afterEdit() {
@@ -319,7 +400,8 @@ function undo() {
   if (st.ti < 0) {
     // 全量快照：恢复所有轨道（智能伴奏等新增/删除轨道场景）
     const s = song(); if (!s) return;
-    redoStack.push({ ti: -1, tempo: tempoSnap(), all: s.tracks.map(t => ({ notes: JSON.parse(JSON.stringify(t.notes)), ccs: JSON.parse(JSON.stringify(t.ccs || [])) })) });
+    // 当前状态进 redo：label 沿用这一步的操作名，重做后历史面板仍是同一个动作
+    pushSnapshot(redoStack, makeAllSnapshot(st.label));
     for (let i = 0; i < s.tracks.length; i++) {
       if (st.all && st.all[i]) { s.tracks[i].notes = st.all[i].notes; s.tracks[i].ccs = st.all[i].ccs || []; }
       else { s.tracks[i].notes = []; s.tracks[i].ccs = []; }
@@ -330,7 +412,7 @@ function undo() {
     return;
   }
   const tr = song()?.tracks[st.ti]; if (!tr) return;
-  redoStack.push({ ti: st.ti, tempo: tempoSnap(), notes: JSON.parse(JSON.stringify(tr.notes)), ccs: JSON.parse(JSON.stringify(tr.ccs || [])) });
+  pushSnapshot(redoStack, makeTrackSnapshot(st.ti, st.label));
   tr.notes = st.notes;
   tr.ccs = st.ccs || [];
   tempoRestore(song(), st.tempo);
@@ -341,7 +423,7 @@ function redo() {
   const st = redoStack.pop(); if (!st) return;
   if (st.ti < 0) {
     const s = song(); if (!s) return;
-    undoStack.push({ ti: -1, tempo: tempoSnap(), all: s.tracks.map(t => ({ notes: JSON.parse(JSON.stringify(t.notes)), ccs: JSON.parse(JSON.stringify(t.ccs || [])) })) });
+    pushSnapshot(undoStack, makeAllSnapshot(st.label));
     for (let i = 0; i < s.tracks.length; i++) {
       if (st.all && st.all[i]) { s.tracks[i].notes = st.all[i].notes; s.tracks[i].ccs = st.all[i].ccs || []; }
       else { s.tracks[i].notes = []; s.tracks[i].ccs = []; }
@@ -352,7 +434,7 @@ function redo() {
     return;
   }
   const tr = song()?.tracks[st.ti]; if (!tr) return;
-  undoStack.push({ ti: st.ti, tempo: tempoSnap(), notes: JSON.parse(JSON.stringify(tr.notes)), ccs: JSON.parse(JSON.stringify(tr.ccs || [])) });
+  pushSnapshot(undoStack, makeTrackSnapshot(st.ti, st.label));
   tr.notes = st.notes;
   tr.ccs = st.ccs || [];
   tempoRestore(song(), st.tempo);
@@ -363,13 +445,13 @@ function redo() {
 /* ---------------- 编辑操作 ---------------- */
 function addNote(tick, midi, len) {
   const tr = curTrack(); if (!tr) return;
-  pushState();
+  pushState('添加音符');
   tr.notes.push({ start: Math.round(tick), end: Math.round(tick + len), midi: clamp(scaleSnapPitch(Math.round(midi), tick), 0, 127), vel: clamp(Math.round(props.defaultVelocity), 1, 127) });
   afterEdit();
 }
 function deleteNotes(arr) {
   const tr = curTrack(); if (!tr || !arr.length) return;
-  pushState();
+  pushState('删除音符');
   for (const n of arr) {
     const i = tr.notes.indexOf(n);
     if (i >= 0) tr.notes.splice(i, 1);
@@ -388,7 +470,7 @@ function moveNotes(arr, dTick, dMidi) {
 function quantize(arr, ratio) {
   const tr = curTrack(); if (!tr || !arr.length) return;
   const s = song(); const st = (s.tpb * (ratio || props.snapRatio)) || 1;
-  pushState();
+  pushState('量化');
   for (const n of arr) {
     const q = tick => Math.max(0, Math.round(tick / st) * st);
     const ns = q(n.start), ne = q(n.end);
@@ -398,13 +480,13 @@ function quantize(arr, ratio) {
 }
 function transpose(arr, d) {
   const tr = curTrack(); if (!tr || !arr.length) return;
-  pushState();
+  pushState('移调');
   for (const n of arr) n.midi = clamp(n.midi + d, 0, 127);
   afterEdit();
 }
 function velRamp(arr, dir) {
   const tr = curTrack(); if (!tr || arr.length < 2) return;
-  pushState();
+  pushState('力度');
   const sorted = arr.slice().sort((a, b) => a.start - b.start);
   sorted.forEach((n, i) => { n.vel = clamp(Math.round(n.vel + dir * i), 1, 127); });
   afterEdit();
@@ -418,13 +500,13 @@ function sortNotes(ns) {
 /* 静音：仅影响发声与显示，不改动力度/时值（撤销可回退） */
 function toggleMute(n) {
   const tr = curTrack(); if (!tr || !n) return;
-  pushState();
+  pushState('静音');
   n.muted = !n.muted;
   afterEdit();
 }
 function setSelMuted(on) {
   const tr = curTrack(); if (!tr || !selection.size) return;
-  pushState();
+  pushState('静音');
   for (const n of selection) n.muted = !!on;
   afterEdit();
 }
@@ -451,7 +533,7 @@ function copySelected() {
 function pasteAt(tick) {
   if (!clipNotes || !clipNotes.length) return 0;
   const tr = curTrack(); if (!tr) return 0;
-  pushState();
+  pushState('粘贴');
   const min = Math.min(...clipNotes.map(n => n.start));
   const newNotes = clipNotes.map(n => ({ start: Math.max(0, n.start - min + tick), end: Math.max(0, n.end - min + tick), midi: n.midi, vel: n.vel }));
   tr.notes.push(...newNotes);
@@ -466,7 +548,7 @@ function duplicateSelected() {
   const arr = [...selection].sort((a, b) => a.start - b.start);
   const lastEnd = Math.max(...arr.map(n => n.end));
   const min = Math.min(...arr.map(n => n.start));
-  pushState();
+  pushState('复制');
   const newNotes = arr.map(n => ({ start: lastEnd + (n.start - min), end: lastEnd + (n.end - min), midi: n.midi, vel: n.vel }));
   tr.notes.push(...newNotes);
   selection.clear();
@@ -973,7 +1055,7 @@ function ccDown(e) {
   if (!claimPointer(e)) return;              // 笔/单指：CC 泳道同样要挡掌侧与第二根手指
   const tr = curTrack(); if (!tr) return;
   const target = e.target === ccCanvas2.value ? props.cc2Number : props.ccNumber;
-  pushState();
+  pushState('CC');
   ccDrawing.value = true;
   ccLast.value = null;
   ccTarget.value = target;
@@ -1206,7 +1288,7 @@ function scoreDown(e, x, y, multi) {
     const midi = scorePitchAt(lay, y, 0);
     const len = Math.max(30, insertTicks.value || (insertDot.value ? Math.round(lay.tpb * 1.5) : lay.tpb));
     const note = { start: Math.max(0, tick), end: Math.max(0, tick) + len, midi, vel: props.defaultVelocity, ch: (curTrack() && curTrack().ch) || 0 };
-    pushState();
+    pushState('添加音符');
     lay.tr.notes.push(note);
     sortNotes(lay.tr.notes);
     selection.clear(); selection.add(note);
@@ -1221,7 +1303,7 @@ function scoreDown(e, x, y, multi) {
   else if (multi && selection.has(hitNote)) selection.delete(hitNote);
   else if (multi) selection.add(hitNote);
   if (!selection.has(hitNote)) { dragState.value = null; draw(); return; }
-  pushState();
+  pushState('移动');
   dragState.value = { type: 'score-move', notes: [...selection], startX: x, startY: y,
                       orig: [...selection].map((n) => ({ n, midi: n.midi, start: n.start, end: n.end })), moved: false };
   emit('select'); draw();
@@ -1270,7 +1352,7 @@ function onDown(e) {
   /* 手写笔/触控第一道闸：笔在附近时挡掉手指（掌侧误触），已经在拖拽时挡掉第二根手指。
      必须放在最前面 —— 后面的分支会重接拖拽状态，接上了就是"两指一碰音符跳走"。 */
   if (!claimPointer(e)) return;
-  pushMark = undoStack.length;
+  pushMark = historySeq;
   longPress.cancel(); longPressCancelled = false;
   longPress.down(e);
   const s = song(), tr = curTrack();
@@ -1289,7 +1371,7 @@ function onDown(e) {
     if (midi < 0 || midi > 127) return;
     const len = Math.max(30, Math.round(props.stepTicks || 120));
     const st = Math.max(0, Math.round(stepCursor.value));
-    pushState();
+    pushState('添加音符');
     const note = { start: st, end: st + len, midi: clamp(scaleSnapPitch(midi, st), 0, 127), vel: velFromPointer(e) };
     tr.notes.push(note);
     selection.clear(); selection.add(note);
@@ -1323,7 +1405,7 @@ function onDown(e) {
       else if (multi && selection.has(n)) selection.delete(n);
       else if (multi) selection.add(n);
       if (!selection.has(n)) { dragState.value = null; draw(); return; }
-      pushState(); // 操作前记录，保证撤销能还原
+      pushState(e.altKey ? '力度' : '移动'); // 操作前记录，保证撤销能还原
       // 边缘命中 → 拉伸长度（右边缘改 end，左边缘改 start 并保持 end 不动）
       const nx = tickToX(n.start), nx2 = tickToX(n.end);
       // M3 修饰键：Alt+拖拽 = 改力度（画布上最常用的「手感」参数）。
@@ -1437,7 +1519,7 @@ function onUp(e) {
     }
     afterEdit();
   } else if (d.type === 'create' && tr) {
-    pushState();
+    pushState('添加音符');
     const len = Math.max(d.len || Math.max(song()?.tpb || 480, 120), 60);
     const st = Math.round(d.startTick);
     const en = Math.round(st + len);
@@ -1486,7 +1568,7 @@ function hoverAction(kind) {
   const tr = curTrack(); const n = hoverNote;
   if (!tr || !n || !tr.notes.includes(n)) return 0;
   const targets = (selection.has(n) && selection.size > 1) ? [...selection] : [n];
-  pushState();
+  pushState(kind === 'del' ? '删除音符' : kind === 'mute' ? '静音' : (kind === 'velUp' || kind === 'velDown') ? '力度' : '编辑');
   for (const x of targets) {
     if (kind === 'velUp') x.vel = clamp(x.vel + 5, 1, 127);
     else if (kind === 'velDown') x.vel = clamp(x.vel - 5, 1, 127);
@@ -1516,12 +1598,12 @@ function selectHover() {
 /* ---- 手写笔 / 触控（M9 收尾）----
    触控屏没有右键，而画布是 touch-action:none（否则手指一拖就滚页面），
    浏览器也就不再自己发 contextmenu —— 不自己记时的话，触控屏上永远打不开画布菜单。 */
-let pushMark = -1;                 // 本次交互开始时的撤销栈深度（长按取消时要还原）
+let pushMark = -1;                 // 本次交互开始时的入栈序号（条数会被预算裁剪，不能用栈深度）
 let longPressCancelled = false;
 const longPress = makeLongPress((e) => {
   /* 长按只在「还没移动」时成立：把这次交互整个撤掉再弹菜单 ——
      否则松手时 onUp 会把零长度的拖拽当成一次点击提交（画笔工具就会插一个音符）。 */
-  if (pushMark >= 0 && undoStack.length > pushMark) undoStack.pop();
+  if (pushMark >= 0 && historySeq > pushMark) { undoStack.pop(); pushMark = historySeq; }
   longPressCancelled = true;
   dragState.value = null;
   draw();
@@ -1646,32 +1728,32 @@ function selInfo() {
 }
 function setSelVel(v) {
   const tr = curTrack(); if (!tr || !selection.size) return;
-  pushState();
+  pushState('力度');
   for (const n of selection) n.vel = clamp(Math.round(v), 1, 127);
   afterEdit();
 }
 function setSelMidi(m) {
   const tr = curTrack(); if (!tr || !selection.size) return;
-  pushState();
+  pushState('移调');
   for (const n of selection) n.midi = clamp(Math.round(m), 0, 127);
   afterEdit();
 }
 function setSelStart(t) {
   const tr = curTrack(); if (!tr || !selection.size) return;
-  pushState();
+  pushState('移动');
   for (const n of selection) { const d = Math.round(t) - n.start; n.start = Math.max(0, Math.round(t)); n.end = Math.max(n.start + 1, n.end + d); }
   afterEdit();
 }
 function setSelLen(l) {
   const tr = curTrack(); if (!tr || !selection.size) return;
-  pushState();
+  pushState('编辑');
   for (const n of selection) n.end = Math.max(n.start + 1, n.start + Math.round(l));
   afterEdit();
 }
 /* 力度曲线：arr 为按 start 排序后每个选中音符的新力度（1-127） */
 function applyVelCurve(arr) {
   const tr = curTrack(); if (!tr || !selection.size || !arr) return 0;
-  pushState();
+  pushState('力度');
   const sorted = [...selection].sort((a, b) => a.start - b.start);
   sorted.forEach((n, i) => { const v = arr[i]; if (v != null) n.vel = clamp(Math.round(v), 1, 127); });
   afterEdit();
@@ -1680,7 +1762,7 @@ function applyVelCurve(arr) {
 /* 列表编辑器：用新数组整体替换当前轨道音符（单个撤销点） */
 function replaceNotes(arr) {
   const tr = curTrack(); if (!tr || !arr) return;
-  pushState();
+  pushState('编辑');
   tr.notes = arr;
   selection.clear();
   afterEdit();
@@ -1703,7 +1785,7 @@ function selectNotes(arr) {
 /* 列表编辑器保存：按选中顺序写回草稿值 */
 function applyDraft(arr) {
   const tr = curTrack(); if (!tr || !selection.size || !arr) return;
-  pushState();
+  pushState('编辑');
   const sorted = [...selection].sort((a, b) => a.start - b.start);
   sorted.forEach((n, i) => {
     const d = arr[i]; if (!d) return;
@@ -1754,7 +1836,7 @@ function commitPreview() {
   if (!previewBase) return 0;
   const after = previewBase.map((b) => ({ start: b.n.start, end: b.n.end, midi: b.n.midi, vel: b.n.vel, muted: !!b.n.muted }));
   restorePreviewBase();
-  pushState();                       // 存的是「预览之前」的轨道，撤销一次回到预览前
+  pushState('编辑');                 // 存的是「预览之前」的轨道，撤销一次回到预览前
   previewBase.forEach((b, i) => {
     const a = after[i];
     b.n.start = a.start; b.n.end = a.end; b.n.midi = a.midi; b.n.vel = a.vel; b.n.muted = a.muted;
@@ -1784,7 +1866,7 @@ function editNote(note, patch) {
   for (let i = 0; i < s.tracks.length; i++) {
     const tr = s.tracks[i];
     if (!tr.notes.includes(note)) continue;
-    pushStateForTrack(i);
+    pushStateForTrack(i, '编辑');
     Object.assign(note, patch);
     afterEdit();
     return 1;
@@ -1798,7 +1880,7 @@ function deleteNoteExternal(note) {
     const tr = s.tracks[i];
     const k = tr.notes.indexOf(note);
     if (k < 0) continue;
-    pushStateForTrack(i);
+    pushStateForTrack(i, '删除音符');
     tr.notes.splice(k, 1);
     selection.delete(note);
     afterEdit();
@@ -1810,7 +1892,7 @@ function deleteNoteExternal(note) {
 function insertKeySwitch(midi, tick, len) {
   const tr = curTrack(), s = song();
   if (!tr || !s) return 0;
-  pushState();
+  pushState('添加音符');
   const st = Math.max(0, Math.round(tick || 0));
   tr.notes.push({ start: st, end: st + Math.max(30, Math.round(len || (s.tpb / 2))), midi: clamp(Math.round(midi), 0, 24), vel: 100 });
   afterEdit();
@@ -1832,7 +1914,7 @@ function selSpan() {
 function addPedal() {
   const tr = curTrack(); if (!tr) return 0;
   const span = selSpan(); if (!span) return 0;
-  pushState();
+  pushState('延音踏板');
   const arr = tr.ccs = tr.ccs || [];
   const { a, b } = span;
   arr.push({ tick: a, cc: 64, cv: 127 });
@@ -1844,7 +1926,7 @@ function addPedal() {
 function delPedal() {
   const tr = curTrack(); if (!tr) return 0;
   const span = selSpan(); if (!span || !(tr.ccs || []).length) return 0;
-  pushState();
+  pushState('延音踏板');
   const before = tr.ccs.length;
   tr.ccs = tr.ccs.filter(c => !(c.cc === 64 && c.tick >= span.a && c.tick <= span.b));
   const removed = before - tr.ccs.length;
@@ -1855,8 +1937,15 @@ function delPedal() {
 function canUndo() { return undoStack.length > 0; }
 function canRedo() { return redoStack.length > 0; }
 function clearHistory() { undoStack.length = 0; redoStack.length = 0; }
+/** 历史面板数据：label / 音符数 / 估算体积 / 入栈时间（都是入栈时算好的，这里只做投影） */
 function historySnapshots() {
-  return undoStack.map(s => ({ ti: s.ti, notes: s.notes.length, at: Date.now() }));
+  return undoStack.map((s) => ({
+    ti: s.ti,
+    label: s.label || '编辑',
+    notes: s.noteCount != null ? s.noteCount : (s.notes ? s.notes.length : 0),
+    bytes: s.bytes || 0,
+    at: s.at || 0,
+  }));
 }
 /* 音频起音检测（短时 RMS 能量突增） */
 let _onsetsCache = null;
@@ -1888,7 +1977,7 @@ function snapSelToAudio() {
   const secPerTick = s.totalSec > 0 ? s.totalSec / s.totalTicks : 60 / 120 / s.tpb;
   const winSec = 0.08;
   const arr = selection.size ? [...selection] : tr.notes.slice();
-  pushState();
+  pushState('对齐');
   let moved = 0;
   for (const n of arr) {
     const sec = n.start * secPerTick;
@@ -1908,18 +1997,17 @@ function snapSelToAudio() {
   if (moved) afterEdit();
   return moved;
 }
-/* 外部编辑（鼓组编辑器等）：按指定轨道做快照并同步刷新；ti < 0 时做全量快照（智能伴奏等） */
-function pushStateForTrack(ti) {
+/* 外部编辑（鼓组编辑器等）：按指定轨道做快照并同步刷新；ti < 0 时做全量快照（智能伴奏等）。
+   label 可选，只影响历史面板的展示文案。 */
+function pushStateForTrack(ti, label) {
   const s = song(); if (!s) return;
   if (ti < 0) {
-    undoStack.push({ ti: -1, tempo: tempoSnap(), all: s.tracks.map(t => ({ notes: JSON.parse(JSON.stringify(t.notes)), ccs: JSON.parse(JSON.stringify(t.ccs || [])) })) });
-    if (undoStack.length > 80) undoStack.shift();
+    pushSnapshot(undoStack, makeAllSnapshot(label));
     redoStack.length = 0;
     return;
   }
   if (!s.tracks[ti]) return;
-  undoStack.push({ ti, tempo: tempoSnap(), notes: JSON.parse(JSON.stringify(s.tracks[ti].notes)), ccs: JSON.parse(JSON.stringify(s.tracks[ti].ccs || [])) });
-  if (undoStack.length > 80) undoStack.shift();
+  pushSnapshot(undoStack, makeTrackSnapshot(ti, label));
   redoStack.length = 0;
 }
 function notifyExternalEdit() { afterEdit(); }

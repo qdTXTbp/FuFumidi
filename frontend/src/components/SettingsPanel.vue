@@ -342,6 +342,34 @@ function setSource(src) {
   toast(t('已切换下载源：') + sourceLabel(next));
 }
 
+/* ---------------- 单选段（.radio-pill）的键盘语义 ----------------
+   P1-3：这两组原来是 <span @click>，键盘根本按不到。补 role=radiogroup/radio 后
+   按 ARIA 单选组的键盘模型：Tab 只落在选中项，方向键在组内移动并选中，空格/回车选中。
+   ★ 视觉不变：元素仍是 <span>，只补 role / tabindex / aria-checked，
+     样式仍走 styles.css 的 .radio-pill span（改成一整套 button 会动到全局样式）。 */
+const SEG_UPDATE_CHANNEL = ['stable', 'beta'];
+const SEG_DOWNLOAD_SOURCE = ['auto', 'cnb', 'github'];
+function curChannel() { return updateChannel.value === 'beta' ? 'beta' : 'stable'; }
+function curSource() { return SEG_DOWNLOAD_SOURCE.includes(downloadSource.value) ? downloadSource.value : 'auto'; }
+function radioKey(e, list, value, set, cur) {
+  // 空格在 App.vue 里是全局播放/暂停，方向键是快进快退 —— 这里必须 stop，否则一次按键双响应
+  if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+    e.preventDefault(); e.stopPropagation(); set(value); return;
+  }
+  const i = Math.max(0, list.indexOf(typeof cur === 'function' ? cur() : cur));
+  let next = null;
+  if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = list[(i + 1) % list.length];
+  else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = list[(i - 1 + list.length) % list.length];
+  else if (e.key === 'Home') next = list[0];
+  else if (e.key === 'End') next = list[list.length - 1];
+  if (next == null) return;
+  e.preventDefault(); e.stopPropagation();
+  set(next);
+  // 选中项就是唯一的 Tab 落点：切换后把焦点交给它（否则焦点留在 tabindex=-1 的元素上）
+  const root = e.currentTarget && e.currentTarget.parentElement;
+  if (root) nextTick(() => { const el = root.querySelector('[role="radio"][aria-checked="true"]'); if (el && el.focus) el.focus(); });
+}
+
 /* ---------------- 线路测速 ---------------- */
 // 参考 BetterGI / FufuLauncher 的选源方式（REA 取证见 docs/REA-installer-and-updater.md）：
 // 把当前通道下的每条线路**列成表**，量「首字节延迟 + 下载速率」，让用户看着数字选，
@@ -1219,7 +1247,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
         <div class="settings-search">
           <Icon name="search" :size="13" />
           <input v-model="searchQuery" class="settings-search-input" data-guide="settings-search-input"
-                 :placeholder="t('搜索设置项…（如：字号 / 显卡 / 更新）')" />
+                 :placeholder="t('搜索设置项…（如：字号 / 显卡 / 更新）')" :aria-label="t('搜索')" />
           <div v-if="searchQuery.trim()" class="settings-search-results" data-guide="settings-search-results">
             <button v-for="h in searchHits" :key="h.id" class="settings-search-item" :data-hit="h.id" @click="gotoSetting(h)">
               <b>{{ t(h.label) }}</b>
@@ -1343,15 +1371,15 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
           </div>
           <div style="font-size:var(--fs-sm);color:var(--text-soft);margin-bottom:4px">{{ t('标题') }}</div>
           <input v-model="fb.title" class="ov-input" maxlength="60" style="width:100%;margin-bottom:8px"
-                 :placeholder="t('一句话说清问题，例如：变谱第 2 页总是识别失败')" />
+                 :placeholder="t('一句话说清问题，例如：变谱第 2 页总是识别失败')" :aria-label="t('标题')" />
           <div style="font-size:var(--fs-sm);color:var(--text-soft);margin-bottom:4px">{{ t('症状（必填，至少 20 字）') }}</div>
           <textarea v-model="fb.symptom" class="ov-input" rows="3" style="width:100%;margin-bottom:8px"
-                    :placeholder="t('发生了什么？界面上的原话、报错文本都可以贴进来')"></textarea>
+                    :placeholder="t('发生了什么？界面上的原话、报错文本都可以贴进来')" :aria-label="t('症状（必填，至少 20 字）')"></textarea>
           <div style="font-size:var(--fs-sm);color:var(--text-soft);margin-bottom:4px">{{ t('复现步骤（选填）') }}</div>
           <textarea v-model="fb.steps" class="ov-input" rows="2" style="width:100%;margin-bottom:8px"
-                    :placeholder="t('1. 打开… 2. 点… 3. 结果…')"></textarea>
+                    :placeholder="t('1. 打开… 2. 点… 3. 结果…')" :aria-label="t('复现步骤（选填）')"></textarea>
           <div style="font-size:var(--fs-sm);color:var(--text-soft);margin-bottom:4px">{{ t('期望 vs 实际（选填）') }}</div>
-          <textarea v-model="fb.expect" class="ov-input" rows="2" style="width:100%;margin-bottom:8px"></textarea>
+          <textarea v-model="fb.expect" class="ov-input" rows="2" style="width:100%;margin-bottom:8px" :aria-label="t('期望 vs 实际（选填）')"></textarea>
           <div style="display:flex;gap:var(--sp-3);flex-wrap:wrap;margin-bottom:8px">
             <label style="display:flex;align-items:center;gap:var(--sp-2);font-size:var(--fs-sm)">
               {{ t('频率') }}
@@ -1382,8 +1410,10 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
           <div v-if="fb.err" style="color:var(--t-err);font-size:var(--fs-sm);margin-top:8px">{{ fb.err }}</div>
           <div v-if="fb.msg" style="color:var(--text-soft);font-size:var(--fs-sm);margin-top:8px">{{ fb.msg }}</div>
           <div v-if="fb.resultUrl" style="font-size:var(--fs-sm);margin-top:6px">
-            <a style="cursor:pointer;text-decoration:underline" @click="fbOpen(fb.resultUrl)">{{ fb.resultUrl }}</a>
-            <span v-if="fb.issueUrl"> · <a style="cursor:pointer;text-decoration:underline" @click="fbOpen(fb.issueUrl)">{{ t('对应议题') }}</a></span>
+            <a role="button" tabindex="0" style="cursor:pointer;text-decoration:underline" @click="fbOpen(fb.resultUrl)"
+               @keydown.enter.prevent="fbOpen(fb.resultUrl)" @keydown.space.stop.prevent="fbOpen(fb.resultUrl)">{{ fb.resultUrl }}</a>
+            <span v-if="fb.issueUrl"> · <a role="button" tabindex="0" style="cursor:pointer;text-decoration:underline" @click="fbOpen(fb.issueUrl)"
+               @keydown.enter.prevent="fbOpen(fb.issueUrl)" @keydown.space.stop.prevent="fbOpen(fb.issueUrl)">{{ t('对应议题') }}</a></span>
           </div>
           <div v-if="fb.savedLocal && fb.localPath" style="font-size:var(--fs-sm);margin-top:6px;color:var(--text-soft)">
             {{ t('上传没成功，已自动存到本地：') }}{{ fb.localPath }}
@@ -1441,7 +1471,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
               <div class="fr-hint">{{ t('转录新音频时默认使用的识别引擎') }}</div>
             </div>
             <div class="fr-ctl">
-              <select v-model="form.engine_mode" class="ov-input" style="width:200px">
+              <select v-model="form.engine_mode" class="ov-input" style="width:200px" :aria-label="t('默认引擎模式')">
                 <option value="universal">{{ t('通用识别（basic_pitch）') }}</option>
                 <option value="piano">{{ t('钢琴专用（piano_transcription）') }}</option>
                 <option value="separate">{{ t('人声分离（demucs）') }}</option>
@@ -1454,7 +1484,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
               <div class="fr-hint">{{ t('最高质量用全部核心，同机上反而最快；低配省资源限 2 核，低配机更稳') }}</div>
             </div>
             <div class="fr-ctl">
-              <select v-model="form.perf_mode" class="ov-input" style="width:200px">
+              <select v-model="form.perf_mode" class="ov-input" style="width:200px" :aria-label="t('默认性能模式')">
                 <option value="quality">{{ t('最高质量') }}</option>
                 <option value="balanced">{{ t('均衡') }}</option>
                 <option value="fast">{{ t('低配省资源') }}</option>
@@ -1477,7 +1507,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
             </div>
             <div class="fr-ctl">
               <label class="ov-check"><input type="checkbox" v-model="form.ai_enabled" data-guide="ai-generate-toggle" /> {{ t('允许 AI 生成') }}</label>
-              <input v-model="form.ai_provider_cmd" class="ov-input mono" style="width:240px" :placeholder="t('本地命令（可选）')" data-guide="ai-generate-cmd" />
+              <input v-model="form.ai_provider_cmd" class="ov-input mono" style="width:240px" :placeholder="t('本地命令（可选）')" :aria-label="t('本地命令（可选）')" data-guide="ai-generate-cmd" />
             </div>
           </div>
           <div class="field-row">
@@ -1486,7 +1516,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
               <div class="fr-hint">{{ t('转录结果的保存位置') }}</div>
             </div>
             <div class="fr-ctl">
-              <input v-model="form.output_dir" class="ov-input mono" style="width:240px" :placeholder="t('留空 = 与输入文件同目录')" />
+              <input v-model="form.output_dir" class="ov-input mono" style="width:240px" :placeholder="t('留空 = 与输入文件同目录')" :aria-label="t('默认输出目录')" />
               <button class="btn sm" @click="pickDir('output_dir')">{{ t('浏览') }}</button>
             </div>
           </div>
@@ -1496,7 +1526,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
               <div class="fr-hint">{{ t('{name}_{engine}_{date} · 可自定义') }}</div>
             </div>
             <div class="fr-ctl">
-              <input v-model="form.name_rule" class="ov-input mono" style="width:240px" placeholder="{name}_{engine}_{date}" />
+              <input v-model="form.name_rule" class="ov-input mono" style="width:240px" placeholder="{name}_{engine}_{date}" :aria-label="t('导出命名规则')" />
             </div>
           </div>
           <div class="field-row">
@@ -1505,7 +1535,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
               <div class="fr-hint">{{ t('同时处理的任务数，低配建议 1') }}</div>
             </div>
             <div class="fr-ctl">
-              <select v-model="form.batch_concurrency" class="ov-input" style="width:160px">
+              <select v-model="form.batch_concurrency" class="ov-input" style="width:160px" :aria-label="t('批量并发转录')">
                 <option value="auto">{{ t('自动（推荐）') }}</option>
                 <option value="1">1</option>
                 <option value="2">2</option>
@@ -1519,7 +1549,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
               <div class="fr-hint">{{ t('放入音频自动加入转录队列') }}</div>
             </div>
             <div class="fr-ctl" style="flex-wrap:wrap">
-              <input v-model="form.watch_dir" class="ov-input mono" style="width:200px" :placeholder="t('选择要监视的文件夹')" />
+              <input v-model="form.watch_dir" class="ov-input mono" style="width:200px" :placeholder="t('选择要监视的文件夹')" :aria-label="t('监视文件夹')" />
               <button class="btn sm" @click="pickDir('watch_dir')">{{ t('浏览') }}</button>
               <label class="switch-row">
                 <input type="checkbox" v-model="form.watch_enabled" />
@@ -1681,9 +1711,13 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
               <div class="fr-hint">{{ t('正式版稳定可靠；测试版可抢先体验新功能，但更新较频繁、可能包含较多未修复的 Bug。') }}</div>
             </div>
             <div class="fr-ctl">
-              <div class="radio-pill">
-                <span :class="{ on: updateChannel !== 'beta' }" @click="setChannel('stable')">{{ t('正式版') }}</span>
-                <span :class="{ on: updateChannel === 'beta' }" @click="setChannel('beta')">{{ t('测试版') }}</span>
+              <div class="radio-pill" role="radiogroup" :aria-label="t('更新通道')">
+                <span role="radio" :aria-checked="updateChannel !== 'beta'" :tabindex="updateChannel !== 'beta' ? 0 : -1"
+                      :class="{ on: updateChannel !== 'beta' }" @click="setChannel('stable')"
+                      @keydown="radioKey($event, SEG_UPDATE_CHANNEL, 'stable', setChannel, curChannel)">{{ t('正式版') }}</span>
+                <span role="radio" :aria-checked="updateChannel === 'beta'" :tabindex="updateChannel === 'beta' ? 0 : -1"
+                      :class="{ on: updateChannel === 'beta' }" @click="setChannel('beta')"
+                      @keydown="radioKey($event, SEG_UPDATE_CHANNEL, 'beta', setChannel, curChannel)">{{ t('测试版') }}</span>
               </div>
             </div>
           </div>
@@ -1694,10 +1728,16 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
               <div class="fr-hint">{{ t('国内源经 CNB 镜像，速度更快；全球源直连 GitHub，适合境外网络。自动会在国内源不可用时回退。') }}</div>
             </div>
             <div class="fr-ctl">
-              <div class="radio-pill">
-                <span :class="{ on: downloadSource === 'auto' }" @click="setSource('auto')">{{ t('自动') }}</span>
-                <span :class="{ on: downloadSource === 'cnb' }" @click="setSource('cnb')">{{ t('国内') }}</span>
-                <span :class="{ on: downloadSource === 'github' }" @click="setSource('github')">{{ t('全球') }}</span>
+              <div class="radio-pill" role="radiogroup" :aria-label="t('下载源')">
+                <span role="radio" :aria-checked="downloadSource === 'auto'" :tabindex="downloadSource === 'auto' ? 0 : -1"
+                      :class="{ on: downloadSource === 'auto' }" @click="setSource('auto')"
+                      @keydown="radioKey($event, SEG_DOWNLOAD_SOURCE, 'auto', setSource, curSource)">{{ t('自动') }}</span>
+                <span role="radio" :aria-checked="downloadSource === 'cnb'" :tabindex="downloadSource === 'cnb' ? 0 : -1"
+                      :class="{ on: downloadSource === 'cnb' }" @click="setSource('cnb')"
+                      @keydown="radioKey($event, SEG_DOWNLOAD_SOURCE, 'cnb', setSource, curSource)">{{ t('国内') }}</span>
+                <span role="radio" :aria-checked="downloadSource === 'github'" :tabindex="downloadSource === 'github' ? 0 : -1"
+                      :class="{ on: downloadSource === 'github' }" @click="setSource('github')"
+                      @keydown="radioKey($event, SEG_DOWNLOAD_SOURCE, 'github', setSource, curSource)">{{ t('全球') }}</span>
               </div>
             </div>
           </div>
@@ -1754,7 +1794,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
               <div class="fr-hint">{{ t('模型权重、GPU 增强包、音色库、声库、第三方缓存与中间产物都集中在这里，默认位于工具目录旁的 FuFumidiData，不占用 C 盘；应用内更新不会删除该目录。') }}</div>
             </div>
             <div class="fr-ctl col">
-              <input :value="dataRoot.root" class="ov-input mono" style="width:100%;max-width:420px" readonly :title="dataRoot.root" />
+              <input :value="dataRoot.root" class="ov-input mono" style="width:100%;max-width:420px" readonly :title="dataRoot.root" :aria-label="t('数据目录')" />
               <div class="dr-meta">
                 <span class="dr-badge">{{ dataRoot.reason || t('读取中…') }}</span>
                 <span v-if="dataRoot.installRoot" class="dr-path" :title="dataRoot.installRoot">{{ t('工具目录：') }}{{ dataRoot.installRoot }}</span>
