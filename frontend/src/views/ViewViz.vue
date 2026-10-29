@@ -566,9 +566,7 @@ onBeforeUnmount(() => {
                它本来就是视效的一部分（轨道色 / 按音高推导的两套 HSL），现在住进视效面板。 -->
           <!-- 背景：主题 / 纯色 / 图片 / 透明（叠加层）。SeeMusic 那类软件把"背景图 + 模糊"
                当成主要观感开关，这里补上；透明档配合导出即可当 OBS 叠加层。 -->
-          <button v-if="false" class="chip-btn" :class="{ active: bgMore }" :title="t('音符瀑布背景（主题/纯色/图片/动态壁纸/透明）')" @click="bgMore = !bgMore">
-            <Icon name="eye" :size="12" />{{ t('背景') }}
-          </button>
+          
           <!-- 视效：3D 键盘 / 粒子光效 / 落键光柱 / 击键光带 / 音符质感。
                参考 SeeMusic、Synthesia、Lumiric Stage 那类瀑布流的语言：
                「灯、粒子、键的厚度」才是观感差异，而不是把音符块画得更大。 -->
@@ -586,33 +584,7 @@ onBeforeUnmount(() => {
         </div>
         <!-- ★ 沉浸模式不显示这条：沉浸态的 .vc-head 是绝对定位浮层，设置条留在文档流里会与它重叠，
              而且浅色控件压在满屏画面上很突兀。退出沉浸后设置条原样回来。 -->
-        <div v-if="false" class="viz-bg-bar">
-          <span class="muted small">{{ t('音符瀑布背景') }}</span>
-          <button class="chip-btn" :class="{ active: bg.mode === 'theme' }" @click="setBgMode('theme')">{{ t('主题') }}</button>
-          <button class="chip-btn" :class="{ active: bg.mode === 'solid' }" @click="setBgMode('solid')">{{ t('纯色') }}</button>
-          <input v-if="bg.mode === 'solid'" type="color" class="viz-bg-color" :value="bg.color" @input="bg.color = $event.target.value; saveBg()" />
-          <button class="chip-btn" :class="{ active: bg.mode === 'image' }" @click="setBgMode('image')">{{ t('图片') }}</button>
-          <button class="chip-btn" :title="t('选择背景图片') " @click="pickBgImage"><Icon name="folder" :size="12" />{{ t('选择…') }}</button>
-          <!-- ★ 动态壁纸（2026-10-17 用户："音符瀑布背景允许设定动态壁纸"）：
-               走应用**同一套壁纸库**（缩略图 / 下载 / 导入本地视频），只是落点是"瀑布流画面"
-               而不是整窗背景（WallpaperGallery 按 state.ui.wallpaperTarget 分流）。 -->
-          <button class="chip-btn" :class="{ active: bg.mode === 'wallpaper' }"
-                  :title="t('用视频壁纸当瀑布流背景（同样可模糊 / 暗化）')" @click="setBgMode('wallpaper')">{{ t('动态壁纸') }}</button>
-          <button class="chip-btn" :title="t('打开壁纸库，挑一张动态壁纸当音符瀑布背景')" @click="pickBgWall">
-            <Icon name="folder" :size="12" />{{ bg.wallPath ? t('更换') : t('选择…') }}
-          </button>
-          <button v-if="bg.wallPath" class="chip-btn" :title="t('关掉动态壁纸，退回主题底')" @click="clearBgWall">✕</button>
-          <span v-if="bg.mode === 'wallpaper'" class="muted small" :title="bg.wallPath || ''">
-            {{ bg.wallPath ? (vizBg.wallName || t('动态壁纸')) : t('还没挑壁纸') }}
-          </span>
-          <button class="chip-btn" :class="{ active: bg.mode === 'transparent' }" :title="t('真·透明：导出的画面可当叠加层')" @click="setBgMode('transparent')">{{ t('透明') }}</button>
-          <template v-if="bg.mode === 'image' || bg.mode === 'theme' || bg.mode === 'wallpaper'">
-            <span class="muted small">{{ t('模糊') }}</span>
-            <NumSlider :model-value="bg.blur" @update:model-value="v => { bg.blur = +v; saveBg() }" :min="0" :max="40" :step="1" range-style="width:88px" :input-width="68" no-input />
-            <span class="muted small">{{ t('暗化') }}</span>
-            <NumSlider :model-value="Math.round(bg.dim * 100)" @update:model-value="v => { bg.dim = (+v) / 100; saveBg() }" :min="0" :max="80" :step="5" range-style="width:88px" :input-width="68" no-input />
-          </template>
-        </div>
+        
         <!-- 视效面板内容（原来在文档流里，现在整体搬进上面的浮层）：
              ① 主题（含用户自定义主题的命名/删除）② 参数滑块 ③ 特效开关 ④ 取色/配色/调色
              ★ 所有值都住在 stores/vizbg，导出页读同一份 —— 预览与成片必须是一幅画。 -->
