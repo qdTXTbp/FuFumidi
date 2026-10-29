@@ -141,6 +141,7 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
       windowsHide: true,
       env: engineEnv(),
     });
+    activeChildren.add(child);
     let buf = '';
     child.stdout.on('data', d => {
       buf += d.toString('utf8');
@@ -197,7 +198,7 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
       }
     };
     child.on('error', e => failOne(new Error('engine worker error: ' + e)));
-    child.on('close', () => failOne(new Error('engine worker exited')));
+    child.on('close', () => { activeChildren.delete(child); failOne(new Error('engine worker exited')); });
     _workers.set(slot, child);
     return child;
   }

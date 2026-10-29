@@ -197,7 +197,10 @@ function createDbService({ app, path: p, fs: f }) {
     ipcMain.handle('db:cloud-song:dir', () => cloudSongsDirPath());
   }
 
-  function close() {
+  async function close() {
+    if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; persistNow(); }
+    try { await persistPromise; } catch (e) {}
+    try { await writeQ; } catch (e) {}
     // 先等待写入队列落盘，再关闭数据库（避免退出时歌单/收藏写丢失）
     return writeQ.then(() => {
       try { if (db) { db.close(); db = null; } } catch (e) {}
