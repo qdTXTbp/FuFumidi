@@ -708,6 +708,11 @@ onBeforeUnmount(() => {
                是没用的，元素底色照样透不出来。所以透明档必须把画布元素的底色也去掉，
                并由容器铺 --canvas（否则透出的是卡片那层半透明白，和沉浸态不一致）。 -->
           <canvas id="vizRoll" :class="{ 'cv-transparent': bg.mode === 'transparent' || bg.mode === 'we' }"></canvas>
+          <div v-if="!currentSong" class="viz-empty" role="status">
+            <b>{{ t('还没有可播放的曲目') }}</b>
+            <span>{{ t('载入一首曲目后，这里会显示音符瀑布与实时频谱。') }}</span>
+            <button class="btn sm" @click="app.setView('music')">{{ t('去曲库') }}</button>
+          </div>
           <div v-if="immersive" class="viz-hud" :class="{ 'hud-hidden': !hudOn }">
             <button class="hud-btn" :title="app.playing ? t('暂停') : t('播放')" @click="app.togglePlay()">
               <Icon :name="app.playing ? 'pause' : 'play'" :size="18" />
@@ -757,6 +762,9 @@ onBeforeUnmount(() => {
 .vc-head { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: 10px; font-size: var(--fs-md); font-weight: 600; color: var(--ink); flex-wrap: wrap; }
 .vc-head b { letter-spacing: -0.2px; }
 .vc-head .vc-zoom { font-size: var(--fs-xs); min-width: 44px; text-align: center; font-weight: 500; }
+.viz-empty { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; border:1px dashed var(--hairline); border-radius:var(--r-sm); background:color-mix(in srgb, var(--canvas) 82%, transparent); z-index:2; text-align:center; padding:20px; }
+.viz-empty b { font-size:var(--fs-md); color:var(--text); }
+.viz-empty span { font-size:var(--fs-sm); color:var(--text3); max-width:420px; }
 .vc-body canvas { width: 100%; height: 100%; display: block; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--canvas); }
 .chip-btn.active { background: var(--accent); color: var(--on-accent); }
 /* 背景设置条：低调的一行，不抢画面 */

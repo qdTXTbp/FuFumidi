@@ -65,7 +65,7 @@ function close() { state.ui.appearanceOpen = false; }
 function chooseMode(m) { mode.value = m; setMode(m); }
 function chooseTheme(th) { theme.value = th.id; accent.value = ''; saveTheme(th.id, '', mode.value); }
 async function saveWp(patch) {
-  try { settingsStore.setLocal(patch); await settingsStore.save(patch); } catch (e) {}
+  try { settingsStore.setLocal(patch); await settingsStore.save(patch); } catch (e) { app.toast(t('外观保存失败') + '：' + String((e && e.message) || e), 'error'); }
 }
 function toggleWallpaper() { saveWp({ wallpaper_enabled: !cfg.value.wallpaper_enabled }); }
 function setFit(v) { saveWp({ wallpaper_fit: v }); }

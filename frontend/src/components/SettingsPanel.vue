@@ -1183,7 +1183,7 @@ async function repairIntegrity() {
 const integrityOk = computed(() => !!(state.integrity && state.integrity.ok));
 
 /* ---------------- 保存 / 取消 ---------------- */
-function apply() {
+async function apply() {
   saveTheme(form.theme, form.accent, form.mode);
   applyDisplay(form.font_size, form.density, form.ui_scale);
   setLang(form.lang);
