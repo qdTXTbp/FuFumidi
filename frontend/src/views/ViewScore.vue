@@ -15,6 +15,7 @@ import { esc, clamp, TRACK_COLORS } from '../core/util.js';
 import { encodeMidi } from '../core/midi.js';
 import { parseMusicXMLToSong } from '../core/musicxml.js';
 import { songToAbc, jianpuData, tabData, detectSf, ABC_KEY_NAMES } from '../core/score.js';
+import { splitNoteAtBarlines } from '../core/musicxml_out.js';
 import { songToMusicXMLTrack, songToMusicXML, buildFullScore } from '../core/musicxml_out.js';
 
 const mode = ref('staff');       // staff | score(总谱) | jianpu | guitar | bass
@@ -212,7 +213,13 @@ async function renderStaff() {
         events.push({ ms, tick, ev: { el: node, left: null, line, elements: [[node]] } });
       }
     } else {
-      const songNotes = tr.notes.slice().sort((a, b) => a.start - b.start || a.midi - b.midi);
+      // F-07：单轨跨小节后一个音符会变成多个 .note；按切片顺序映射，
+      // 不能再用 tr.notes[ni++] 直接对，否则从第一个跨小节音之后整条高亮都错位。
+      const sig0 = (s.sigMap && s.sigMap[0]) || { num: 4, den: 4 };
+      const barLen0 = Math.max(1, Math.round(sig0.num * (s.tpb || 480) * 4 / sig0.den));
+      const songNotes = [];
+      for (const n of tr.notes) for (const seg of splitNoteAtBarlines(n, barLen0)) songNotes.push({ start: seg.start, end: seg.end, midi: n.midi });
+      songNotes.sort((a, b) => a.start - b.start || a.midi - b.midi);
       let ni = 0;
       for (const node of el.querySelectorAll('.note')) {
         const id = node.id || '';

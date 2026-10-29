@@ -44,6 +44,40 @@ export function musicXmlType(duration, tpb) {
   return { type: '64th', dot: false };
 }
 
+/** 按小节线把**一个**音符切成片段（F-07）。
+ *
+ *  跨小节的长音不能只写成一个 <note>：MusicXML 的 <duration> 超过本小节长度时，
+ *  Verovio 会把这一小节撑破或把音符丢掉，谱面上只剩起始小节。正确写法是每小节一个
+ *  分片、相邻分片之间用 <tie>/<tied> 连接（见两条生成路径里的 tieXml / notationXml）。
+ *
+ *  返回的每个片段带 bar（从 0 开始）、start/end、tieStart/tieStop：
+ *  - tieStart = 后面还有分片 → 本片段末尾起连音线
+ *  - tieStop  = 前面已有分片 → 本片段开头收连音线
+ *  恰好落在小节线上的音符只属于前一小节（end 用 end-1 判最后一小节）。
+ */
+export function splitNoteAtBarlines(note, barLen) {
+  const len = Math.max(1, Math.round(Number(barLen) || 0));
+  const start = Math.max(0, Math.round(Number(note && note.start) || 0));
+  const endRaw = Number(note && note.end);
+  const end = Math.max(start + 1, Math.round(Number.isFinite(endRaw) ? endRaw : start + 1));
+  const firstBar = Math.floor(start / len);
+  const lastBar = Math.floor((end - 1) / len);
+  const pieces = [];
+  for (let b = firstBar; b <= lastBar; b++) {
+    const s = Math.max(start, b * len);
+    const e = Math.min(end, (b + 1) * len);
+    if (e > s) pieces.push({ bar: b, start: s, end: e, tieStart: false, tieStop: false });
+  }
+  if (!pieces.length) pieces.push({ bar: firstBar, start, end, tieStart: false, tieStop: false });
+  for (let i = 0; i < pieces.length; i++) {
+    pieces[i].index = i;
+    pieces[i].count = pieces.length;
+    pieces[i].tieStop = i > 0;
+    pieces[i].tieStart = i < pieces.length - 1;
+  }
+  return pieces;
+}
+
 export function inferKeyFifths(notes) {
   const MAJOR = [6.35,2.23,3.48,2.33,4.38,4.09,2.52,5.19,2.39,3.66,2.29,2.88];
   const MINOR = [6.33,2.68,3.52,5.38,2.60,3.53,2.54,4.75,3.98,2.69,3.34,3.17];
@@ -102,7 +136,10 @@ export function songToMusicXMLTrack(song, ti) {
   const tpb = song.tpb || 480;
   const sig = song.sigMap[0] || { num: 4, den: 4 };
   const barLen = Math.max(1, Math.round(sig.num * tpb * 4 / sig.den));
-  const bars = song.bars || Math.ceil(song.totalTicks / barLen);
+  // 小节数至少要覆盖最后一个音的结尾，否则跨到末尾之外的分片不会被写出，
+  // 连音线会以「只有 start 没有 stop」悬空（数据里 song.bars 偏小时尤其明显）。
+  const maxNoteEnd = (tr.notes || []).reduce((m, n) => Math.max(m, n.end || 0), 0);
+  const bars = Math.max(1, song.bars || 0, Math.ceil((song.totalTicks || 0) / barLen), Math.ceil(maxNoteEnd / barLen));
 
   // 歌词
   const lyrics = [];
@@ -135,6 +172,7 @@ export function songToMusicXMLTrack(song, ti) {
   let idx = 0, li = 0;
   const avgMidi = tr.notes.length ? tr.notes.reduce((s2, n) => s2 + n.midi, 0) / tr.notes.length : 60;
   let lastChordKey = '', lastDyn = '', curClef = avgMidi < 55 ? 'F' : 'G';
+  // 同音高、首尾相接的音符继续用连音线连起来（原有逻辑，F-07 不改）。
   const tieStartSet = new Set(), tieStopSet = new Set();
   {
     const _all = tr.notes.slice().sort((a, b) => a.start - b.start || a.midi - b.midi);
@@ -143,15 +181,29 @@ export function songToMusicXMLTrack(song, ti) {
       if (_a.midi === _b.midi && _a.end === _b.start) { tieStartSet.add(_a); tieStopSet.add(_b); }
     }
   }
+  // ★ F-07：跨小节的长音先按小节线切成片段，分片之间用 tieStart/tieStop 连接。
+  // 旧写法把整段时值塞进起始小节的 <duration>，超过小节长度，谱面上只剩起始小节。
+  const segments = [];
+  for (const n of tr.notes) {
+    const pieces = splitNoteAtBarlines(n, barLen);
+    for (let pi = 0; pi < pieces.length; pi++) {
+      const piece = pieces[pi];
+      piece.note = n;
+      piece.first = pi === 0;
+      piece.last = pi === pieces.length - 1;
+      if (piece.first) piece.tieStop = tieStopSet.has(n);    // 与前一个同音高音符相连
+      if (piece.last) piece.tieStart = tieStartSet.has(n);   // 与后一个同音高音符相连
+      segments.push(piece);
+    }
+  }
+  segments.sort((a, b) => a.start - b.start || a.note.midi - b.note.midi);
   for (let b = 0; b < bars; b++) {
     const mStart = b * barLen;
-    const notes = tr.notes.filter(n => n.start >= mStart && n.start < mStart + barLen).sort((a, b2) => a.start - b2.start);
-    const hasHigh = notes.some(n => n.midi >= 79);
-    const hasLow = notes.some(n => n.midi <= 40);
+    const notes = segments.filter(s => s.bar === b);
     xml += '<measure number="' + (b + 1) + '">\n';
-    const mAvg = notes.length ? notes.reduce((s2, n) => s2 + n.midi, 0) / notes.length : (curClef === 'F' ? 40 : 70);
-    const hasHighAny = notes.some(n => n.midi >= 77);
-    const hasLowAny = notes.some(n => n.midi <= 40);
+    const mAvg = notes.length ? notes.reduce((s2, s) => s2 + s.note.midi, 0) / notes.length : (curClef === 'F' ? 40 : 70);
+    const hasHighAny = notes.some(s => s.note.midi >= 77);
+    const hasLowAny = notes.some(s => s.note.midi <= 40);
     let newClef = curClef;
     if (hasHighAny && curClef === 'F') newClef = 'G';
     else if (!hasHighAny && mAvg < 50) newClef = 'F';
@@ -175,7 +227,7 @@ export function songToMusicXMLTrack(song, ti) {
       lastChordKey = chKey;
       xml += '<harmony placement="above"><root><root-step>' + ch.root[0] + '</root-step>' + (ch.root.length > 1 ? '<root-alter>1</root-alter>' : '') + '</root><kind>' + (ch.minor ? 'minor' : 'major') + '</kind></harmony>\n';
     }
-    const avgVel = notes.length ? notes.reduce((s2, n) => s2 + (n.velocity || 80), 0) / notes.length : 0;
+    const avgVel = notes.length ? notes.reduce((s2, s) => s2 + (s.note.velocity || 80), 0) / notes.length : 0;
     if (avgVel) {
       const dyn = velocityDynTag(avgVel);
       if (dyn !== lastDyn) {
@@ -185,43 +237,51 @@ export function songToMusicXMLTrack(song, ti) {
     }
     let cursor = mStart;
     for (let ni = 0; ni < notes.length; ni++) {
-      const n = notes[ni];
-      if (n.start > cursor) xml += '<note><rest/><duration>' + (n.start - cursor) + '</duration><voice>1</voice></note>\n';
+      const seg = notes[ni];
+      const n = seg.note;
+      if (seg.start > cursor) xml += '<note><rest/><duration>' + (seg.start - cursor) + '</duration><voice>1</voice></note>\n';
       let writeMidi = n.midi;
       const lo = curClef === 'F' ? 43 : 64, hi = curClef === 'F' ? 57 : 76;
       while (writeMidi < lo) writeMidi += 12;
       while (writeMidi > hi) writeMidi -= 12;
-      const prevN = ni > 0 ? notes[ni - 1] : null;
       const p = midiToPitch(writeMidi);
+      // 歌词、奏法只写在跨小节长音的**第一片**上；后面几片只是时值延续。
       let lyricXml = '';
-      if (li < lyrics.length && Math.abs(lyrics[li].tick - n.start) < Math.max(tpb / 2, 10)) {
+      if (seg.first && li < lyrics.length && Math.abs(lyrics[li].tick - n.start) < Math.max(tpb / 2, 10)) {
         lyricXml = '<lyric number="1"><syllabic>single</syllabic><text>' + escXml(lyrics[li].text) + '</text></lyric>';
         li++;
       }
-      const tieStart = tieStartSet.has(n);
-      const tieStop = tieStopSet.has(n);
+      const tieStart = !!seg.tieStart;
+      const tieStop = !!seg.tieStop;
+      // MusicXML 惯例：中间分片先收前一条连音线（stop），再起下一条（start）。
+      // 顺序反了 Verovio 会把同一音符上的 start/stop 配成一对，报 startid == endid。
       let tieXml = '';
-      if (tieStart) tieXml += '<tie type="start"/>';
       if (tieStop) tieXml += '<tie type="stop"/>';
-      let notationTie = '';
+      if (tieStart) tieXml += '<tie type="start"/>';
+      let notationXml = '';
       {
         const arts = [];
-        if ((n.end - n.start) < tpb / 4) arts.push('<staccato/>');
-        if ((n.velocity || 80) >= 110) arts.push('<accent/>');
-        if ((n.velocity || 80) <= 42) arts.push('<tenuto/>');
+        if (seg.first) {
+          if ((n.end - n.start) < tpb / 4) arts.push('<staccato/>');
+          if ((n.velocity || 80) >= 110) arts.push('<accent/>');
+          if ((n.velocity || 80) <= 42) arts.push('<tenuto/>');
+        }
         let inner = '';
-        if (tieStart) inner += '<tied type="start"/>';
         if (tieStop) inner += '<tied type="stop"/>';
+        if (tieStart) inner += '<tied type="start"/>';
         inner += arts.join('');
-        if (inner) notationTie = '<notations>' + inner + '</notations>';
+        if (inner) notationXml = '<notations>' + inner + '</notations>';
       }
       const midLine = curClef === 'F' ? 50 : 71;
       const stemDir = n.midi < midLine ? 'up' : (n.midi > midLine ? 'down' : (avgMidi > 64 ? 'down' : 'up'));
-      const tInfo = musicXmlType(Math.max(1, n.end - n.start), tpb);
+      const segDur = Math.max(1, seg.end - seg.start);
+      const tInfo = musicXmlType(segDur, tpb);
       xml += '<note xml:id="n' + (idx++) + '"><pitch><step>' + p.step + '</step>';
       if (p.alter !== 0) xml += '<alter>' + p.alter + '</alter>';
-      xml += '<octave>' + p.octave + '</octave></pitch><duration>' + Math.max(1, n.end - n.start) + '</duration><voice>1</voice><stem>' + stemDir + '</stem><type>' + tInfo.type + '</type>' + (tInfo.dot ? '<dot/>' : '') + tieXml + lyricXml + notationTie + '</note>\n';
-      cursor = Math.max(cursor, n.end);
+      xml += '<octave>' + p.octave + '</octave></pitch><duration>' + segDur + '</duration>' + tieXml
+        + '<voice>1</voice><type>' + tInfo.type + '</type>' + (tInfo.dot ? '<dot/>' : '')
+        + '<stem>' + stemDir + '</stem>' + notationXml + lyricXml + '</note>\n';
+      cursor = Math.max(cursor, seg.end);
     }
     if (b === bars - 1) xml += '<barline location="right"><bar-style>light-heavy</bar-style></barline>\n';
     xml += '</measure>\n';
@@ -244,6 +304,7 @@ export function songToMusicXMLTrack(song, ti) {
  *   5. **谱表括号**：<part-group><group-symbol>bracket —— 总谱左侧那条竖括号。
  *   6. 调号对**整首曲子**推断一次（总谱只有一个调号），不再是每轨各推各的。
  *   7. 每个音符带 xml:id，界面据此建立「SVG 元素 ↔ 音符」映射（多声部时按顺序数会对不上）。
+ *   8. **跨小节时值**：长音按小节线切片，片间用 <tie>/<tied> 连接（F-07）。
  * ============================================================ */
 export function buildFullScore(song, opts) {
   song = quantizeForNotation(song);
@@ -251,7 +312,9 @@ export function buildFullScore(song, opts) {
   const tpb = song.tpb || 480;
   const sig = (song.sigMap && song.sigMap[0]) || { num: 4, den: 4 };
   const barLen = Math.max(1, Math.round(sig.num * tpb * 4 / sig.den));
-  const bars = Math.max(1, song.bars || Math.ceil((song.totalTicks || 0) / barLen));
+  const maxNoteEnd = (song.tracks || []).reduce((mx, tr) => (tr.notes || []).reduce((m, n) => Math.max(m, n.end || 0), mx), 0);
+  // 同单轨：小节数必须覆盖所有音的结尾，跨小节分片才有地方落，连音线不会悬空。
+  const bars = Math.max(1, song.bars || 0, Math.ceil((song.totalTicks || 0) / barLen), Math.ceil(maxNoteEnd / barLen));
   const parts = (song.tracks || [])
     .map((tr, i) => ({ tr, i }))
     .filter((x) => x.tr && x.tr.notes && x.tr.notes.length && !x.tr.isDrum);
@@ -259,7 +322,7 @@ export function buildFullScore(song, opts) {
   const kf = o.keyFifths != null ? { fifths: o.keyFifths } : inferKeyFifths(allNotes);
   const fifths = clampInt(kf.fifths != null ? kf.fifths : 0, -7, 7);
   const bpm = bpmOfSong(song);
-  const noteMap = new Map();          // xml:id → { track, tick, midi, dur, name }
+  const noteMap = new Map();          // xml:id → { track, tick, midi, dur, noteStart, noteEnd, name }（跨小节时每片一条）
 
   let xml = '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 3.1 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">\n<score-partwise version="3.1">\n';
   xml += '<part-list>\n';
@@ -279,15 +342,33 @@ export function buildFullScore(song, opts) {
     const tr = p.tr;
     const notes = tr.notes.slice().sort((a, b) => a.start - b.start || a.midi - b.midi);
     let curClef = (notes.reduce((s2, n) => s2 + n.midi, 0) / notes.length) < 55 ? 'F' : 'G';
+    // ★ F-07：先给整条轨的音符分配声部，再按小节线切片。片段继承原音符的声部，
+    // 跨小节的长音在下一小节不会突然换声部，连音线也接得上。
+    const segmentsByBar = new Map();
+    for (const g of voiceGroupsOf(notes).groups) {
+      for (const n of g.notes) {
+        const pieces = splitNoteAtBarlines(n, barLen);
+        for (let k = 0; k < pieces.length; k++) {
+          const piece = pieces[k];
+          const seg = {
+            bar: piece.bar, start: piece.start, end: piece.end,
+            note: n, voice: g.voice,
+            first: k === 0, last: k === pieces.length - 1,
+            tieStart: piece.tieStart, tieStop: piece.tieStop,
+          };
+          if (!segmentsByBar.has(seg.bar)) segmentsByBar.set(seg.bar, []);
+          segmentsByBar.get(seg.bar).push(seg);
+        }
+      }
+    }
     xml += '<part id="P' + (pi + 1) + '">\n';
     for (let b = 0; b < bars; b++) {
       const mStart = b * barLen;
-      const mEnd = mStart + barLen;
-      const inBar = notes.filter((n) => n.start >= mStart && n.start < mEnd);
+      const inBar = segmentsByBar.get(b) || [];
       xml += '<measure number="' + (b + 1) + '">\n';
-      const mAvg = inBar.length ? inBar.reduce((s2, n) => s2 + n.midi, 0) / inBar.length : (curClef === 'F' ? 40 : 70);
-      const hasHigh = inBar.some((n) => n.midi >= 77);
-      const hasLow = inBar.some((n) => n.midi <= 40);
+      const mAvg = inBar.length ? inBar.reduce((s2, s) => s2 + s.note.midi, 0) / inBar.length : (curClef === 'F' ? 40 : 70);
+      const hasHigh = inBar.some((s) => s.note.midi >= 77);
+      const hasLow = inBar.some((s) => s.note.midi <= 40);
       let newClef = curClef;
       if (hasHigh && curClef === 'F') newClef = 'G';
       else if (!hasHigh && mAvg < 50) newClef = 'F';
@@ -311,28 +392,51 @@ export function buildFullScore(song, opts) {
         xml += '</measure>\n';
         continue;
       }
-      const voices = splitVoices(inBar, barLen);
-      voices.forEach((v, vi) => {
+      const byVoice = new Map();
+      for (const seg of inBar) {
+        if (!byVoice.has(seg.voice)) byVoice.set(seg.voice, []);
+        byVoice.get(seg.voice).push(seg);
+      }
+      const voiceIds = Array.from(byVoice.keys()).sort((a, b) => a - b);
+      voiceIds.forEach((vid, vi) => {
         if (vi > 0) xml += '<backup><duration>' + barLen + '</duration></backup>\n';
+        const list = byVoice.get(vid).sort((a, b) => a.start - b.start || a.note.midi - b.note.midi);
         let cursor = 0;
         let lastStart = -1;
-        for (const n of v.notes) {
-          const rel = Math.max(0, n.start - mStart);
-          const dur = Math.max(1, Math.min(barLen - rel, n.end - n.start));
+        for (const seg of list) {
+          const rel = Math.max(0, seg.start - mStart);
+          const dur = Math.max(1, Math.min(barLen - rel, seg.end - seg.start));
           if (rel > cursor) {
             xml += '<note><rest/><duration>' + (rel - cursor) + '</duration><voice>' + (vi + 1) + '</voice></note>\n';
             cursor = rel;
           }
           const isChord = rel === lastStart;
-          const p2 = midiToPitch(n.midi);
+          const p2 = midiToPitch(seg.note.midi);
           const tInfo = musicXmlType(dur, tpb);
           const nid = 'n' + (idSeq++);
-          noteMap.set(nid, { track: p.i, tick: n.start, midi: n.midi, dur: n.end - n.start, name: tr.name || '' });
+          noteMap.set(nid, {
+            track: p.i, tick: seg.start, midi: seg.note.midi, dur: seg.end - seg.start,
+            noteStart: seg.note.start, noteEnd: seg.note.end, name: tr.name || '',
+          });
+          // 中间分片：先 stop 再 start（与单轨路径一致，否则 Verovio 会配错连音线）。
+          let tieXml = '';
+          if (seg.tieStop) tieXml += '<tie type="stop"/>';
+          if (seg.tieStart) tieXml += '<tie type="start"/>';
+          let notationXml = '';
+          {
+            let inner = '';
+            if (seg.tieStop) inner += '<tied type="stop"/>';
+            if (seg.tieStart) inner += '<tied type="start"/>';
+            if (inner) notationXml = '<notations>' + inner + '</notations>';
+          }
           xml += '<note xml:id="' + nid + '">' + (isChord ? '<chord/>' : '') + '<pitch><step>' + p2.step + '</step>';
           if (p2.alter !== 0) xml += '<alter>' + p2.alter + '</alter>';
-          xml += '<octave>' + p2.octave + '</octave></pitch><duration>' + dur + '</duration><voice>' + (vi + 1) + '</voice>'
-            + '<type>' + tInfo.type + '</type>' + (tInfo.dot ? '<dot/>' : '') + '</note>\n';
-          if (!isChord) cursor = Math.max(cursor, rel + dur);
+          xml += '<octave>' + p2.octave + '</octave></pitch><duration>' + dur + '</duration>' + tieXml
+            + '<voice>' + (vi + 1) + '</voice><type>' + tInfo.type + '</type>' + (tInfo.dot ? '<dot/>' : '')
+            + notationXml + '</note>\n';
+          // 和弦里的每个音都要参与游标推进：同组的音可能时值不同（尤其跨小节的长音），
+          // 只看第一个音会把后面的休止补到长音还没结束的位置，小节总长就超了。
+          cursor = Math.max(cursor, rel + dur);
           lastStart = rel;
         }
         if (cursor < barLen) {
@@ -348,9 +452,10 @@ export function buildFullScore(song, opts) {
   return { xml, bars, barLen, partCount: parts.length, noteMap, fifths, bpm };
 }
 
-/** 把一小节的音符按「时间上能不能接在同一条声部里」切成若干声部。
- *  同一时刻起音的音符算一个**和弦组**，整组进同一条声部（否则和弦会被拆成两声部）。 */
-export function splitVoices(notes, barLen) {
+/** 把音符按「同刻起音」分组，再贪心分到互不重叠的声部；返回组与声部。
+ *  整条轨只分配一次：buildFullScore 要把跨小节的片段留在同一声部里，
+ *  所以不能像旧版那样每小节各自分一次声部。 */
+function voiceGroupsOf(notes) {
   const groups = [];
   for (const n of notes) {
     const g = groups[groups.length - 1];
@@ -359,13 +464,23 @@ export function splitVoices(notes, barLen) {
   }
   const voices = [];
   for (const g of groups) {
-    let target = null;
-    for (const v of voices) { if (g.start >= v.end - 2) { target = v; break; } }
-    if (!target) { target = { notes: [], end: -1 }; voices.push(target); }
+    let target = null, voiceIndex = -1;
+    for (let i = 0; i < voices.length; i++) {
+      const v = voices[i];
+      if (g.start >= v.end - 2) { target = v; voiceIndex = i; break; }
+    }
+    if (!target) { target = { notes: [], end: -1 }; voices.push(target); voiceIndex = voices.length - 1; }
+    g.voice = voiceIndex;
     for (const n of g.notes) target.notes.push(n);
     for (const n of g.notes) target.end = Math.max(target.end, n.end);
   }
-  return voices.slice(0, 4);
+  return { groups, voices };
+}
+
+/** 把一小节的音符按「时间上能不能接在同一条声部里」切成若干声部。
+ *  同一时刻起音的音符算一个**和弦组**，整组进同一条声部（否则和弦会被拆成两声部）。 */
+export function splitVoices(notes, barLen) {
+  return voiceGroupsOf(notes).voices.slice(0, 4);
 }
 
 function clampInt(v, lo, hi) {
