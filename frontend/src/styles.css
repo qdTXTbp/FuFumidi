@@ -1887,3 +1887,69 @@ input[type="checkbox"]:active, input[type="radio"]:active { transform: scale(0.8
 /* 输入控件统一 UI 字体：去掉浏览器默认宋体/等宽回退（“未命名轨”等输入框） */
 input, textarea, select, button { font-family: var(--font-ui); }
 input::placeholder, textarea::placeholder { font-family: var(--font-ui); }
+
+/* ============================================================
+   界面材质（用户 2026-10-29）：默认 / 玻璃 / 亚克力 / 云母 / 磨砂 / 天鹅绒
+   只覆盖大块表面，不改变布局；data-material 由 core/material.js 挂到 <html>。
+   ============================================================ */
+html[data-material] .card,
+html[data-material] .topbar,
+html[data-material] .sidebar,
+html[data-material] .playerbar,
+html[data-material] .ap-drawer,
+html[data-material] .tc-panel,
+html[data-material] .ed-modal,
+html[data-material] .ed-modal-card,
+html[data-material] .modal-card,
+html[data-material] .settings-card,
+html[data-material] .viz-card,
+html[data-material] .tr-run-panel,
+html[data-material] .home-hero,
+html[data-material] .home-quick {
+  background: var(--mat-fill) !important;
+  -webkit-backdrop-filter: var(--mat-blur) var(--mat-sat, saturate(1.1));
+  backdrop-filter: var(--mat-blur) var(--mat-sat, saturate(1.1));
+  border-color: var(--mat-border, var(--hairline)) !important;
+  box-shadow: var(--mat-shadow, var(--sh-1));
+}
+
+html[data-material="default"] {
+  --mat-fill: var(--surface);
+  --mat-blur: blur(0px);
+  --mat-border: var(--hairline);
+  --mat-shadow: var(--sh-1);
+}
+html[data-material="glass"] {
+  --mat-fill: color-mix(in srgb, var(--surface) 68%, transparent);
+  --mat-blur: blur(18px);
+  --mat-sat: saturate(1.35);
+  --mat-border: color-mix(in srgb, #fff 16%, var(--hairline));
+}
+html[data-material="acrylic"] {
+  --mat-fill: linear-gradient(145deg, color-mix(in srgb, var(--surface) 82%, #fff), color-mix(in srgb, var(--surface) 72%, transparent));
+  --mat-blur: blur(24px);
+  --mat-sat: saturate(1.2);
+  --mat-border: color-mix(in srgb, #fff 22%, var(--hairline));
+}
+html[data-material="mica"] {
+  --mat-fill: linear-gradient(150deg, color-mix(in srgb, var(--surface) 94%, #fff), color-mix(in srgb, var(--surface) 84%, #9ec3ff) 55%, color-mix(in srgb, var(--surface) 96%, transparent));
+  --mat-blur: blur(8px);
+  --mat-sat: saturate(1.08);
+  --mat-border: color-mix(in srgb, #fff 18%, var(--hairline));
+}
+html[data-material="frosted"] {
+  --mat-fill: color-mix(in srgb, var(--surface) 84%, transparent);
+  --mat-blur: blur(14px);
+  --mat-sat: saturate(.82);
+  --mat-border: color-mix(in srgb, var(--text) 10%, var(--hairline));
+}
+html[data-material="velvet"] {
+  --mat-fill: radial-gradient(ellipse at 28% 0%, color-mix(in srgb, var(--surface) 88%, #fff), var(--surface) 56%, color-mix(in srgb, var(--surface) 96%, #000));
+  --mat-blur: blur(0px);
+  --mat-sat: saturate(.92);
+  --mat-border: color-mix(in srgb, var(--text) 10%, var(--hairline));
+  --mat-shadow: 0 12px 34px rgba(0,0,0,.16);
+}
+html[data-material="glass"] .app-shell,
+html[data-material="acrylic"] .app-shell,
+html[data-material="mica"] .app-shell { background-color: transparent; }

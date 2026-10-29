@@ -3,6 +3,7 @@
 // （音色库来自 main/soundfonts.js REGISTRY，第三方二进制来自 docs/VENDOR.md）。
 import { ref } from 'vue';
 import Icon from '../components/Icon.vue';
+import LicenseDisclaimer from '../components/LicenseDisclaimer.vue';
 import { LICENSES } from '../core/licenses.js';
 import { t } from '../core/i18n.js';
 import { useAppStore } from '../stores/app';
@@ -18,6 +19,8 @@ function back() { try { app.setView('home'); } catch (e) { location.hash = '#/ho
       <div class="grow"><b>{{ t('关于与许可') }}</b><span>{{ t('版本、内置音色库与第三方组件的许可证与来源') }}</span></div>
       <button class="btn sm" @click="back">{{ t('返回') }}</button>
     </div>
+
+    <LicenseDisclaimer />
 
     <div class="card about-card">
       <h4><Icon name="box" :size="14" /> {{ t('应用') }}</h4>

@@ -51,6 +51,11 @@ function openHealth() {
   state.ui.settingsTab = 'feedback';
   state.ui.settingsOpen = true;
 }
+function openFuMiVoice() {
+  const url = 'https://github.com/qdTXTbp/FuMiVoice/releases/latest';
+  try { if (bridge && bridge.openExternal) { bridge.openExternal(url); return; } } catch (e) {}
+  try { window.open(url, '_blank'); } catch (e) {}
+}
 function openUpdate() {
   state.ui.settingsTab = 'update';
   state.ui.settingsOpen = true;
@@ -231,6 +236,15 @@ async function openProject() {
       </button>
     </div>
 
+    <section class="card home-fumivoice">
+      <div class="home-fumivoice-ic"><Icon name="logo" :size="26" /></div>
+      <div class="home-fumivoice-copy">
+        <b>{{ t('FuMiVoice 手机版') }}</b>
+        <span>{{ t('Android 播放器 · SoundFont · 瀑布钢琴卷帘 · 音频导出') }}</span>
+      </div>
+      <button class="btn primary sm" @click="openFuMiVoice"><Icon name="download" :size="13" />{{ t('下载 Android 版') }}</button>
+    </section>
+
     <section class="card home-recent">
       <div class="home-recent-head">
         <h3>{{ t('最近项目') }}</h3>
@@ -250,6 +264,13 @@ async function openProject() {
 </template>
 
 <style scoped>
+.home-fumivoice { display: flex; align-items: center; gap: var(--sp-3); padding: 14px 18px; margin-top: 14px; border-color: color-mix(in srgb, var(--accent-sky) 22%, var(--hairline)); background: linear-gradient(110deg, color-mix(in srgb, var(--accent-sapphire) 12%, var(--surface)), var(--surface)); }
+.home-fumivoice-ic { width: 42px; height: 42px; border-radius: var(--r-md); display: grid; place-items: center; color: var(--accent-sky); background: color-mix(in srgb, var(--accent-sapphire) 16%, var(--surface-soft)); flex: none; }
+.home-fumivoice-copy { min-width: 0; display: flex; flex-direction: column; gap: 3px; flex: 1; }
+.home-fumivoice-copy b { color: var(--text); font-size: var(--fs-md); }
+.home-fumivoice-copy span { color: var(--text3); font-size: var(--fs-xs); }
+@media (max-width: 760px) { .home-fumivoice { flex-wrap: wrap; } .home-fumivoice .btn { width: 100%; } }
+
 .home-view { max-width: 1280px; }
 .home-head { display: flex; align-items: flex-end; gap: var(--sp-4); margin-bottom: 20px; }
 .home-title { font-size: var(--fs-2xl); line-height: 1.15; margin: 7px 0 0; }

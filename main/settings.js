@@ -13,6 +13,7 @@ const DEFAULT_SETTINGS = {
   ui_mode: 'light',
   font_size: 'standard',
   density: 'comfortable',
+  ui_material: 'default',
   perf_mode: 'quality',
   engine_path: '',
   engine_mode: 'universal',

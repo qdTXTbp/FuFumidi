@@ -33,6 +33,7 @@ import { usePlaylistStore } from './stores/playlist';
 import { useSettingsStore } from './stores/settings';
 import { setLang, t, browserLang } from './core/i18n.js';
 import { applyDisplayPrefs as applyDisplayPrefsShared, loadDisplayPrefs } from './core/display.js';
+import { applyMaterial } from './core/material.js';
 import { installSfxClicks } from './core/sfx.js';
 import { playbackPrefs, applyPlaybackSettings } from './core/playback_prefs.js';
 import { holdRate, isEditableTarget } from './core/transport_keys.js';
@@ -168,6 +169,7 @@ async function loadWallpaper() {
     wpFit.value = s.wallpaper_fit || 'cover';
     wpDim.value = Number.isFinite(Number(s.wallpaper_dim)) ? Number(s.wallpaper_dim) : 18;
     wpBlur.value = Number.isFinite(Number(s.wallpaper_blur)) ? Number(s.wallpaper_blur) : 0;
+  applyMaterial(s.ui_material);
   applyWeSettings(s);
   } catch (e) {}
 }
@@ -179,6 +181,7 @@ watch(() => settingsStore.settings, () => {
     wpFit.value = s.wallpaper_fit || 'cover';
     wpDim.value = Number.isFinite(Number(s.wallpaper_dim)) ? Number(s.wallpaper_dim) : 18;
     wpBlur.value = Number.isFinite(Number(s.wallpaper_blur)) ? Number(s.wallpaper_blur) : 0;
+  applyMaterial(s.ui_material);
   applyWeSettings(s);
   // 播放偏好（跳过空白 / 步长 / 长按倍数）：设置页一改就同步到播放器
   applyPlaybackSettings(s);

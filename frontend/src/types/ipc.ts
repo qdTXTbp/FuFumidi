@@ -272,6 +272,8 @@ export interface Settings {
   density?: string;
   /** 全局 UI 缩放（M9）：0.9 ~ 1.3，缺省 1 */
   ui_scale?: number;
+  /** 全局界面材质：default / glass / acrylic / mica / frosted / velvet */
+  ui_material?: string;
   perf_mode?: PerfMode;
   engine_path?: string;
   engine_mode?: EngineMode;

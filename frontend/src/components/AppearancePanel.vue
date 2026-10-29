@@ -7,6 +7,7 @@ import { useAppStore } from '../stores/app';
 import { useSettingsStore } from '../stores/settings';
 import { useVizBgStore } from '../stores/vizbg';
 import { t } from '../core/i18n.js';
+import { MATERIALS, applyMaterial } from '../core/material.js';
 import { THEMES, themeById, saveTheme, loadTheme, loadMode, setMode } from '../core/theme.js';
 import WallpaperLibrary from './WallpaperLibrary.vue';
 import WallpaperEnginePanel from './WallpaperEnginePanel.vue';
@@ -19,7 +20,9 @@ const settingsStore = useSettingsStore();
 const vizBg = useVizBgStore();
 const vbg = vizBg.bg;
 const wpApplyTarget = ref('app'); // app | viz
-const tab = ref('theme');             // theme | wallpaper | display
+const tab = ref('theme');
+const material = computed(() => String((settingsStore.settings && settingsStore.settings.ui_material) || 'default'));
+function setMaterial(id) { try { applyMaterial(id); } catch (e) {} settingsStore.setLocal({ ui_material: id }); settingsStore.save({ ui_material: id }).catch(() => {}); }             // theme | wallpaper | display
 const wpSource = ref('local');         // local | library | we
 const bridge = window.fuBridge;
 
@@ -134,6 +137,7 @@ onMounted(async () => {
             </button>
           </div>
           <div class="ap-row"><span>{{ t('强调色') }}</span><div class="ap-color"><input type="color" :value="accent || themeById(theme).accent" @input="accent = $event.target.value; chooseAccent()" /><button class="ap-link" @click="resetAccent">{{ t('还原默认') }}</button></div></div>
+          <div class="ap-row"><span>{{ t('界面材质') }}</span><div class="ap-material-grid"><button v-for="m in MATERIALS" :key="m.id" class="ap-material" :class="[ 'mat-' + m.id, { on: material === m.id } ]" :title="t(m.label)" @click="setMaterial(m.id)"><i></i><span>{{ t(m.label) }}</span></button></div></div>
         </section>
 
         <section v-show="tab === 'wallpaper'" class="ap-sec ap-sec-first">
@@ -212,6 +216,17 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.ap-material-grid { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.ap-material { width: 46px; border: 1px solid var(--hairline); border-radius: var(--r-sm); background: var(--surface); color: var(--text3); padding: 3px 2px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 9px; }
+.ap-material.on { border-color: var(--accent-sky); color: var(--text); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-sky) 30%, transparent); }
+.ap-material i { width: 28px; height: 12px; border-radius: 3px; border: 1px solid color-mix(in srgb, var(--text) 12%, transparent); }
+.ap-material.mat-default i { background: var(--surface-soft); }
+.ap-material.mat-glass i { background: linear-gradient(135deg, rgba(255,255,255,.52), rgba(140,190,255,.15)); backdrop-filter: blur(5px); }
+.ap-material.mat-acrylic i { background: linear-gradient(120deg, rgba(255,255,255,.68), rgba(150,170,220,.28)); }
+.ap-material.mat-mica i { background: linear-gradient(145deg, rgba(255,255,255,.55), rgba(90,140,210,.22) 55%, rgba(255,255,255,.24)); }
+.ap-material.mat-frosted i { background: rgba(220,230,245,.48); filter: blur(1px); }
+.ap-material.mat-velvet i { background: radial-gradient(circle at 30% 20%, rgba(255,255,255,.22), rgba(30,35,55,.92)); }
+
 .ap-tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; padding: 2px; margin-bottom: var(--sp-2); border: 1px solid var(--hairline); border-radius: var(--r-md); background: var(--surface-soft); }
 .ap-tabs button { border: 0; border-radius: var(--r-sm); padding: var(--sp-2); background: transparent; color: var(--text3); font-size: var(--fs-sm); cursor: pointer; }
 .ap-tabs button.on { background: var(--surface); color: var(--text); box-shadow: var(--sh-1); }
