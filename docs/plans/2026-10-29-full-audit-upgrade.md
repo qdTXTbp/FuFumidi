@@ -17,6 +17,7 @@ FuFumidi 的能力广度已经超过多数开源 MIDI 工具：从音频转录�
 3. **工程债开始反噬体验**：24 个视图、2 万行视图代码、多个 2000~3600 行的单文件；小改动容易产生跨模块回归。
 4. **包体与运行时偏重**：安装后约 2.1 GB，Python 运行时 1.6 GB；首装和更新成本高。
 5. **可访问性和 i18n 是明显短板**：键盘无法完成核心列表操作，159 个中文键缺英/日翻译。
+6. **许可证有硬风险**：MuScriptor 权重 CC BY-NC 4.0、hFT 权重 CC BY-NC-SA 4.0、YourMT3 GPL-3.0、MIROS/piano_transcription_inference 无 LICENSE；当前可免费分发，但不能收费/上架商店。
 
 ### 0.1 评分卡（10 分制，审阅用，不是营销指标）
 
@@ -33,10 +34,10 @@ FuFumidi 的能力广度已经超过多数开源 MIDI 工具：从音频转录�
 | 可访问性/键盘 | 3.0 | 95 处不可键盘触发的点击、浮层语义缺失 |
 | 视觉一致性 | 6.5 | 令牌层存在，但契约被多处覆盖 |
 | 性能（启动/编辑） | 7.0 | 启动 820ms，60k 编辑 529ms；大曲目内存仍高 |
-| 包体/安装体验 | 4.5 | 712 MB 安装包、2.1 GB 安装目录 |
-| 代码可维护性 | 4.5 | 巨型视图、361 处静默 catch、34 个死导出 |
-| 测试/门禁 | 8.0 | 546 UI 测试、185 个测试文件、审计脚本齐全 |
-| 综合 | 6.3 | 专业能力已具备，产品化与工程化欠账明显 |
+| 包体/安装体验 | 3.5 | 710 MiB 安装包、2,029 MiB 安装目录，Python 占 73% |
+| 代码可维护性 | 4.5 | 巨型视图、381 处空 catch、34 个死导出、参数表 3 份副本 |
+| 测试/门禁 | 5.0 | 546 UI/611 pytest 存在，但 CI 只跑少数；无视觉/真实质量门禁 |
+| 综合 | 6.2 | 专业能力已具备，产品化与工程化欠账明显；许可证有硬风险 |
 
 ### 0.2 审阅后要先做的六件事
 
@@ -287,6 +288,42 @@ FuFumidi 的能力广度已经超过多数开源 MIDI 工具：从音频转录�
 
 > 以上 P0-6..P0-13 来自 midi-workflow.md 的静态审计；报告第 9 节给了 12 条“点一遍即可复现”的清单，建议在排期前先实测确认，避免把运行时行为误判成源码缺陷。
 
+
+### P0-14 运行可靠性与数据层（后端审计）
+
+- **退出不杀常驻 worker**：main/engine.js 的 worker 没有加入 activeChildren，killAll 不涵盖；转录中退出会留下孤儿 Python，继续占 RAM/VRAM。3 行可修。
+- **保存任意设置重写 61 MiB 库并冻结 380 ms**：sql.js 每次写都 export + writeFileSync 整库；settings:save 还写 kv。实测 60.8 MiB / 1,970 行。
+- **资源中心/存储面板同步阻塞**：storage:report 3,878 ms / 50,111 文件；资源中心 onMounted 同时 engine:probe（6.46s）与 dep:check（4.70s）各起一个 Python。
+- **可观测性缺位**：Paths.logDir 全仓 1 处引用（定义本身）；381/795 空 catch；worker stderr 被丢弃；611 个 pytest 不进 CI，CI 用 Python 3.11 而发行 3.12。
+- **Electron 33.4.11 已 EOL**（最新 45.1.0）；Vite 6.0.7→8.3.5、Vue 3.5.13→3.5.44。原生依赖（webwallgl）需先验证。
+
+### P0-15 体积与运行时
+
+- 安装目录 2,029 MiB；Python 1,484 MiB（73%），其中 .pyc 251.9 MiB、.lib 44.1 MiB 是 prune 脚本本该删除却还在包里的；另有 165 MiB 引擎从未导入的包（阻断导入 + 完整 basic 转录验证）。
+- 前端产物 16.6 MB（Verovio 6.97 + FluidSynth 2.26 + 入口 1.51 + pdf worker 1.31）。
+- 保守目标：安装包 710→540–570 MiB；安装目录 2,029→1,570–1,620 MiB。注意 .pyc 与首次 import 的权衡，不能盲删。
+
+### P0-16 许可证台账（必须先于功能路线）
+
+| 引擎 | 代码许可 | 权重许可 | 当前用法 | 风险/动作 |
+|---|---|---|---|---|
+| MuScriptor | MIT | CC BY-NC 4.0 | 通用档默认，main/models.js 代下载 | 不可收费/商业分发；文案与下载页标注 NC；需法务/产品决策 |
+| hFT-Transformer | MIT | CC BY-NC-SA 4.0 | 钢琴档，main/models.js 代下载 | 文档/changelog 写成 MIT 是错误的，需修正并标注 NC-SA |
+| YourMT3+ | GPL-3.0 | 随仓库 | 可选引擎 | 分发/衍生义务需评估；可考虑不内置、仅用户自装 |
+| MIROS | 无 LICENSE | 无 LICENSE | 5.36 GB 代下载 | 不可默认分发；需作者授权或移除 |
+| piano_transcription_inference | 无 LICENSE | 无 LICENSE | 钢琴档默认 | 同上；需替换或授权 |
+| Basic Pitch | Apache-2.0 | Apache-2.0 | 通用档基线 | 合规，但 AIM 2025 多乐器榜仅 0.0634 |
+
+> 结论：**先做许可证台账和清理，再谈“更强模型”**。当前 MIT 外壳 + NC/GPL/无许可权重，不能收费、不能上架商店；免费分发也存在被追责风险。
+
+### P0-17 默认引擎与质量错配
+
+AIM 2025 多乐器转录榜（17 队）：MIROS 0.5999 > YourMT3-MoE 0.5939 > YourMT3-S 0.5582 > MT3 0.3932 > ByteDance 钢琴 0.1721 > Basic Pitch 0.0634（倒数第二）。FuFumidi 通用档默认 Basic Pitch，而精度最高的两个恰是许可最差的。需要产品决策：
+
+- 免费版默认用合规的 Basic Pitch / MuScriptor（NC）；
+- 可选高精度引擎由用户自行安装/授权，不作为内置分发；
+- 在转录页明确显示“模型许可 / 精度 / 设备要求”，不再把模型选择当普通下拉。
+
 ---
 
 ## 3. 前端布局与交互升级
@@ -454,11 +491,11 @@ FuFumidi 的能力广度已经超过多数开源 MIDI 工具：从音频转录�
 | 60k JS 堆增长 | +34.2 MB | +25 MB |
 | 前端产物 | 17 MB | ≤ 12 MB |
 | app.asar | 29 MB | ≤ 25 MB |
-| 安装目录 | 2.1 GB | ≤ 1.2 GB（一期） |
-| 安装包 | 712 MB | ≤ 450 MB（一期） |
-| Python 运行时 | 1.6 GB | ≤ 1.0 GB（一期） |
+| 安装目录 | 2,029 MiB | ≤ 1,620 MiB（一期），≤1.2 GB（二期） |
+| 安装包 | 710 MiB | ≤ 570 MiB（一期），≤450 MiB（二期） |
+| Python 运行时 | 1,484 MiB | ≤ 1,050 MiB（一期） |
 | worker 冷启动 import | 8.8 s | ≤ 4 s（异步/懒加载） |
-| 静默 catch | 361 处 | 逐模块清零 |
+| 空 catch | 381/795 | 逐模块清零 |
 | 死导出 | 34 个 | 0（或标注） |
 
 ### 5.2 Python 运行时与包体
@@ -492,6 +529,17 @@ FuFumidi 的能力广度已经超过多数开源 MIDI 工具：从音频转录�
 3. 抽出统一 UI 原语：Dialog、Listbox、Toolbar、Field、EmptyState、Toast。
 4. 死代码/死导出/旧路由/旧壁纸清理；每个模块补一个回归测试。
 5. 引擎侧抽出共享推理运行时、模型适配层、下载/校验层，合并重复渲染脚本。
+
+### 5.4 结构性与工程改进
+
+- **参数契约单一来源**：main/engine.js、main/task-queue.js、engine/music2midi.py 三份手工参数表已漂移至少 6 次；改为同一 JSON/schema 生成三端，并在构建时校验。
+- **worker 生命周期**：worker 加入 activeChildren、app 退出显式 stopEngineWorker；空闲回收从 120s 改为可配置；CPU 模型缓存补齐（当前只 CUDA 生效）。
+- **数据库**：settings 写入不要再整库 export；改为键值表增量写 + 防抖/延迟落盘；songs 表与前端 db:songs 通道清理或接线。
+- **资源探测**：engine:probe / dep:check 加 10 分钟 TTL + single-flight；资源中心进入时并行去重。
+- **日志/错误**：Paths.logDir 落盘；worker stderr/异常写日志；空 catch 分批改成有上下文日志；线上诊断包导出。
+- **构建配置**：6 份 electron-builder 配置收敛到一份 + 生成 local-dir；base.yml 去掉绝对路径。
+- **CI**：611 个 pytest 入 CI；Python 版本与发行一致；新增视觉回归、包体、i18n、死代码门禁。
+- **Electron/依赖**：评估升级到受支持版本；utilityProcess + MessagePort 替代 spawn/base64；Verovio 增量刻版；powerSaveBlocker 保护长导出。
 
 ---
 
@@ -552,9 +600,30 @@ FuFumidi 已经有 UTAU/DiffSinger 双引擎，优先补“编辑闭环”（曲
 | webwallgl (https://github.com/oneincase/webwallgl) | Scene/Web/Video 壁纸渲染，已采用 |
 | dsh-plugin-wallpaper-engine (https://github.com/elysia395/dsh-wallpaper-engine) | 扫描/资源服务/降级方案参考 |
 
+### 6.5 外部调研的硬结论
+
+- **许可优先于精度**：MuScriptor 权重 CC BY-NC 4.0、hFT 权重 CC BY-NC-SA 4.0、YourMT3 GPL-3.0；MIROS 与 piano_transcription_inference 无 LICENSE。当前可免费分发，但不能收费/上架商店。
+- **默认通用引擎与任务错配**：Basic Pitch 在 AIM 2025 多乐器榜 F=0.0634（倒数第二），却被放在通用档默认；精度最高的 MIROS/YourMT3 恰是许可最差的。
+- **“一次交付”是最高性价比差异化**：MuScriptor 的 tempo map、quantize、fill-gaps、trim-leading-bars、beat-scale 与 format sheets 一次输出量化 MIDI + MusicXML + 总谱 PDF + 分谱/TAB PDF；FuFumidi 每个零件都有，缺打包。
+- **制谱差距在刻版深度**：已有五线谱/总谱/简谱/六线谱/贝斯谱；缺连音线、力度、演奏法、反复、分谱、condensing、页面布局。
+- **MuseScore 4.7.6 已提供 PDF/音频/YouTube→乐谱云端转换**，FuFumidi 必须把差异化落到离线、可编辑 MIDI、多引擎、中文歌，而不是“也能转谱”。
+- **钢琴卷帘缺两块**：多轨叠影编辑（Cubase/S1/REAPER/FL 都有）与生成式工具（Riff Machine/Chord Progression 一类）；另有四个低成本微交互：双击选和弦、R 复制到下一拍、Q/W 时值减半/加倍、Shift+Space 从选中音符起播。
+- **Electron 33 已 EOL**（最新 45.1.0）；升级阻碍是原生依赖，不是 API；utilityProcess + MessagePort 可替代 spawn+base64 跑 Python/ffmpeg；powerSaveBlocker/setBackgroundThrottling 可保护长导出；Verovio 需增量刻版避免长谱卡主线程。
+- **视频导出是强项**：WebCodecs H.264，4K 约 39.6 fps，不要退回实时录制。
+- **不要引入 Univer**：Office 语义与 MIDI/音频无关，列表编辑器用 DOM 表格更便宜。
+- **AIM/榜单/许可证数据均来自 2026-10-29 的官方页面/API**；外部报告第 10 节列了无法核实的 7 项，需后续实测。
+
 ---
 
 ## 7. 升级路线（建议按版本）
+
+### 6.2.10 — 可靠性与合规热修（建议先于 6.3.0，约 5–8 人日）
+
+- 退出杀 worker；设置保存改为增量/防抖；storage 扫描异步化；资源中心探测加 TTL/single-flight。
+- 清理 prune 未生效的 .pyc/.lib，移除未导入包（先做端到端冒烟）。
+- 许可证台账 + hFT/MuScriptor 文案修正 + MIROS/piano_pt 许可决策。
+- Electron 升级评估（先验证 webwallgl/原生依赖）。
+- CI 接入 611 个 pytest；补线上日志与错误上报。
 
 ### 6.3.0 — 可信基础与编辑手感（优先级最高，约 15–22 人日）
 
@@ -596,7 +665,7 @@ FuFumidi 已经有 UTAU/DiffSinger 双引擎，优先补“编辑闭环”（曲
 ### 6.4.0 — 平台/包体/性能（约 10–15 人日）
 
 - Python 运行时瘦身与可选包分层。
-- 安装包目标 ≤450 MB（一期）、运行目录 ≤1.2 GB。
+- 安装包目标 ≤570 MiB（一期）、≤450 MiB（二期）；运行目录 ≤1,620 MiB（一期）、≤1.2 GB（二期）。
 - 差分更新、启动/worker 延迟加载。
 - VST3 稳定化与渲染队列；WE 导出方案。
 
