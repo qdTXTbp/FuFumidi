@@ -1,7 +1,7 @@
 # 双端升级方案（审阅稿）
 
 日期：2026-10-29
-状态：等待用户审阅；收到“通过”前不再继续执行
+状态：**已按确认决策执行完成，等待审阅发布**
 
 ## 0. 一页结论
 
@@ -156,6 +156,8 @@ JDK17（本机已下载 Corretto17）+ SDK platform 36/build-tools 36（已准�
 
 阶段 3（2–3 天）：FuFumidi 6.3.0 构建/安装/截图/发布；FuMiVoice 1.1.0 签名 APK、覆盖安装、更新提示。产出安装包、截图、变更清单、回滚点。
 
+> 实际状态（2026-10-30）：已构建 FuFumidi 6.3.0、部署本机并冒烟；已构建 FuMiVoice 1.1.0 签名 APK/AAB；尚未上传 Release。详见 docs/plans/2026-10-30-execution-report.md。
+
 阶段 4（后续）：FuMiVoice P1 性能/音频焦点/导出/测试；FuFumidi 审计中的编辑器 P0 另行排期。
 
 ## 4. 已确认的产品决策（2026-10-29）
@@ -168,7 +170,7 @@ JDK17（本机已下载 Corretto17）+ SDK platform 36/build-tools 36（已准�
 6. **音色库**：FuMiVoice 与 FuFumidi 使用同一套音色库规则（GeneralUser 默认、支持导入/下载 .sf2/.sf3、同一套音色命名），并支持把 FuFumidi 使用的 SoundFont 直接导入 FuMiVoice。
 7. **版本**：FuFumidi **6.3.0**；FuMiVoice **1.1.0（versionCode 13）**。
 
-**当前门禁**：用户明确“先不更新”。在收到“开始执行”前，不修改版本号、不构建、不签名、不发布。
+**执行状态**：已按上述决策完成 FuFumidi 6.3.0 与 FuMiVoice 1.1.0；构建、签名与安装版冒烟见执行报告。**尚未上传 Release / 打 tag**，等审阅后再发布。
 
 ## 5. 已改但未发布的原型清单（请审阅是否保留）
 
