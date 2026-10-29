@@ -6,6 +6,7 @@ import Icon from '../components/Icon.vue';
 import EditorCanvas from '../components/EditorCanvas.vue';
 import RecordPanel from '../components/editor/RecordPanel.vue';
 import { useAppStore } from '../stores/app';
+import { applyUiScale, saveUiScale, loadDisplayPrefs } from '../core/display.js';
 import { useWorkspace, SCALES } from '../stores/workspace';
 import EditorMenuBar from '../components/editor/EditorMenuBar.vue';
 import MidiToolPanel from '../components/editor/MidiToolPanel.vue';
@@ -477,6 +478,8 @@ function setDensity(v) {
 function setScale(v) {
   ws.layout.scale = v;
   ws.save();
+  saveUiScale(v);
+  applyUiScale(v);
   toast(t('界面缩放：') + Math.round(v * 100) + '%', 'ok');
 }
 
@@ -1420,6 +1423,8 @@ function applyLogic() {
   const condVal = parseFloat(logicCondVal.value) || 0;
   const actVal = parseFloat(logicActVal.value) || 0;
   const cond = logicCond.value, action = logicAction.value;
+  // 先在修改前入栈：之前是改完才 push，撤销拿到的已经是“改后状态”，逻辑编辑器等于撤不回。
+  editor.value.pushStateForTrack(logicTarget.value === 'all' ? -1 : trackIndex.value);
   let changed = 0;
   if (action === 'delete') {
     // 删除目标内满足条件的音符。此前对每个音符做 tracks.find(t => t.notes.includes(n)) +
@@ -1453,7 +1458,6 @@ function applyLogic() {
       changed++;
     }
   }
-  editor.value.pushStateForTrack(logicTarget.value === 'all' ? -1 : trackIndex.value);
   editor.value.notifyExternalEdit();
   logicOpen.value = false;
   toast(t('已处理 ') + changed + t(' 个音符'), changed ? 'ok' : 'err');
@@ -1481,13 +1485,13 @@ function runMacro(name) {
   const s = song.value; if (!s) return;
   const selection = name === 'normalize_vel' && editor.value?.selCount() ? editor.value.selRef() : null;
   const script = macroToCmd(name);
+  editor.value.pushStateForTrack(name === 'normalize_vel' && editor.value?.selCount() ? trackIndex.value : -1);
   const result = applyMacroScript(s, script, { selection });
   if (name === 'normalize_vel' && !result.changed) {
     toast(t('没有可处理的音符'), 'err');
     return;
   }
   recordCmd(script);
-  editor.value.pushStateForTrack(name === 'normalize_vel' && editor.value?.selCount() ? trackIndex.value : -1);
   editor.value.notifyExternalEdit();
   macroOpen.value = false;
   toast(t('宏已执行，处理 ') + result.changed + t(' 个音符'), 'ok');
@@ -1504,8 +1508,8 @@ function runCustomMacro(cmd) {
   const lines = parseMacroScript(cmd);
   if (recording.value) for (const line of lines) recordCmd(line);
   const selection = editor.value?.selCount() ? editor.value.selRef() : null;
-  const result = applyMacroScript(s, lines, { selection });
   editor.value.pushStateForTrack(-1);
+  const result = applyMacroScript(s, lines, { selection });
   editor.value.notifyExternalEdit();
   macroOpen.value = false;
   toast(t('自定义宏已执行，处理 ') + result.changed + t(' 个音符'), 'ok');
@@ -1892,6 +1896,8 @@ function takeUnderlayHandoff() {
   return true;
 }
 onMounted(() => {
+  // 单一缩放源：把外观里的 ui_scale 同步到工作区菜单显示（不再由 App 二次缩放）
+  try { const dp = loadDisplayPrefs(); if (dp.ui_scale != null) ws.layout.scale = dp.ui_scale; } catch (e) {}
   if (takeUnderlayHandoff()) return;
   if (ulPath.value) void setUnderlayFromUrl(ulPath.value, false);
 });
@@ -2415,16 +2421,6 @@ onBeforeUnmount(() => {
              最右边的这几个开关会滑出可视区（实测 1585px 宽时「全屏」已看不见）。 -->
         <div class="adv-row">
           <span class="et-label">{{ t('视图') }}</span>
-          <button class="et-btn" data-guide="edit-underlay-btn-adv" :class="{ active: ulOpen }"
-                  :title="t('把原谱页图半透明垫在网格下，对着谱面改音符')" @click="ulOpen = !ulOpen">
-            <Icon name="wallpaper" :size="14" />{{ t('谱面底图') }}
-          </button>
-          <button class="et-btn" :class="{ active: !inspOpen }" :title="t('收起右侧检查器，把宽度让给音符视图')" @click="inspOpen = !inspOpen">
-            <Icon name="panel" :size="14" />{{ inspOpen ? t('收起检查器') : t('检查器') }}
-          </button>
-          <button class="et-btn" :class="{ active: fullscreenOn }" :title="t('全屏编辑，最大化钢琴卷帘')" @click="toggleFullscreen">
-            <Icon name="expand" :size="14" />{{ t('全屏') }}
-          </button>
           <button class="et-btn" data-guide="edit-follow" :class="{ active: followPlay }"
                   :title="t('播放时自动滚动视图，让播放头保持可见')" @click="toggleFollowPlay">
             <Icon name="target" :size="14" />{{ t('跟随') }}
@@ -3267,7 +3263,8 @@ onBeforeUnmount(() => {
    被外层裁掉；width:100% + margin:0 才是工作台页该有的行为（要铺满，不居中）。 */
 .edit-view { display: flex; flex-direction: column; height: 100%; overflow: hidden; min-width: 0; width: 100%; max-width: none; margin: 0; padding: 12px var(--page-pad-x) 0; }
 .ed-toolbar-wrap { position: relative; flex: none; }
-.ed-toolbar { padding: 5px 10px; display: flex; align-items: center; gap: 3px; flex-wrap: nowrap; overflow-x: auto; flex: none; margin-bottom: 8px; border-radius: var(--r-md); }
+.ed-toolbar { padding: 5px 10px; display: flex; align-items: center; gap: 3px; flex-wrap: wrap; overflow-x: visible; row-gap: 3px; flex: none; margin-bottom: 8px; border-radius: var(--r-md); }
+.ed-toolbar::-webkit-scrollbar { display: none; }
 .ed-view-switch { background: var(--surface-soft); border-radius: var(--r-md); padding: 2px; gap: 2px; }
 /* 分段控件内按钮压到 22px，加上 2px 内边距后整组正好 26px，与同排按钮同高同基线 */
 .ed-view-switch .et-btn { height: 22px; min-height: 22px; padding: 0 10px; }

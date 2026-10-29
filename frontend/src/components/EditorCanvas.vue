@@ -62,6 +62,20 @@ const props = defineProps({
 });
 const emit = defineEmits(['select', 'modify', 'zoom', 'ctxmenu', 'hover', 'step']);
 
+// 音符试听：点击/画音符即响一声，不再只能整段播放。
+// 用 synth.preview 而不是播放器，避免抢走当前走带；连续点击有 45ms 节流。
+let _lastAudition = 0;
+function auditionNote(midi, vel) {
+  const now = performance.now();
+  if (now - _lastAudition < 45) return;
+  _lastAudition = now;
+  try {
+    const tr = curTrack();
+    const { synth } = ensureAudio();
+    synth.preview(clamp(Math.round(midi), 0, 127), tr && tr.program != null ? tr.program : 0, clamp(Math.round(vel || 90), 1, 127), 0.32);
+  } catch (e) {}
+}
+
 const wrap = ref(null);
 const canvas = ref(null);
 const ccCanvas = ref(null);
@@ -268,11 +282,21 @@ function afterEdit() {
       s.bars = Math.max(1, Math.ceil(s.totalTicks / _barLen));
     }
   }
-  // 刷新播放器 + UI
+  // 刷新播放器 + UI。
+  // ★ 编辑一个音不应该把走带和循环区间重置：先在旧播放器上取回位置/循环/播放态，
+  //   load 之后恢复。此前无条件 load + setLoop(整曲)，在循环里改音会被弹回曲首。
   const { player } = ensureAudio();
+  const wasPlaying = !!player.playing;
+  const keepTick = player.song ? (wasPlaying ? player.currentTick() : player.pausedTick) : 0;
+  const keepLoop = !!player.loop;
+  const keepLoopStart = player.loopStart || 0;
+  const keepLoopEnd = player.loopEnd || 0;
   player.load(s);
   player.setScale(state.tempo);
-  if (state.loop) player.setLoop(true, 0, s.totalTicks);
+  if (keepLoop && keepLoopEnd > keepLoopStart) player.setLoop(true, keepLoopStart, keepLoopEnd);
+  else if (state.loop) player.setLoop(true, 0, s.totalTicks);
+  if (keepTick > 0 && keepTick <= s.totalTicks) player.seekTick(keepTick);
+  if (wasPlaying) { try { player.play(); } catch (e) {} }
   state.totalSec = s.totalSec;
   state.tracks = s.tracks.map((tr, i) => {
     const prev = state.tracks[i] || {};
@@ -1186,6 +1210,7 @@ function scoreDown(e, x, y, multi) {
     lay.tr.notes.push(note);
     sortNotes(lay.tr.notes);
     selection.clear(); selection.add(note);
+    auditionNote(note.midi, note.vel);
     dragState.value = { type: 'score-move', notes: [note], startX: x, startY: y,
                         orig: [{ n: note, midi: note.midi, start: note.start, end: note.end }], moved: false };
     afterEdit(); emit('modify'); emit('select'); draw();
@@ -1268,6 +1293,7 @@ function onDown(e) {
     const note = { start: st, end: st + len, midi: clamp(scaleSnapPitch(midi, st), 0, 127), vel: velFromPointer(e) };
     tr.notes.push(note);
     selection.clear(); selection.add(note);
+    auditionNote(note.midi, note.vel);
     stepCursor.value = st + len;
     emit('step', stepCursor.value);
     afterEdit();
@@ -1292,6 +1318,7 @@ function onDown(e) {
   } else {
     const n = hitTest(x, y);
     if (n) {
+      auditionNote(n.midi, n.vel);
       if (!multi && !selection.has(n)) { selection.clear(); selection.add(n); }
       else if (multi && selection.has(n)) selection.delete(n);
       else if (multi) selection.add(n);
@@ -1308,7 +1335,15 @@ function onDown(e) {
         let type = 'move';
         if (Math.abs(nx2 - x) < 7) type = 'resize';
         else if (Math.abs(x - nx) < 7) type = 'resize-left';
-        dragState.value = { type, notes: [n], startX: x, startY: y, orig: [{ start: n.start, end: n.end, midi: n.midi }] };
+        // 多选拖动：命中音符在选区里时拖整个选区；裁剪仍只针对单音
+        const targets = type === 'move' && selection.has(n) && selection.size > 1 ? [...selection] : [n];
+        dragState.value = {
+          type,
+          notes: targets,
+          startX: x,
+          startY: y,
+          orig: targets.map((m) => ({ start: m.start, end: m.end, midi: m.midi })),
+        };
       }
     } else {
       if (!multi) selection.clear();
@@ -1343,7 +1378,12 @@ function onMove(e) {
     draw();
     return;
   } else if (d.type === 'move') {
-    const dTick = (x - d.startX) / pxPerTick.value;
+    let dTick = (x - d.startX) / pxPerTick.value;
+    // 拖动落点吸附：按当前拍比例取整，保持多选之间的相对间隔；Ctrl 拖拽可自由移动
+    if (!e.ctrlKey && props.snapRatio) {
+      const st = song() && song().tpb ? song().tpb * props.snapRatio : 0;
+      if (st > 0) dTick = Math.round(dTick / st) * st;
+    }
     // M3 修饰键：Shift+拖拽 = 锁定音高，只改时间位置
     const dMidi = e.shiftKey ? 0 : (d.startY - y) / rowH.value;
     const orig = d.orig || [];

@@ -55,6 +55,7 @@ onMounted(() => { void hkLoad(); window.addEventListener('keydown', hkOnKeydown,
 const TABS = computed(() => [
   { id: 'sound', label: t('音效'), icon: 'volume' },
   { id: 'gpu', label: 'GPU', icon: 'zap' },
+  { id: 'appearance', label: t('外观'), icon: 'palette' },
   { id: 'feature', label: t('功能'), icon: 'folder' },
   { id: 'keys', label: t('快捷键'), icon: 'kbd' },
   { id: 'cloud', label: t('云同步'), icon: 'cloud' },
@@ -1256,105 +1257,10 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
 
       <div class="settings-body">
         <div v-if="tab === 'sound'"><SoundSettings /></div>
-        <!-- ============ 外观 ============ -->
-        <div v-if="tab === 'appearance'">
-          <div class="field-row" data-setting="theme">
-            <div>
-              <div class="fr-label">{{ t('界面模式') }}</div>
-              <div class="fr-hint">{{ t('浅色明亮 · 深色护眼 · 跟随系统按系统偏好自动切换') }}</div>
-            </div>
-            <div class="fr-ctl">
-              <div class="radio-pill">
-                <span :class="{ on: form.mode === 'light' }" @click="form.mode = 'light'; onModeChange()">{{ t('浅色') }}</span>
-                <span :class="{ on: form.mode === 'dark' }" @click="form.mode = 'dark'; onModeChange()">{{ t('深色') }}</span>
-          <span :class="{ on: form.mode === 'auto' }" :title="t('跟随系统的浅色/深色偏好，系统变了会自动跟上')"
-                @click="form.mode = 'auto'; onModeChange()">{{ t('跟随系统') }}</span>
-              </div>
-            </div>
-          </div>
-          <div class="field-row">
-            <div>
-              <div class="fr-label">{{ t('界面主题') }}</div>
-              <div class="fr-hint">{{ isDarkFixed ? t('该主题固定深色基底，不受界面模式影响') : t('从主题库选择，或在此切换') }}</div>
-            </div>
-            <div class="fr-ctl">
-              <select v-model="form.theme" class="ov-input" style="width:150px" @change="onThemeChange">
-                <option v-for="th in themeOpts" :key="th.id" :value="th.id">{{ t(th.name) }}</option>
-              </select>
-              <button class="btn sm" @click="state.ui.themesOpen = true">🎨 {{ t('主题库') }}</button>
-            </div>
-          </div>
-          <div class="field-row">
-            <div>
-              <div class="fr-label">{{ t('动态壁纸') }}</div>
-              <div class="fr-hint">{{ t('从壁纸库下载视频作为背景，或导入本地视频') }}</div>
-            </div>
-            <div class="fr-ctl">
-              <button class="btn sm" @click="state.ui.wallpaperOpen = true">🖼 {{ t('壁纸库 / 导入') }}</button>
-            </div>
-          </div>
-          <div class="field-row">
-            <div>
-              <div class="fr-label">{{ t('强调色') }}</div>
-              <div class="fr-hint">{{ t('自定义主题的主色调') }}</div>
-            </div>
-            <div class="fr-ctl">
-              <input type="color" class="ov-input" v-model="form.accent" @input="onAccentInput" />
-              <button class="btn sm" @click="resetAccent">{{ t('还原默认') }}</button>
-            </div>
-          </div>
-          <div class="field-row">
-            <div>
-              <div class="fr-label">{{ t('界面字号') }}</div>
-              <div class="fr-hint">{{ t('标准 / 大 / 超大') }}</div>
-            </div>
-            <div class="fr-ctl">
-              <div class="radio-pill">
-                <span :class="{ on: form.font_size === 'standard' }" @click="form.font_size = 'standard'; onFontSize()">{{ t('标准') }}</span>
-                <span :class="{ on: form.font_size === 'large' }" @click="form.font_size = 'large'; onFontSize()">{{ t('大') }}</span>
-                <span :class="{ on: form.font_size === 'xlarge' }" @click="form.font_size = 'xlarge'; onFontSize()">{{ t('超大') }}</span>
-              </div>
-            </div>
-          </div>
-          <div class="field-row">
-            <div>
-              <div class="fr-label">{{ t('界面密度') }}</div>
-              <div class="fr-hint">{{ t('控件与间距紧凑度：紧凑 / 舒适 / 宽松') }}</div>
-            </div>
-            <div class="fr-ctl">
-              <div class="radio-pill">
-                <span :class="{ on: form.density === 'compact' }" @click="form.density = 'compact'; onDensity()">{{ t('紧凑') }}</span>
-                <span :class="{ on: form.density === 'comfortable' }" @click="form.density = 'comfortable'; onDensity()">{{ t('舒适') }}</span>
-                <span :class="{ on: form.density === 'relaxed' }" :title="t('卡片与列表留白更多，长时间看谱不累')"
-                      @click="form.density = 'relaxed'; onDensity()">{{ t('宽松') }}</span>
-              </div>
-            </div>
-          </div>
-          <div class="field-row" data-setting="ui_scale">
-            <div>
-              <div class="fr-label">{{ t('界面缩放') }}</div>
-              <div class="fr-hint">{{ t('全局放大或缩小整个界面（0.9 ~ 1.3）：连画布一起缩放，不会糊也不会重叠') }}</div>
-            </div>
-            <div class="fr-ctl">
-              <NumSlider v-model="form.ui_scale" :min="UI_SCALE_MIN" :max="UI_SCALE_MAX" :step="UI_SCALE_STEP" range-class="ov-range" :aria-label="t('界面缩放')" :input-width="68" />
-              <span class="ui-scale-val">{{ Math.round(form.ui_scale * 100) }}%</span>
-              <button class="btn sm" :disabled="Math.abs(form.ui_scale - 1) < 0.001" @click="resetUiScale">{{ t('还原 100%') }}</button>
-            </div>
-          </div>
-          <div class="field-row">
-            <div>
-              <div class="fr-label">{{ t('界面语言') }}</div>
-              <div class="fr-hint">Language</div>
-            </div>
-            <div class="fr-ctl">
-              <div class="radio-pill">
-                <span :class="{ on: form.lang === 'zh' }" @click="form.lang = 'zh'; onLang()">{{ t('简体中文') }}</span>
-                <span :class="{ on: form.lang === 'zh-Hant' }" @click="form.lang = 'zh-Hant'; onLang()">{{ t('繁體中文') }}</span>
-                <span :class="{ on: form.lang === 'en' }" @click="form.lang = 'en'; onLang()">English</span>
-                <span :class="{ on: form.lang === 'ja' }" @click="form.lang = 'ja'; onLang()">日本語</span>
-              </div>
-            </div>
-          </div>
+        <!-- ============ 外观（唯一入口转发） ============ -->
+        <div v-else-if="tab === 'appearance'" class="appearance-redirect">
+          <p class="ov-note">{{ t('主题、壁纸、界面材质、字号、密度、缩放与语言已统一到外观面板，设置里不再保留第二套控件。') }}</p>
+          <button class="btn primary" @click="openAppearancePanel">{{ t('打开外观面板') }}</button>
         </div>
 
         <!-- ============ GPU 加速 ============ -->
@@ -1946,6 +1852,9 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
   </div>
 </template>
 
+<style scoped>
+.appearance-redirect { display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-3); padding: var(--sp-3) 0; }
+</style>
 <style scoped>
 /* ---- 操作系统级全局热键（用户自己录制） ---- */
 .hk-sec { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }

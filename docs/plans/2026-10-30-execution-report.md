@@ -4,6 +4,12 @@
 
 两套方案已按确认决策实现，产物已生成并验证到本机可执行层。**未上传 GitHub Release，等待你审查后再发布。**
 
+## FuFumidi 6.3.1（当前安装版）
+
+- 编辑手感 P0：音符试听、多选拖动/吸附、编辑后保持走带与循环、逻辑编辑器/宏撤销修复。
+- 界面缩放统一为单一来源；设置中不可达外观旧段清理并改为外观转发页；工具条换行、去掉重复视图开关。
+- 版本 6.3.1，已部署本机安装版 `E:/Midi/FuFumidi/FuFumidi.exe`；**未构建安装包**（按用户要求先检查）。
+
 ## FuFumidi 6.3.0
 
 - 版本四源：根/frontend package、changelog、version.js、licenses 均为 6.3.0。
@@ -22,9 +28,10 @@
 
 - 版本 1.1.0 / versionCode 13；Gradle wrapper 固定 8.9；JDK17 + SDK36 构建。
 - 材质六档（原生/玻璃/亚克力/云母/磨砂/天鹅绒），默认玻璃 + 极光；7 个壁纸项含纯色。
-- 图标：由 FuFumidi logo 的图形/配色重绘的抽象版；legacy 5 档、圆形 5 档、自适应前景、Android 13 单色层。
+- 图标：直接使用 FuFumidi 当前立绘（mascot.png）；legacy 5 档、圆形 5 档、自适应前景、Android 13 单色层。
+- 音色：精简介绍文案；新增 **Allvoice（517 预设 / 480MB）** 下载。
 - 音符瀑布视觉升级：立体高光、投影、发声键纵向光柱、落点扩散环、击键涟漪、深靛星空舞台、键盘高亮、柔和落点光。
-- 设置入口移到顶栏齿轮；新增 BackHandler；MIDI 解析移到 Default 线程；音色库与 FuFumidi 同源。
+- 设置入口移到顶栏齿轮；新增 BackHandler；MIDI 解析移到 Default 线程；音频焦点暂停/恢复；音色库与 FuFumidi 同源。
 - 构建：assembleRelease + bundleRelease 成功；APK 39MB，AAB 38MB。
 - 签名：与现有证书一致
   - DN: CN=LiZeSen, OU=Teyvat Fontaine Music Co.,Ltd, ...
@@ -34,7 +41,7 @@
   - E:/Midi/安装包/FuMiVoice/FuMiVoice-1.1.0-release.apk
   - E:/Midi/安装包/FuMiVoice/FuMiVoice-1.1.0-release.aab
   - RELEASE-NOTES-1.1.0.md
-- 源码：feat/1.1.0-appearance-waterfall，提交 3d7d045（已推送）。
+- 源码：feat/1.1.0-appearance-waterfall，提交 ad0d623（已推送）。
 
 ## 已知验证边界
 
