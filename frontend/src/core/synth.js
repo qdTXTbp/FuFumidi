@@ -386,6 +386,9 @@ export class Synth {
       this.master.connect(on ? this.fxIn : this.analyser);
     };
     this.trackGains = []; this.vol = []; this.mute = []; this.solo = [];
+    // 内置合成器的通道级 CC 状态（仅 CC7/CC11 在当前实现里可听；SF2 路径仍走完整 CC）
+    this._internalCc7 = Array(16).fill(1);
+    this._internalCc11 = Array(16).fill(1);
     this.panners = []; this.pan = [];
     // 通道混音状态（音色库/SF2 播放用；说明见 setChannelVol 一段的注释）
     this.chVol = {}; this.chMute = {}; this.chSolo = {}; this.chPan = {};
