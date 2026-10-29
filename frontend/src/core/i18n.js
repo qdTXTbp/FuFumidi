@@ -359,6 +359,7 @@ export const I18N_MAP = {
   '设置会立即应用并记住。': "Settings apply and are remembered immediately.",
   '同一时间只使用一个整窗背景，切换来源会替换旧背景。': "Only one app background is active at a time; switching sources replaces it.",
   '这里只控制音符瀑布背景，不影响整窗壁纸。': "This only controls the note-waterfall background, not the app wallpaper.",
+  'Wallpaper Engine 背景加载失败': "Failed to load Wallpaper Engine background",
   '收起完成': "Hide finished",
   '当前版本不支持 Wallpaper Engine 接入': "Wallpaper Engine integration is not available",
   '未检测到 Wallpaper Engine': "Wallpaper Engine not detected",

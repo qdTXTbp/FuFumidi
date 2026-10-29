@@ -4,17 +4,20 @@ import { computed, onMounted, ref } from 'vue';
 import Icon from './Icon.vue';
 import { useAppStore } from '../stores/app';
 import { useSettingsStore } from '../stores/settings';
+import { useVizBgStore } from '../stores/vizbg';
 import { t } from '../core/i18n.js';
 
 const app = useAppStore();
 const settingsStore = useSettingsStore();
+const vizBg = useVizBgStore();
+const props = defineProps({ target: { type: String, default: 'app' } });
 const bridge = window.fuBridge;
 const busy = ref(false);
 const detected = ref({ installed: false, installDir: '', libraries: [] });
 const items = ref([]);
 const error = ref('');
 const kind = ref('all');
-const appliedId = computed(() => String((settingsStore.settings && settingsStore.settings.wallpaper_we_id) || ''));
+const appliedId = computed(() => props.target === 'viz' ? String((vizBg.bg && vizBg.bg.weId) || '') : String((settingsStore.settings && settingsStore.settings.wallpaper_we_id) || ''));
 const shown = computed(() => items.value.filter((x) => kind.value === 'all' || x.type === kind.value));
 
 async function load(force) {
@@ -29,6 +32,7 @@ async function load(force) {
   finally { busy.value = false; }
 }
 async function apply(it) {
+  if (props.target === 'viz') { await vizBg.setWe(it.id, it.title); return; }
   const patch = {
     wallpaper_provider: 'wallpaper-engine',
     wallpaper_we_id: it.id,

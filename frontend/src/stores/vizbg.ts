@@ -24,7 +24,7 @@ export const BG_KEY = 'fufumidi.viz.bg';
 export const BG_VER = 2;
 /* ★ 2026-10-17 加了 wallPath（动态壁纸）：它是**纯新增字段**，老记录没有它就落到默认 ''，
    因此**不动 BG_VER** —— 一动 BG_VER，老用户存的图片/纯色/模糊/暗化会被整条丢掉重来。 */
-export const BG_DEFAULTS = { v: BG_VER, mode: 'transparent', color: '#0b1020', blur: 12, dim: 0.35, path: '', wallPath: '', fx: { ...FX_DEFAULTS } };   // ui-tokens-allow: color 是持久化的用户默认值，不是样式
+export const BG_DEFAULTS = { v: BG_VER, mode: 'transparent', color: '#0b1020', blur: 12, dim: 0.35, path: '', wallPath: '', weId: '', weTitle: '', weUrl: '', fx: { ...FX_DEFAULTS } };   // ui-tokens-allow: color 是持久化的用户默认值，不是样式
 
 /* 瀑布流视效开关（2026-10 升级）。顺序即界面顺序；每项都能单独关掉回到旧观感。 */
 /* 用户自定义主题（D8：命名交给用户）—— 与内置主题分开存，卸载/升级不丢 */
@@ -55,7 +55,7 @@ function read() {
     if (s && typeof s === 'object' && s.v === BG_VER) {
       // fx 要**逐键**合并：整体覆盖会把后来新增的档位丢成 undefined（viz.js 那边再补默认，
       // 于是界面显示"开"、实际却是默认值，用户改了不生效）
-      return { ...BG_DEFAULTS, ...s, v: BG_VER, path: s.path || '', wallPath: s.wallPath || '', fx: { ...FX_DEFAULTS, ...(s.fx || {}) } };
+      return { ...BG_DEFAULTS, ...s, v: BG_VER, path: s.path || '', wallPath: s.wallPath || '', weUrl: '', fx: { ...FX_DEFAULTS, ...(s.fx || {}) } };
     }
   } catch (e) { /* 存储坏了就用默认值 */ }
   return { ...BG_DEFAULTS };
@@ -105,6 +105,7 @@ export const useVizBgStore = defineStore('vizbg', () => {
   const wallReady = ref(false);
   const wallActive = ref(false);
   const wallName = ref('');
+  const weName = ref('');
   let wallVideo: HTMLVideoElement | null = null;
   let wallTimer = 0, wallLast = -1, wallStall = 0;
 
@@ -115,14 +116,34 @@ export const useVizBgStore = defineStore('vizbg', () => {
   /** 交给绘制函数的背景参数（含已解码的图片 / 已就绪的视频帧源） */
   function drawOpts() {
     return {
-      mode: bg.mode, color: bg.color, blur: bg.blur, dim: bg.dim, image,
+      // mode is normalized below: WE scenes are drawn by the iframe, canvas stays transparent
       // ★ 视频**逐帧都在变**：core/viz.js 的离屏背景位图缓存对它是失效的（那边按 mode 分流）
+      mode: bg.mode === 'we' ? 'transparent' : bg.mode,
       video: (bg.mode === 'wallpaper' && videoReady()) ? wallVideo : null,
     };
   }
   function imageEl() { return image; }
 
   /** 造/换动态壁纸解码器：一个 muted + loop 的 <video>，只作为"当前帧"的来源 */
+  async function refreshWe(): Promise<boolean> {
+    if (!bg.weId) { bg.weUrl = ''; return false; }
+    try {
+      const r = await (window as any).fuBridge?.wallpaperEngine?.view?.(bg.weId);
+      if (r && r.ok && r.url) { bg.weUrl = String(r.url); weName.value = String(bg.weTitle || bg.weId); return true; }
+    } catch (e) { /* fall through */ }
+    bg.weUrl = '';
+    return false;
+  }
+  async function setWe(id: string, title?: string): Promise<boolean> {
+    const sid = String(id || '').trim();
+    if (!sid) return false;
+    bg.weId = sid; bg.weTitle = String(title || '');
+    const ok = await refreshWe();
+    if (!ok) { app.toast(t('Wallpaper Engine 背景加载失败'), 'error'); return false; }
+    bg.mode = 'we'; save();
+    app.toast(t('已应用到音符瀑布背景'), 'ok');
+    return true;
+  }
   async function ensureWall(): Promise<boolean> {
     const src = wallFileUrl(bg.wallPath);
     if (!src || typeof document === 'undefined') { wallReady.value = false; return false; }
@@ -371,5 +392,6 @@ export const useVizBgStore = defineStore('vizbg', () => {
            ssaa, setSsaa,
            save, drawOpts, fxOpts, setFx, setFxAny, resetFx, imageEl,
            wallReady, wallActive, wallName, setWall, setImagePath, clearWall, setWallActive, wallFileUrl,
+           weName, setWe, refreshWe,
            setMode, setColor, setBlur, setDim, ensureImage, pickImage, init };
 });

@@ -702,11 +702,12 @@ onBeforeUnmount(() => {
               </div>
             </div>
           </Teleport>
-        <div class="vc-body" :class="{ 'bd-canvas': bg.mode === 'transparent' }">
+        <div class="vc-body" :class="{ 'bd-canvas': bg.mode === 'transparent' || bg.mode === 'we' }">
+          <iframe v-if="bg.mode === 'we' && bg.weUrl" class="viz-we-bg" :src="bg.weUrl" allow="autoplay" aria-hidden="true"></iframe>
           <!-- ★ 画布自己有一层 CSS 底色（.vc-body canvas 的 background）—— 透明档只 clearRect
                是没用的，元素底色照样透不出来。所以透明档必须把画布元素的底色也去掉，
                并由容器铺 --canvas（否则透出的是卡片那层半透明白，和沉浸态不一致）。 -->
-          <canvas id="vizRoll" :class="{ 'cv-transparent': bg.mode === 'transparent' }"></canvas>
+          <canvas id="vizRoll" :class="{ 'cv-transparent': bg.mode === 'transparent' || bg.mode === 'we' }"></canvas>
           <div v-if="immersive" class="viz-hud" :class="{ 'hud-hidden': !hudOn }">
             <button class="hud-btn" :title="app.playing ? t('暂停') : t('播放')" @click="app.togglePlay()">
               <Icon :name="app.playing ? 'pause' : 'play'" :size="18" />
@@ -784,6 +785,8 @@ onBeforeUnmount(() => {
   border: 0; border-radius: 0; background: transparent; box-shadow: none; padding: 0;
 }
 .vc-body canvas.cv-transparent { background: transparent; }
+.viz-we-bg { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; pointer-events: none; z-index: 0; }
+.vc-body canvas { position: relative; z-index: 1; }
 .vc-body.bd-canvas { background: var(--canvas); }
 .viz-page.immersive .vc-body canvas { border: 0; border-radius: 0; }
 /* ★ 高度链必须显式到底：.vc-body 靠 flex:1 撑，而 .viz-col/.viz-hero 若没有 100%，

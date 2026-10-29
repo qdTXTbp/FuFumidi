@@ -81,7 +81,7 @@ async function applyLocal(path, kind) {
     app.toast(t('已应用到音符瀑布背景'), 'ok');
     return;
   }
-  const patch = { custom_wallpaper: path, wallpaper_enabled: true, wallpaper_kind: kind };
+  const patch = { custom_wallpaper: path, wallpaper_enabled: true, wallpaper_kind: kind, wallpaper_provider: 'native' };
   settingsStore.setLocal(patch);
   try { await settingsStore.save(patch); } catch (e) {}
   app.toast(t('壁纸已应用'), 'ok');

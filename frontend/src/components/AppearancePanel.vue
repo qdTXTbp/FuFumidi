@@ -32,7 +32,7 @@ const cfg = computed(() => settingsStore.settings || {});
 const hasWallpaper = computed(() => !!(cfg.value.wallpaper_enabled && cfg.value.custom_wallpaper));
 const isVizTarget = computed(() => wpApplyTarget.value === 'viz');
 const vizActive = computed(() => vbg.mode !== 'theme');
-watch(wpApplyTarget, (v) => { if (v === 'viz' && wpSource.value === 'we') wpSource.value = 'library'; });
+
 const isImage = computed(() => cfg.value.wallpaper_kind === 'image' || /\.(jpg|jpeg|png|webp|avif|gif)$/i.test(String(cfg.value.custom_wallpaper || '')));
 const previewUrl = computed(() => fileUrl(cfg.value.custom_wallpaper));
 const wpName = computed(() => (cfg.value.custom_wallpaper || '').replace(/^.*[\\/]/, '') || t('未选择壁纸'));
@@ -86,7 +86,7 @@ async function pickImage() {
   try {
     const p = await bridge.pickFile({ filters: [{ name: t('图片'), extensions: ['jpg', 'jpeg', 'png', 'webp', 'avif', 'gif'] }] });
     if (!p) return;
-    await saveWp({ custom_wallpaper: p, wallpaper_enabled: true, wallpaper_kind: 'image' });
+    await saveWp({ custom_wallpaper: p, wallpaper_enabled: true, wallpaper_kind: 'image', wallpaper_provider: 'native' });
     app.toast(t('已应用本地图片壁纸'), 'ok');
   } catch (e) { app.toast(t('应用失败：') + String((e && e.message) || e), 'error'); }
 }
@@ -146,7 +146,7 @@ onMounted(async () => {
           <div class="ap-wp-sources">
             <button :class="{ on: wpSource === 'local' }" @click="wpSource = 'local'">{{ t('本地') }}</button>
             <button :class="{ on: wpSource === 'library' }" @click="wpSource = 'library'">{{ t('壁纸库') }}</button>
-            <button v-if="!isVizTarget" :class="{ on: wpSource === 'we' }" @click="wpSource = 'we'">Wallpaper Engine</button>
+            <button :class="{ on: wpSource === 'we' }" @click="wpSource = 'we'">Wallpaper Engine</button>
           </div>
 
           <template v-if="wpSource === 'local'">
@@ -186,7 +186,7 @@ onMounted(async () => {
           </template>
 
           <template v-else>
-            <WallpaperEnginePanel />
+            <WallpaperEnginePanel :target="wpApplyTarget" />
           </template>
 
           <p class="ap-note">{{ isVizTarget ? t('这里只控制音符瀑布背景，不影响整窗壁纸。') : t('同一时间只使用一个整窗背景，切换来源会替换旧背景。') }}</p>

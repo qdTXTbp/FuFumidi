@@ -30,8 +30,8 @@ function closeWallpaperGallery() { state.ui.wallpaperOpen = false; state.ui.wall
 async function setWallpaperPath(path) {
   if (wpTarget() === 'viz') { await vizBg.setWall(path); return; }
   // 先乐观更新本地设置，立即触发 App 动态壁纸加载，再持久化
-  settingsStore.setLocal({ custom_wallpaper: path, wallpaper_enabled: true });
-  try { await settingsStore.save({ custom_wallpaper: path, wallpaper_enabled: true }); } catch (e) {}
+  settingsStore.setLocal({ custom_wallpaper: path, wallpaper_enabled: true, wallpaper_provider: 'native' });
+  try { await settingsStore.save({ custom_wallpaper: path, wallpaper_enabled: true, wallpaper_provider: 'native' }); } catch (e) {}
 }
 
 async function load() {
