@@ -7,6 +7,7 @@ import Icon from '../components/Icon.vue';
 import { useAppStore } from '../stores/app';
 import { t } from '../core/i18n.js';
 import { themeColor } from '../core/palette.js';
+import { ensureAudio } from '../audio.js';
 import { timelineOfSong, iterBars, secOfTick, tickOfSec } from '../core/timeline.js';
 // P1-13 B1：手势状态机（拖动/拖边/框选/平移/点击的判定与阈值统一走 core/gesture.js）
 import { createGestureState, beginGesture, updateGesture, endGesture, INTENTS, isMutatingIntent } from '../core/gesture.js';
@@ -118,7 +119,19 @@ watch(state, () => {
   draw();
   clearTimeout(persistTimer);
   persistTimer = setTimeout(() => {
-    try { writeArrangeToSong(song.value, state.value); } catch (e) {}
+    try {
+      writeArrangeToSong(song.value, state.value);
+      // clip 是播放真源：编排改动后重排播放事件，移动/裁剪/静音立即能听到。
+      const { player } = ensureAudio();
+      const s = song.value;
+      if (s) {
+        const wasPlaying = !!player.playing;
+        const tick = player.song ? (wasPlaying ? player.currentTick() : player.pausedTick) : 0;
+        player.load(s);
+        if (tick > 0) player.seekTick(Math.min(tick, s.totalTicks || tick));
+        if (wasPlaying) player.play();
+      }
+    } catch (e) {}
   }, 250);
 }, { deep: true });
 

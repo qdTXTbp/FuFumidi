@@ -96,6 +96,46 @@ export class Player {
         plans.set(tr, articulationPlan(tr, this.song.ksMap || {}, this.song.exprMap || {}));
       }
     }
+    // P1-1c：编排页的 clip 是播放的真源。此前 arrange 只被导出读取，
+    // 播放器永远读 song.tracks，导致移动/裁剪/静音片段完全不出声。
+    const arrange = this.song && this.song.arrange;
+    const clipList = arrange && Array.isArray(arrange.clips) ? arrange.clips : [];
+    const arrangeTracks = arrange && Array.isArray(arrange.tracks) ? arrange.tracks : [];
+    if (clipList.length && arrangeTracks.length) {
+      const flags = new Map(arrangeTracks.map((t) => [String(t.id), t]));
+      const anySolo = arrangeTracks.some((t) => t.solo);
+      const trackIndexById = (id) => {
+        const m = /^t(\d+)$/.exec(String(id || ''));
+        if (m) return Number(m[1]);
+        const byName = (this.song.tracks || []).findIndex((tr) => tr.name === id);
+        return byName >= 0 ? byName : -1;
+      };
+      for (const c of clipList) {
+        const flag = flags.get(String(c.trackId));
+        if (flag && (flag.mute || (anySolo && !flag.solo))) continue;
+        const srcIdx = trackIndexById(c.trackId);
+        const tr = (this.song.tracks || [])[srcIdx];
+        if (!tr || !Array.isArray(tr.notes)) continue;
+        const clipFrom = Math.max(0, Number(c.offsetTick) || 0);
+        const clipLen = Math.max(1, (Number(c.endTick) || 0) - (Number(c.startTick) || 0));
+        const clipTo = clipFrom + clipLen;
+        const place = Math.max(0, Number(c.startTick) || 0);
+        for (const n of tr.notes) {
+          if (n.muted || n.start < clipFrom || n.start >= clipTo) continue;
+          const start = place + (n.start - clipFrom);
+          const end = start + Math.max(1, n.end - n.start);
+          const ch = n.ch != null ? n.ch : (tr.ch != null ? tr.ch : 0);
+          const st0 = st ? st(ch, n.start) : null;
+          arr.push({
+            start, end, midi: n.midi, vel: n.vel,
+            trk: tr.index, ch,
+            prog: st0 && st0.program != null ? st0.program : tr.program,
+            bank: st0 ? st0.bank : 0,
+            isDrum: ch === 9,
+          });
+        }
+      }
+    } else {
     for (const tr of this.song.tracks) for (const n of tr.notes) {
       // 编辑器里静音的音符不参与发声（导出 MIDI 仍保留，避免编辑动作丢音符）
       if (n.muted) continue;
@@ -119,6 +159,8 @@ export class Player {
         bank: s ? s.bank : 0,
         isDrum: ch === 9,
       });
+    }
+
     }
     arr.sort((a, b) => a.start - b.start || a.midi - b.midi);
     this.events = arr;

@@ -508,6 +508,10 @@ function onKey(e) {
   }
   // 忽略输入框内的快捷键（方向键在输入框里要能移光标，见 isEditableTarget 的说明）
   if (isEditableTarget(e.target)) return;
+  // 编辑器/调教画布内部：数字键 1..9 是时值/力度快捷键、N/P 是编辑动作，
+  // 不能再被全局「切歌单 / 上一首下一首」抢走。
+  const inEditorSurface = !!(e.target && e.target.closest && e.target.closest('.editor-canvas, .piano-roll, .ed-toolbar, .sing-editor, .pianoroll, .utau-editor'));
+  if (inEditorSurface && (/^[1-9]$/.test(e.key) || /^[nNpP]$/.test(e.key))) return;
   // 系统级全局热键触发时，主进程会顺手发一个同名的合成按键事件；
   // 这里放行，避免同一次按键被处理两遍（播放/暂停、上一首/下一首会跳两次）。
   if (e.__fromGlobalHotkey) return;
