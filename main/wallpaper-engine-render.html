@@ -1,0 +1,24 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000}#wp{position:fixed;inset:0}#fallback{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;display:none}video{position:fixed;inset:0;width:100%;height:100%;object-fit:cover}</style></head><body><div id="wp"></div><img id="fallback" alt=""><video id="vid" playsinline muted loop style="display:none"></video><script src="engine.js"></script><script>
+(function(){
+  var q=new URLSearchParams(location.search);
+  var type=q.get('type')||'scene', id=q.get('id')||'', fit=q.get('fit')||'cover', fps=Number(q.get('fps'))||30;
+  var base='files/'+encodeURIComponent(id)+'/';
+  var fb=document.getElementById('fallback'), vid=document.getElementById('vid'), host=document.getElementById('wp');
+  function report(kind,msg){try{parent.postMessage({type:'fufumidi-wallpaper',kind:kind,msg:msg||''},'*')}catch(e){}}
+  window.addEventListener('message',function(e){try{var d=e.data||{};if(d.type==='fufumidi-wallpaper-ctl'){if(d.action==='pause'){if(window.__inst)window.__inst.pause();vid.pause();}else if(d.action==='resume'){if(window.__inst)window.__inst.resume();if(type==='video')vid.play().catch(function(){});}}}catch(err){}});
+  document.addEventListener('visibilitychange',function(){try{if(document.hidden){if(window.__inst)window.__inst.pause();vid.pause();}else if(window.__inst)window.__inst.resume();}catch(e){}});
+  if(type==='video'){vid.style.display='block';vid.src=base+(q.get('file')||'');vid.play().catch(function(){});report('ready');return;}
+  if(!window.WebWallGL){fb.style.display='block';report('error','WebWallGL load failed');return;}
+  var inst=window.__inst=window.WebWallGL.createScene(host,{fit:fit,fps:fps,volume:0,renderDpr:1});
+  inst.on('ready',function(){try{inst.resume();}catch(e){}report('ready');});
+  inst.on('error',function(err){fb.style.display='block';report('error',String(err&&err.message||err));});
+  var src;
+  if(type==='web'){
+    var entry=new URL(base+(q.get('file')||'index.html'),location.href).href;
+    var dir=entry.replace(/[?#].*$/,'').replace(/\/[^/]*$/,'');
+    src={key:dir,project:function(){return Promise.resolve({type:'web'});},webEntry:function(){return Promise.resolve({url:entry});},scenePkg:function(){return Promise.reject(new Error('web'));}};
+  } else { src=window.WebWallGL.httpSource(new URL(base,location.href).href); }
+  inst.load(src).then(function(){try{inst.resume();}catch(e){}report('ready');}).catch(function(err){fb.style.display='block';report('error',String(err&&err.message||err));});
+  var preview=q.get('preview'); if(preview)fb.src=preview;
+})();
+</script></body></html>

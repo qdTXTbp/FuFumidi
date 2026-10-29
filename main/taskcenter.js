@@ -16,7 +16,7 @@ function createTaskCenter(opts = {}) {
   const now = typeof opts.now === 'function' ? opts.now : () => Date.now();
   const emit = typeof opts.emit === 'function' ? opts.emit : () => {};
   const emitIntervalMs = Math.max(16, Number(opts.emitIntervalMs) || 100);   // 10Hz
-  const retainMs = Number(opts.retainMs) || 5 * 60 * 1000;
+  const retainMs = Number(opts.retainMs) || 24 * 60 * 60 * 1000;
   const maxTasks = Math.max(10, Number(opts.maxTasks) || 200);
   const maxLogs = Math.max(10, Number(opts.maxLogs) || 200);
   const tasks = new Map();
@@ -123,8 +123,16 @@ function createTaskCenter(opts = {}) {
   function get(id) { const t = tasks.get(String(id)); return t ? snapshot(t) : null; }
   function size() { return tasks.size; }
   function clear() { tasks.clear(); flush(); }
+  function clearFinished() {
+    let n = 0;
+    for (const [id, t] of [...tasks]) {
+      if (t.status !== 'running') { tasks.delete(id); n++; }
+    }
+    if (n) flush();
+    return { ok: true, removed: n };
+  }
 
-  return { register, cancel, list, get, size, clear, flush };
+  return { register, cancel, list, get, size, clear, clearFinished, flush };
 }
 
 /** 单例（主进程用）：main.js 创建并注入 emit（Electron 窗口广播） */
@@ -143,6 +151,7 @@ function registerTaskIpc({ ipcMain, center, e2e = false } = {}) {
   if (!ipcMain || !center) return;
   ipcMain.handle('tasks:list', () => center.list());
   ipcMain.handle('tasks:cancel', (_e, id) => center.cancel(id));
+  ipcMain.handle('tasks:clearFinished', () => center.clearFinished());
   if (e2e) {
     const timers = new Map();
     ipcMain.handle('tasks:demo', (_e, opts) => {

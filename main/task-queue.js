@@ -95,6 +95,7 @@ function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngi
           onDone: (code, r) => {
             convertChildren.delete(cfg.id);
             if (r.result) {
+              try { if (r.result.ok) task && task.done(r.result); else task && task.fail(r.result.error || '转录失败'); } catch (e) {}
               pluginHost.emit('transcribe-done', { ok: !!r.result.ok, out: r.result.out, note_count: r.result.note_count, mode: cfg.mode, perf: cfg.perf });
               return resolve(r.result);
             }
@@ -109,9 +110,10 @@ function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngi
 
     if (cfg.audio && !cfg.forceSpawn) {
       try {
-        cfg.__win = win; cfg.__logId = cfg.id;
+        cfg.__win = win; cfg.__logId = cfg.id; cfg.__task = task;
         const workerRes = await engineWorkerConvert(cfg);
         if (workerRes && workerRes.ok) {
+          try { task && task.done(workerRes); } catch (e) {}
           pluginHost.emit('transcribe-done', { ok: true, out: workerRes.out, note_count: workerRes.note_count, mode: cfg.mode, perf: cfg.perf });
           return workerRes;
         }
@@ -123,7 +125,14 @@ function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngi
         /* 其它原因（worker 崩溃 / 启动失败）→ 回落到一次性 spawn，功能永远可用 */
       }
     }
-    return runSpawn();
+    try {
+      const _out = await runSpawn();
+      if (!_out || !_out.ok) { try { task && task.fail((_out && _out.error) || '转录失败'); } catch (e) {} }
+      return _out;
+    } catch (e) {
+      try { task && task.fail(e); } catch (err) {}
+      throw e;
+    }
   });
 
   // 转录「暂停 / 继续」（用户 2026-10-14 要求：正在转录的那一首也要能暂停，继续后接着跑）。

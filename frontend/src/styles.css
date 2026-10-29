@@ -239,6 +239,7 @@ body.resize-col, body.resize-col * { cursor: col-resize !important; user-select:
 .app-shell.immersive .sidebar,
 .app-shell.immersive .topbar,
 .app-shell.immersive .playerbar { display: none; }
+.app-wallpaper-engine { border: 0; background: #000; }
 .app-wallpaper {
   position: fixed;
   inset: 0;

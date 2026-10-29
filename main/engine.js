@@ -152,8 +152,22 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
             const lg = JSON.parse(t.slice(6));
             const logId = lg && lg._id;
             const ent = logId ? _engineWorkerPending.get(logId) : null;
+            const _line = lg.line || '';
+            if (ent && ent.task) {
+              try {
+                const _pm = /^###PROG\s+(\{.*\})/.exec(String(_line).trim());
+                if (_pm) {
+                  const _d = JSON.parse(_pm[1]);
+                  const _total = Number(_d.total) || 0;
+                  const _done = Number(_d.completed) || 0;
+                  if (_total > 0) ent.task.progress(Math.min(1, _done / _total), '推理中 ' + Math.round(_done / _total * 100) + '%');
+                } else if (/^\[(预处理|体检|模型|分段探测|推理|音频证据|节拍|收尾)/.test(String(_line).trim()) || String(_line).includes('使用 GPU')) {
+                  ent.task.log(_line);
+                }
+              } catch (e) {}
+            }
             if (ent && ent.win && !ent.win.isDestroyed() && ent.logId) {
-              ent.win.webContents.send('engine:log', { id: ent.logId, line: lg.line || '' });
+              ent.win.webContents.send('engine:log', { id: ent.logId, line: _line });
             }
           } catch (e) {}
           continue;
@@ -226,7 +240,7 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
       segment_sec:'segment_sec', memory_mode:'memory_mode', max_note_hold:'max_note_hold', temperature:'temperature', cfg_coef:'cfg_coef', beam_size:'beam_size', prelude_forcing:'prelude_forcing', precision:'precision' };
     for (const [k, rk] of Object.entries(map)) if (cfg[k] != null) req[rk] = cfg[k];
     for (const k of ['denoise','normalize','auto_bpm','no_merge','no_velnorm','with_drums','export_stems','no_pedal','no_melodia','multiple_pitch_bends','timbre_stabilize']) if (cfg[k]) req[k] = true;
-    const p = new Promise((resolve, reject) => { _engineWorkerPending.set(id, { resolve, reject, win: cfg.__win, logId: cfg.__logId || cfg.id, child }); });
+    const p = new Promise((resolve, reject) => { _engineWorkerPending.set(id, { resolve, reject, win: cfg.__win, logId: cfg.__logId || cfg.id, task: cfg.__task || null, child }); });
     child.stdin.write(JSON.stringify(req) + '\n');
     return p;
   }

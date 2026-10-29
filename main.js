@@ -60,6 +60,7 @@ const { registerExportIpc } = require('./main/export');
 const { getTaskCenter, registerTaskIpc } = require('./main/taskcenter');
 const { registerStorageIpc } = require('./main/storage');
 const { registerWallpaperIpc } = require('./main/wallpaper');
+const { registerWallpaperEngineIpc } = require('./main/wallpaper-engine');
 const { registerUtauIpc } = require('./main/utau');
 const { registerDiffsingerIpc } = require('./main/diffsinger');
 const { registerCoverIpc } = require('./main/cover');
@@ -198,6 +199,7 @@ if (!gotLock) {
   });
   registerExportIpc({ ipcMain, dialog, app, path, center: taskCenter });
     registerWallpaperIpc({ ipcMain, app, fs, net, runEngineInline, parsePyJson });
+    registerWallpaperEngineIpc({ ipcMain, shell, app });
     registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, net, spawnEngine, createEngineSession: EngineService.createEngineSession });
     // DiffSinger 模块化集成：默认关闭；启用后才按需下载推理依赖与通用声码器（模块内自检）
     registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, net, spawn, spawnEngine, createEngineSession: EngineService.createEngineSession, resolvePython, engineEnv, readSettings, writeSettings });

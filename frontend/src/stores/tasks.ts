@@ -40,5 +40,12 @@ export const useTasksStore = defineStore("tasks", {
     async cancel(id: string) {
       try { return await (fuApi as any).tasks?.cancel?.(id); } catch (e) { return { ok: false, error: String(e) }; }
     },
+    async clearFinished() {
+      try {
+        const r = await (fuApi as any).tasks?.clearFinished?.();
+        await this.refresh();
+        return r || { ok: true, removed: 0 };
+      } catch (e) { return { ok: false, error: String(e) }; }
+    },
   },
 });

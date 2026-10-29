@@ -1349,6 +1349,14 @@ export interface FuBridge {
     scanFolder(dir: string): Promise<{ ok: boolean; list?: any[]; error?: string }>;
   };
 
+  // local Wallpaper Engine source (webwallgl)
+  wallpaperEngine: {
+    detect(): Promise<{ installed: boolean; installDir: string; libraries: string[] }>;
+    inventory(force?: boolean): Promise<{ ok: boolean; items: any[]; installed: boolean; installDir: string; error: string }>;
+    view(id: string): Promise<{ ok: boolean; url?: string; item?: any; error?: string }>;
+    openFolder(): Promise<{ ok: boolean }>;
+  };
+
   // optional rust core
   rustStatus(): Promise<RustStatusResult>;
   rustInvoke(cmd: string, args?: string[]): Promise<RustInvokeResult>;

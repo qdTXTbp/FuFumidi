@@ -12,6 +12,8 @@ const tasksStore = useTasksStore();
 const app = useAppStore();
 const open = ref(false);
 const filter = ref('all');
+const query = ref('');
+const kindFilter = ref('all');
 const expandedId = ref('');
 const hidden = ref([]);
 const now = ref(Date.now());
@@ -75,7 +77,20 @@ const list = computed(() => tasksStore.tasks.filter((x) => !hidden.value.include
 const running = computed(() => list.value.filter((x) => x.status === 'running'));
 const finished = computed(() => list.value.filter((x) => x.status !== 'running'));
 const activeCount = computed(() => running.value.length);
-const shown = computed(() => (filter.value === 'active' ? running.value : list.value));
+const shown = computed(() => {
+  const q = query.value.trim().toLowerCase();
+  return list.value.filter((it) => {
+    if (filter.value === 'active' && it.status !== 'running') return false;
+    if (filter.value === 'done' && it.status !== 'done') return false;
+    if (filter.value === 'error' && it.status !== 'error') return false;
+    if (filter.value === 'canceled' && it.status !== 'canceled') return false;
+    if (kindFilter.value !== 'all' && it.kind !== kindFilter.value) return false;
+    if (q && !(String(it.title || '') + ' ' + String(it.kind || '') + ' ' + String(it.error || '')).toLowerCase().includes(q)) return false;
+    return true;
+  });
+});
+const kindOptions = computed(() => [...new Set(list.value.map((x) => x.kind).filter(Boolean))]);
+const counts = computed(() => ({ running: list.value.filter((x) => x.status === 'running').length, done: list.value.filter((x) => x.status === 'done').length, error: list.value.filter((x) => x.status === 'error').length }));
 const STATUS_LABEL = { running: '进行中', done: '已完成', error: '失败', canceled: '已取消' };
 const KIND_LABEL = { transcribe: '转录', download: '下载', model: '模型', render: '渲染', export: '导出', update: '更新', omr: '识谱', separate: '分离', convert: '转换', task: '任务' };
 const KIND_ICON = { transcribe: 'transcribe', convert: 'convert', render: 'play2', export: 'download', download: 'download', model: 'download', update: 'download', omr: 'score', separate: 'music', task: 'task' };
@@ -129,6 +144,14 @@ function dismissFinished() {
   hidden.value = [...hidden.value, ...finished.value.map((x) => x.id)];
   app.toast(t('已收起完成的任务'), 'ok');
 }
+async function clearFinished() {
+  const r = await tasksStore.clearFinished();
+  hidden.value = [];
+  if (!r || !r.ok) app.toast(t('清除失败'), 'warn');
+  else app.toast(t('已清除完成的任务'), 'ok');
+}
+function resultPath(it) { const r = it && it.result; if (!r) return ''; return String(r.out || r.path || r.target || r.manifestPath || ''); }
+function openResult(it) { const p = resultPath(it); if (p) { try { window.fuBridge.openOutput(p); } catch (e) {} } }
 function fmtProgress(p) { return Math.max(0, Math.min(100, Math.round((Number(p) || 0) * 100))) + '%'; }
 function fmtDur(ms) { const s = Math.max(0, Math.round((Number(ms) || 0) / 1000)); return s < 60 ? s + 's' : Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
 function elapsed(it) { return fmtDur((it.endedAt || now.value) - it.startedAt); }
@@ -153,15 +176,26 @@ function iconOf(k) { return KIND_ICON[k] || 'task'; }
         <div class="tc-head">
           <span class="tc-head-ic"><Icon name="task" :size="15" /></span>
           <b>{{ t('任务中心') }}</b>
-          <span class="tc-count">{{ running.length }} {{ t('进行中') }}</span>
+          <span class="tc-count">{{ counts.running }} {{ t('进行中') }} · {{ counts.done }} {{ t('已完成') }}<template v-if="counts.error"> · {{ counts.error }} {{ t('失败') }}</template></span>
           <span class="tc-grow"></span>
           <button v-if="finished.length" class="btn sm ghost" @click="dismissFinished">{{ t('收起完成') }}</button>
+          <button v-if="finished.length" class="btn sm ghost" :title="t('清除已完成')" @click="clearFinished">{{ t('清除已完成') }}</button>
           <button class="icon-btn" :title="t('隐藏到侧边')" :aria-label="t('隐藏到侧边')" @click="hideToCurrentSide"><Icon name="chevron" :size="14" /></button>
           <button class="icon-btn" :title="t('关闭')" :aria-label="t('关闭')" @click="open = false"><Icon name="close" :size="14" /></button>
         </div>
+        <div class="tc-tools">
+          <input v-model="query" class="tc-search" :placeholder="t('搜索任务')" />
+          <select v-model="kindFilter" class="tc-kind-select">
+            <option value="all">{{ t('全部类型') }}</option>
+            <option v-for="k in kindOptions" :key="k" :value="k">{{ kindLabel(k) }}</option>
+          </select>
+        </div>
         <div class="tc-tabs" role="tablist">
-          <button :class="{ on: filter === 'active' }" @click="filter = 'active'">{{ t('进行中') }} <i v-if="running.length">{{ running.length }}</i></button>
+          <button :class="{ on: filter === 'active' }" @click="filter = 'active'">{{ t('进行中') }} <i v-if="counts.running">{{ counts.running }}</i></button>
           <button :class="{ on: filter === 'all' }" @click="filter = 'all'">{{ t('全部') }} <i v-if="list.length">{{ list.length }}</i></button>
+          <button :class="{ on: filter === 'done' }" @click="filter = 'done'">{{ t('已完成') }} <i v-if="counts.done">{{ counts.done }}</i></button>
+          <button :class="{ on: filter === 'error' }" @click="filter = 'error'">{{ t('失败') }} <i v-if="counts.error">{{ counts.error }}</i></button>
+          <button :class="{ on: filter === 'canceled' }" @click="filter = 'canceled'">{{ t('已取消') }}</button>
         </div>
         <div v-if="!shown.length" class="tc-empty"><Icon name="task" :size="20" /><span>{{ filter === 'active' ? t('当前没有进行中的任务') : t('暂无任务') }}</span></div>
         <div v-else class="tc-list">
@@ -179,9 +213,11 @@ function iconOf(k) { return KIND_ICON[k] || 'task'; }
               <span>{{ fmtProgress(it.progress) }}</span>
               <span v-if="it.error" class="tc-error">{{ it.error }}</span>
               <span class="tc-grow"></span>
+              <button v-if="resultPath(it)" class="btn sm ghost" @click="openResult(it)">{{ t('打开输出文件') }}</button>
               <button v-if="it.status === 'running' && it.cancelable" class="btn sm ghost" @click="doCancel(it)">{{ t('取消') }}</button>
             </div>
             <div v-if="expandedId === it.id" class="tc-detail">
+              <div v-if="resultPath(it)" class="tc-result">{{ t('输出：') }}{{ resultPath(it) }}</div>
               <div v-if="it.error" class="tc-error">{{ it.error }}</div>
               <div v-for="(l, i) in (it.logs || []).slice(-6)" :key="i" class="tc-log">{{ l }}</div>
               <div v-if="!it.error && !(it.logs && it.logs.length)" class="tc-log muted">{{ t('暂无更多详情') }}</div>
@@ -213,7 +249,12 @@ function iconOf(k) { return KIND_ICON[k] || 'task'; }
 .tc-head-ic { color: var(--accent-sky); display: grid; place-items: center; }
 .tc-count { color: var(--text3); font-size: var(--fs-xs); font-family: var(--font-num); }
 .tc-grow { flex: 1; }
-.tc-tabs { display: flex; gap: var(--sp-1); border-bottom: 1px solid var(--hairline); padding-bottom: var(--sp-1); }
+.tc-tools { display: flex; gap: var(--sp-1); align-items: center; }
+.tc-search { flex: 1; min-width: 0; height: 28px; padding: 0 9px; border: 1px solid var(--hairline); border-radius: var(--r-sm); background: var(--surface); color: var(--text); font-size: var(--fs-xs); outline: none; }
+.tc-search:focus { border-color: color-mix(in srgb, var(--accent-sky) 45%, var(--hairline)); }
+.tc-kind-select { height: 28px; max-width: 108px; padding: 0 6px; border: 1px solid var(--hairline); border-radius: var(--r-sm); background: var(--surface); color: var(--text2); font-size: var(--fs-xs); }
+.tc-result { color: var(--text2); font-size: var(--fs-xs); font-family: var(--font-num); word-break: break-all; }
+.tc-tabs { display: flex; flex-wrap: wrap; gap: var(--sp-1); border-bottom: 1px solid var(--hairline); padding-bottom: var(--sp-1); }
 .tc-tabs button { border: 0; background: transparent; color: var(--text3); padding: var(--sp-1) var(--sp-2); border-radius: var(--r-sm); font-size: var(--fs-xs); }
 .tc-tabs button.on { color: var(--text); background: color-mix(in srgb, var(--accent-sapphire) 12%, var(--surface)); }
 .tc-tabs i { font-style: normal; color: var(--accent-sky); margin-left: 3px; }

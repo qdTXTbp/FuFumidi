@@ -1,7 +1,7 @@
 <script setup>
 // 统一外观抽屉（2026-10-22）：主题 / 明暗模式 / 壁纸 / 减弱动态，一处改完即时预览。
 // 保留原有主题库与壁纸库入口，不替换旧数据与键名。
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import Icon from './Icon.vue';
 import { useAppStore } from '../stores/app';
 import { useSettingsStore } from '../stores/settings';
@@ -9,6 +9,7 @@ import { useVizBgStore } from '../stores/vizbg';
 import { t } from '../core/i18n.js';
 import { THEMES, themeById, saveTheme, loadTheme, loadMode, setMode } from '../core/theme.js';
 import WallpaperLibrary from './WallpaperLibrary.vue';
+import WallpaperEnginePanel from './WallpaperEnginePanel.vue';
 import { applyDisplayPrefs, loadDisplayPrefs, saveFontSize, saveDensity, saveUiScale, UI_SCALE_MIN, UI_SCALE_MAX, UI_SCALE_STEP } from '../core/display.js';
 import { setLang, getLang } from '../core/i18n.js';
 
@@ -18,6 +19,8 @@ const settingsStore = useSettingsStore();
 const vizBg = useVizBgStore();
 const vbg = vizBg.bg;
 const wpApplyTarget = ref('app'); // app | viz
+const tab = ref('theme');             // theme | wallpaper | display
+const wpSource = ref('local');         // local | library | we
 const bridge = window.fuBridge;
 
 const mode = ref(loadMode());
@@ -27,6 +30,9 @@ const featured = computed(() => FEATURED.map((id) => themeById(id)));
 const currentName = computed(() => themeById(theme.value).name);
 const cfg = computed(() => settingsStore.settings || {});
 const hasWallpaper = computed(() => !!(cfg.value.wallpaper_enabled && cfg.value.custom_wallpaper));
+const isVizTarget = computed(() => wpApplyTarget.value === 'viz');
+const vizActive = computed(() => vbg.mode !== 'theme');
+watch(wpApplyTarget, (v) => { if (v === 'viz' && wpSource.value === 'we') wpSource.value = 'library'; });
 const isImage = computed(() => cfg.value.wallpaper_kind === 'image' || /\.(jpg|jpeg|png|webp|avif|gif)$/i.test(String(cfg.value.custom_wallpaper || '')));
 const previewUrl = computed(() => fileUrl(cfg.value.custom_wallpaper));
 const wpName = computed(() => (cfg.value.custom_wallpaper || '').replace(/^.*[\\/]/, '') || t('未选择壁纸'));
@@ -67,6 +73,14 @@ function clearVizWall() { vizBg.clearWall(); }
 function saveVizBg() { vizBg.save(); }
 function openThemes() { state.ui.themesOpen = true; }
 function openSound() { state.ui.appearanceOpen = false; state.ui.settingsTab = 'sound'; state.ui.settingsOpen = true; }
+async function pickLocal() {
+  if (isVizTarget.value) { void pickVizImage(); return; }
+  void pickImage();
+}
+function clearLocal() {
+  if (isVizTarget.value) { clearVizWall(); return; }
+  saveWp({ wallpaper_enabled: false, custom_wallpaper: '' });
+}
 async function pickImage() {
   if (!bridge || !bridge.pickFile) return;
   try {
@@ -98,7 +112,13 @@ onMounted(async () => {
           <button class="icon-btn" :title="t('关闭')" :aria-label="t('关闭')" @click="close"><Icon name="close" :size="16" /></button>
         </header>
 
-        <section class="ap-sec">
+        <nav class="ap-tabs" role="tablist">
+          <button :class="{ on: tab === 'theme' }" @click="tab = 'theme'">{{ t('主题') }}</button>
+          <button :class="{ on: tab === 'wallpaper' }" @click="tab = 'wallpaper'">{{ t('壁纸') }}</button>
+          <button :class="{ on: tab === 'display' }" @click="tab = 'display'">{{ t('显示') }}</button>
+        </nav>
+
+        <section v-show="tab === 'theme'" class="ap-sec ap-sec-first">
           <div class="ap-sec-head"><span>{{ t('主题') }}</span><button class="ap-link" @click="openThemes">{{ t('全部主题库') }} <Icon name="forward" :size="12" /></button></div>
           <div class="ap-modes">
             <button :class="{ on: mode === 'dark' }" @click="chooseMode('dark')">{{ t('深色') }}</button>
@@ -114,69 +134,77 @@ onMounted(async () => {
             </button>
           </div>
           <div class="ap-row"><span>{{ t('强调色') }}</span><div class="ap-color"><input type="color" :value="accent || themeById(theme).accent" @input="accent = $event.target.value; chooseAccent()" /><button class="ap-link" @click="resetAccent">{{ t('还原默认') }}</button></div></div>
-          <p class="ap-note">{{ t('当前主题：') }}{{ t(currentName) }} · {{ t('全部 12 套主题、强调色与图片主题仍在主题库中。') }}</p>
         </section>
 
-        <section class="ap-sec">
-          <div class="ap-sec-head"><span>{{ t('壁纸') }}</span><span class="ap-state" :class="{ on: hasWallpaper }">{{ hasWallpaper ? t('已启用') : t('未启用') }}</span></div>
-          <div class="ap-preview" :class="{ empty: !hasWallpaper }">
-            <img v-if="hasWallpaper && isImage && previewUrl" :src="previewUrl" alt="" />
-            <div v-else class="ap-preview-ph"><Icon :name="hasWallpaper ? 'play' : 'wallpaper'" :size="30" /><span>{{ hasWallpaper ? wpName : t('选择一张壁纸或导入图片') }}</span></div>
-            <span v-if="hasWallpaper" class="ap-preview-tag">{{ isImage ? t('普通壁纸') : t('动态壁纸') }} · {{ wpName }}</span>
+        <section v-show="tab === 'wallpaper'" class="ap-sec ap-sec-first">
+          <div class="ap-sec-head">
+            <span>{{ t('壁纸') }}</span>
+            <span class="ap-state" :class="{ on: isVizTarget ? vizActive : hasWallpaper }">{{ (isVizTarget ? vizActive : hasWallpaper) ? t('已启用') : t('未启用') }}</span>
           </div>
-          <div class="ap-wp-actions">
-            <button class="btn sm" @click="pickImage">{{ t('导入图片') }}</button>
-            <button class="btn sm ghost" v-if="hasWallpaper" @click="toggleWallpaper">{{ t('关闭壁纸') }}</button>
-            <button class="btn sm ghost" v-else @click="toggleWallpaper">{{ t('启用壁纸') }}</button>
+          <div class="ap-row ap-row-tight"><span>{{ t('应用目标') }}</span><div class="ap-seg"><button :class="{ on: wpApplyTarget === 'app' }" @click="wpApplyTarget = 'app'">{{ t('整窗壁纸') }}</button><button :class="{ on: wpApplyTarget === 'viz' }" @click="wpApplyTarget = 'viz'">{{ t('音符瀑布背景') }}</button></div></div>
+
+          <div class="ap-wp-sources">
+            <button :class="{ on: wpSource === 'local' }" @click="wpSource = 'local'">{{ t('本地') }}</button>
+            <button :class="{ on: wpSource === 'library' }" @click="wpSource = 'library'">{{ t('壁纸库') }}</button>
+            <button v-if="!isVizTarget" :class="{ on: wpSource === 'we' }" @click="wpSource = 'we'">Wallpaper Engine</button>
           </div>
-          <div class="ap-row"><span>{{ t('应用目标') }}</span><div class="ap-seg"><button :class="{ on: wpApplyTarget === 'app' }" @click="wpApplyTarget = 'app'">{{ t('整窗壁纸') }}</button><button :class="{ on: wpApplyTarget === 'viz' }" @click="wpApplyTarget = 'viz'">{{ t('音符瀑布背景') }}</button></div></div>
-          <p class="ap-note">{{ wpApplyTarget === 'viz' ? t('当前壁纸库的应用目标是音符瀑布背景；选择图片 / 动态壁纸只会改变瀑布画面，不影响整窗壁纸。') : t('当前壁纸库的应用目标是整窗壁纸；选择图片 / 动态壁纸只会改变工具背景。') }}</p>
-          <WallpaperLibrary class="ap-library" :target="wpApplyTarget" />
-          <div class="ap-row"><span>{{ t('适配方式') }}</span><div class="ap-seg"><button :class="{ on: fit === 'cover' }" @click="setFit('cover')">{{ t('填充') }}</button><button :class="{ on: fit === 'contain' }" @click="setFit('contain')">{{ t('完整显示') }}</button></div></div>
-          <div class="ap-slider"><label>{{ t('模糊') }}<b>{{ blur }} px</b></label><input type="range" min="0" max="24" step="1" :value="blur" @input="blur = Number($event.target.value)" /></div>
-          <p class="ap-note">{{ t('普通图片与动态壁纸共用同一背景层；切换不会留下两个图层。') }}</p>
-          <div class="ap-subsec">
-            <div class="ap-sec-head"><span>{{ t('音符瀑布背景') }}</span><span class="ap-state" :class="{ on: vbg.mode !== 'theme' }">{{ vbg.mode === 'wallpaper' ? (vizBg.wallName || t('动态壁纸')) : vbg.mode === 'image' ? t('自定义图片') : vbg.mode === 'solid' ? t('纯色') : vbg.mode === 'transparent' ? t('透明') : t('主题') }}</span></div>
-            <div class="ap-modes ap-viz-modes">
-            <button :class="{ on: vbg.mode === 'theme' }" @click="setVizMode('theme')">{{ t('主题') }}</button>
-            <button :class="{ on: vbg.mode === 'solid' }" @click="setVizMode('solid')">{{ t('纯色') }}</button>
-            <button :class="{ on: vbg.mode === 'image' }" @click="setVizMode('image')">{{ t('图片') }}</button>
-            <button :class="{ on: vbg.mode === 'wallpaper' }" @click="setVizMode('wallpaper')">{{ t('动态壁纸') }}</button>
-            <button :class="{ on: vbg.mode === 'transparent' }" @click="setVizMode('transparent')">{{ t('透明') }}</button>
-            </div>
-            <div v-if="vbg.mode === 'solid'" class="ap-row"><span>{{ t('背景色') }}</span><input type="color" class="ap-color-input" :value="vbg.color" @input="vbg.color = $event.target.value; saveVizBg()" /></div>
-            <div class="ap-wp-actions">
-            <button class="btn sm" @click="pickVizImage"><Icon name="folder" :size="13" />{{ t('选择图片') }}</button>
-            <button v-if="vbg.wallPath" class="btn sm ghost" @click="clearVizWall">{{ t('清除') }}</button>
-            </div>
-            <p class="ap-note">{{ t('在「壁纸」区把应用目标切到「音符瀑布背景」，即可从这个壁纸库直接挑选。') }}</p>
-            <p v-if="vbg.mode === 'wallpaper'" class="ap-note">{{ vbg.wallPath ? (vizBg.wallName || vbg.wallPath) : t('还没有选择动态壁纸') }} · {{ t('只影响音符瀑布，导出视频使用同一份设置。') }}</p>
-            <template v-if="vbg.mode === 'image' || vbg.mode === 'theme' || vbg.mode === 'wallpaper'">
-            <div class="ap-slider"><label>{{ t('模糊') }}<b>{{ vbg.blur }} px</b></label><input type="range" min="0" max="40" step="1" :value="vbg.blur" @input="vbg.blur = Number($event.target.value); saveVizBg()" /></div>
-            <div class="ap-slider"><label>{{ t('暗化') }}<b>{{ Math.round(vbg.dim * 100) }}%</b></label><input type="range" min="0" max="80" step="5" :value="Math.round(vbg.dim * 100)" @input="vbg.dim = Number($event.target.value) / 100; saveVizBg()" /></div>
+
+          <template v-if="wpSource === 'local'">
+            <template v-if="!isVizTarget">
+              <div class="ap-preview" :class="{ empty: !hasWallpaper }">
+                <img v-if="hasWallpaper && isImage && previewUrl" :src="previewUrl" alt="" />
+                <div v-else class="ap-preview-ph"><Icon :name="hasWallpaper ? 'play' : 'wallpaper'" :size="30" /><span>{{ hasWallpaper ? wpName : t('选择一张壁纸或导入图片') }}</span></div>
+                <span v-if="hasWallpaper" class="ap-preview-tag">{{ isImage ? t('普通壁纸') : t('动态壁纸') }} · {{ wpName }}</span>
+              </div>
+              <div class="ap-wp-actions">
+                <button class="btn sm" @click="pickImage">{{ t('导入图片') }}</button>
+                <button v-if="hasWallpaper" class="btn sm ghost" @click="toggleWallpaper">{{ t('关闭壁纸') }}</button>
+                <button v-else class="btn sm ghost" @click="toggleWallpaper">{{ t('启用壁纸') }}</button>
+              </div>
+              <div class="ap-row"><span>{{ t('适配方式') }}</span><div class="ap-seg"><button :class="{ on: fit === 'cover' }" @click="setFit('cover')">{{ t('填充') }}</button><button :class="{ on: fit === 'contain' }" @click="setFit('contain')">{{ t('完整显示') }}</button></div></div>
+              <div class="ap-slider"><label>{{ t('模糊') }}<b>{{ blur }} px</b></label><input type="range" min="0" max="24" step="1" :value="blur" @input="blur = Number($event.target.value)" /></div>
             </template>
-            <p class="ap-note">{{ t('这里只控制音符瀑布的画面背景；整窗壁纸仍由上方「壁纸」控制。') }}</p>
-          </div>
+            <template v-else>
+              <div class="ap-modes ap-viz-modes">
+                <button :class="{ on: vbg.mode === 'theme' }" @click="setVizMode('theme')">{{ t('主题') }}</button>
+                <button :class="{ on: vbg.mode === 'solid' }" @click="setVizMode('solid')">{{ t('纯色') }}</button>
+                <button :class="{ on: vbg.mode === 'image' }" @click="setVizMode('image')">{{ t('图片') }}</button>
+                <button :class="{ on: vbg.mode === 'wallpaper' }" @click="setVizMode('wallpaper')">{{ t('动态壁纸') }}</button>
+                <button :class="{ on: vbg.mode === 'transparent' }" @click="setVizMode('transparent')">{{ t('透明') }}</button>
+              </div>
+              <div v-if="vbg.mode === 'solid'" class="ap-row"><span>{{ t('背景色') }}</span><input type="color" class="ap-color-input" :value="vbg.color" @input="vbg.color = $event.target.value; saveVizBg()" /></div>
+              <div class="ap-wp-actions"><button class="btn sm" @click="pickVizImage"><Icon name="folder" :size="13" />{{ t('选择图片') }}</button><button v-if="vbg.wallPath || vbg.path" class="btn sm ghost" @click="clearLocal">{{ t('清除') }}</button></div>
+              <template v-if="vbg.mode === 'image' || vbg.mode === 'wallpaper'">
+                <div class="ap-slider"><label>{{ t('模糊') }}<b>{{ vbg.blur }} px</b></label><input type="range" min="0" max="40" step="1" :value="vbg.blur" @input="vbg.blur = Number($event.target.value); saveVizBg()" /></div>
+                <div class="ap-slider"><label>{{ t('暗化') }}<b>{{ Math.round(vbg.dim * 100) }}%</b></label><input type="range" min="0" max="80" step="5" :value="Math.round(vbg.dim * 100)" @input="vbg.dim = Number($event.target.value) / 100; saveVizBg()" /></div>
+              </template>
+            </template>
+          </template>
+
+          <template v-else-if="wpSource === 'library'">
+            <WallpaperLibrary class="ap-library" :target="wpApplyTarget" />
+          </template>
+
+          <template v-else>
+            <WallpaperEnginePanel />
+          </template>
+
+          <p class="ap-note">{{ isVizTarget ? t('这里只控制音符瀑布背景，不影响整窗壁纸。') : t('同一时间只使用一个整窗背景，切换来源会替换旧背景。') }}</p>
         </section>
 
-
-
-        <section class="ap-sec">
+        <section v-show="tab === 'display'" class="ap-sec ap-sec-first">
           <div class="ap-sec-head"><span>{{ t('显示与语言') }}</span></div>
           <div class="ap-row"><span>{{ t('界面字号') }}</span><div class="ap-seg"><button :class="{ on: fontSize === 'standard' }" @click="setFont('standard')">{{ t('标准') }}</button><button :class="{ on: fontSize === 'large' }" @click="setFont('large')">{{ t('大') }}</button><button :class="{ on: fontSize === 'xlarge' }" @click="setFont('xlarge')">{{ t('超大') }}</button></div></div>
           <div class="ap-row"><span>{{ t('界面密度') }}</span><div class="ap-seg"><button :class="{ on: density === 'compact' }" @click="setDensity('compact')">{{ t('紧凑') }}</button><button :class="{ on: density === 'comfortable' }" @click="setDensity('comfortable')">{{ t('舒适') }}</button><button :class="{ on: density === 'relaxed' }" @click="setDensity('relaxed')">{{ t('宽松') }}</button></div></div>
           <div class="ap-slider"><label>{{ t('界面缩放') }}<b>{{ Math.round(uiScale * 100) }}%</b></label><input type="range" :min="UI_SCALE_MIN" :max="UI_SCALE_MAX" :step="UI_SCALE_STEP" :value="uiScale" @input="setUiScale($event.target.value)" /></div>
           <div class="ap-row"><span>{{ t('界面语言') }}</span><select class="ap-select" :value="lang" @change="setLanguage($event.target.value)"><option value="zh">简体中文</option><option value="zh-Hant">繁體中文</option><option value="en">English</option><option value="ja">日本語</option></select></div>
-        </section>
-
-        <section class="ap-sec">
           <div class="ap-row"><span>{{ t('减少动态效果') }}</span><button class="ap-switch" :class="{ on: reduceMotion }" :aria-pressed="reduceMotion" @click="toggleMotion"><i></i></button></div>
           <p class="ap-note">{{ t('关闭过渡与壁纸动效，适合长时间工作或低性能设备。') }}</p>
         </section>
 
         <footer class="ap-foot">
           <button class="btn sm ghost" @click="openSound"><Icon name="volume" :size="13" /> {{ t('音效设置') }}</button>
-          <span class="ap-note">{{ t('主题与壁纸会立即应用并记住。') }}</span>
+          <span class="ap-note">{{ t('设置会立即应用并记住。') }}</span>
         </footer>
       </aside>
     </div>
@@ -184,6 +212,15 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.ap-tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; padding: 2px; margin-bottom: var(--sp-2); border: 1px solid var(--hairline); border-radius: var(--r-md); background: var(--surface-soft); }
+.ap-tabs button { border: 0; border-radius: var(--r-sm); padding: var(--sp-2); background: transparent; color: var(--text3); font-size: var(--fs-sm); cursor: pointer; }
+.ap-tabs button.on { background: var(--surface); color: var(--text); box-shadow: var(--sh-1); }
+.ap-sec-first { border-top: 0; padding-top: var(--sp-3); }
+.ap-wp-sources { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--sp-1); margin-top: var(--sp-3); }
+.ap-wp-sources button { border: 1px solid var(--hairline); border-radius: var(--r-sm); background: var(--surface); color: var(--text3); padding: 6px; font-size: var(--fs-xs); cursor: pointer; }
+.ap-wp-sources button.on { color: var(--text); border-color: color-mix(in srgb, var(--accent-sky) 45%, var(--hairline)); background: color-mix(in srgb, var(--accent-sapphire) 10%, var(--surface)); }
+.ap-row-tight { margin-top: var(--sp-3); }
+
 .ap-mask { position: fixed; inset: 0; z-index: var(--z-overlay); background: color-mix(in srgb, var(--canvas) 38%, transparent); }
 .ap-drawer { position: absolute; right: 0; top: 0; bottom: 0; width: min(520px, 94vw); overflow-y: auto; background-color: color-mix(in srgb, var(--canvas) 92%, transparent); backdrop-filter: var(--glass-blur); border-left: 1px solid color-mix(in srgb, var(--ornament) 34%, var(--hairline)); box-shadow: var(--sh-3); padding: var(--sp-5); color: var(--text); animation: ap-in var(--motion-base) var(--ease-out); }
 @keyframes ap-in { from { opacity: 0; transform: translateX(18px); } to { opacity: 1; transform: none; } }

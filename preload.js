@@ -371,6 +371,13 @@ contextBridge.exposeInMainWorld('fuBridge', {
     downloadUrl: (url, name) => ipcRenderer.invoke('wallpaper:downloadUrl', url, name),
     scanFolder: (dir) => ipcRenderer.invoke('wallpaper:scanFolder', dir),
   },
+  // 本地 Wallpaper Engine 壁纸源（参考 dsh-plugin-wallpaper-engine）
+  wallpaperEngine: {
+    detect: () => ipcRenderer.invoke('wallpaperEngine:detect'),
+    inventory: (force) => ipcRenderer.invoke('wallpaperEngine:inventory', force),
+    view: (id) => ipcRenderer.invoke('wallpaperEngine:view', id),
+    openFolder: () => ipcRenderer.invoke('wallpaperEngine:openFolder'),
+  },
   // 可选 Rust 核心
   rustStatus: () => ipcRenderer.invoke('rust:status'),
   rustInvoke: (cmd, args) => ipcRenderer.invoke('rust:invoke', cmd, args),
@@ -435,6 +442,7 @@ contextBridge.exposeInMainWorld('fuBridge', {
   tasks: {
     list: () => ipcRenderer.invoke('tasks:list'),
     cancel: (id) => ipcRenderer.invoke('tasks:cancel', id),
+    clearFinished: () => ipcRenderer.invoke('tasks:clearFinished'),
     demo: (opts) => ipcRenderer.invoke('tasks:demo', opts),
     onUpdate: (cb) => {
       const fn = (_e, ev) => { try { cb(ev); } catch (e) {} };

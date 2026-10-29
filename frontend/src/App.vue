@@ -62,6 +62,12 @@ try { if (window.fuBridge && window.fuBridge.e2e) window.__fufumidiNav = navHist
 
 const wpUrl = ref('');
 const wpEnabled = ref(false);
+const wpProvider = ref('native');
+const wpWeUrl = ref('');
+const wpWeId = ref('');
+const weFrame = ref(null);
+let weReq = 0;
+let offWpTasks = null;
 const bgVideo = ref(null);
 const wpKind = ref('video');
 const wpFit = ref('cover');
@@ -106,6 +112,53 @@ function wpFileUrl(p) {
   const norm = String(p).replace(/\\/g, '/');
   return 'file:///' + norm.replace(/^([A-Za-z]):/, '$1:');
 }
+async function refreshWeWallpaper(id) {
+  const req = ++weReq;
+  if (!id || !bridge || !bridge.wallpaperEngine) { wpWeUrl.value = ''; return; }
+  try {
+    const r = await bridge.wallpaperEngine.view(String(id));
+    if (req !== weReq) return;
+    wpWeUrl.value = r && r.ok ? String(r.url || '') : '';
+  } catch (e) { if (req === weReq) wpWeUrl.value = ''; }
+}
+function applyWeSettings(s) {
+  const we = !!(s && s.wallpaper_provider === 'wallpaper-engine' && s.wallpaper_we_id && s.wallpaper_enabled);
+  wpProvider.value = we ? 'wallpaper-engine' : 'native';
+  wpWeId.value = we ? String(s.wallpaper_we_id) : '';
+  wpEnabled.value = we ? true : !!(s && s.wallpaper_enabled && s.custom_wallpaper);
+  if (we) { wpUrl.value = ''; void refreshWeWallpaper(wpWeId.value); }
+  else { wpWeUrl.value = ''; wpUrl.value = wpFileUrl((s && s.custom_wallpaper) || ''); }
+}
+function sendWe(action) {
+  try { if (weFrame.value && weFrame.value.contentWindow) weFrame.value.contentWindow.postMessage({ type: 'fufumidi-wallpaper-ctl', action }, '*'); } catch (e) {}
+}
+function syncWePause() {
+  try {
+    const s = settingsStore.settings || {};
+    if (s.wallpaper_we_pause_on_transcribe === false) { sendWe('resume'); return; }
+    sendWe(window.__fufumidiTranscribing ? 'pause' : 'resume');
+  } catch (e) {}
+}
+
+onMounted(() => {
+  try {
+    if (bridge && bridge.tasks && bridge.tasks.onUpdate) {
+      offWpTasks = bridge.tasks.onUpdate((ev) => {
+        try {
+          const tasks = (ev && ev.tasks) || [];
+          window.__fufumidiTranscribing = tasks.some((x) => x && x.status === 'running' && x.kind === 'transcribe');
+          syncWePause();
+        } catch (e) {}
+      });
+    }
+    if (bridge && bridge.tasks && bridge.tasks.list) bridge.tasks.list().then((tasks) => {
+      window.__fufumidiTranscribing = (tasks || []).some((x) => x && x.status === 'running' && x.kind === 'transcribe');
+      syncWePause();
+    }).catch(() => {});
+  } catch (e) {}
+});
+onBeforeUnmount(() => { try { if (offWpTasks) offWpTasks(); } catch (e) {} offWpTasks = null; });
+
 async function loadWallpaper() {
   try {
     const s = await settingsStore.load();
@@ -115,6 +168,7 @@ async function loadWallpaper() {
     wpFit.value = s.wallpaper_fit || 'cover';
     wpDim.value = Number.isFinite(Number(s.wallpaper_dim)) ? Number(s.wallpaper_dim) : 18;
     wpBlur.value = Number.isFinite(Number(s.wallpaper_blur)) ? Number(s.wallpaper_blur) : 0;
+  applyWeSettings(s);
   } catch (e) {}
 }
 watch(() => settingsStore.settings, () => {
@@ -125,6 +179,7 @@ watch(() => settingsStore.settings, () => {
     wpFit.value = s.wallpaper_fit || 'cover';
     wpDim.value = Number.isFinite(Number(s.wallpaper_dim)) ? Number(s.wallpaper_dim) : 18;
     wpBlur.value = Number.isFinite(Number(s.wallpaper_blur)) ? Number(s.wallpaper_blur) : 0;
+  applyWeSettings(s);
   // 播放偏好（跳过空白 / 步长 / 长按倍数）：设置页一改就同步到播放器
   applyPlaybackSettings(s);
   app.applyPlaybackPrefs();
@@ -733,11 +788,14 @@ _endHold();
 </script>
 
 <template>
-  <template v-if="wpEnabled && wpUrl">
+  <template v-if="wpEnabled && wpProvider === 'wallpaper-engine' && wpWeUrl">
+    <iframe ref="weFrame" class="app-wallpaper app-wallpaper-engine" :src="wpWeUrl" allow="autoplay" @load="syncWePause"></iframe>
+  </template>
+  <template v-else-if="wpEnabled && wpUrl">
     <img v-if="wpKind === 'image'" :key="wpUrl" class="app-wallpaper" :src="wpUrl" alt="" :style="wallpaperStyle" />
     <video v-else :key="wpUrl" ref="bgVideo" class="app-wallpaper" :src="wpUrl" autoplay muted playsinline preload="auto" :style="wallpaperStyle" @timeupdate="onBgTime"></video>
   </template>
-  <div class="app-shell" :style="{ '--sidebar-w': state.sidebarWidth + 'px' }" :class="{ 'side-collapsed': !state.sidebarOpen, 'no-player': !state.playerbarOpen, 'wallpaper-on': wpEnabled && wpUrl, resizing: state.sidebarResizing, immersive: state.ui.immersive }">
+  <div class="app-shell" :style="{ '--sidebar-w': state.sidebarWidth + 'px' }" :class="{ 'side-collapsed': !state.sidebarOpen, 'no-player': !state.playerbarOpen, 'wallpaper-on': wpEnabled && (wpUrl || wpWeUrl), resizing: state.sidebarResizing, immersive: state.ui.immersive }">
     <PrimaryRail />
     <SideBar />
     <TopBar />
