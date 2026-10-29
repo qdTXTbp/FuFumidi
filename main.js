@@ -19,6 +19,7 @@ function sha256File(filePath) {
 }
 const { createIntegrity } = require('./integrity');
 const Paths = require('./main/paths');
+const { installLogging } = require('./main/log');
 const GpuService = require('./main/gpu');
 const {
   gpuEnhanceDir,
@@ -135,6 +136,7 @@ if (!gotLock) {
 
   app.whenReady().then(async () => {
     configureSession({ session, dialog, app });
+    try { installLogging({ app, dir: Paths.logDir(), fs }); } catch (e) {}
     registerSystemIpc({ ipcMain, integrity, BrowserWindow, path, shell, app, fs, spawnEngine, dialog });
     registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, readSettings });
     registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEngineInline, spawnEngine });
