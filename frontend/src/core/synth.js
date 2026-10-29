@@ -103,14 +103,14 @@ function vibrato(ctx, time, rate, depth, oscFreq, delay) {
 }
 
 /* 生成一个音符的声音 */
-export function playVoice(ctx, time, midi, vel, preset, out, endTime, live) {
+export function playVoice(ctx, time, midi, vel, preset, out, endTime, live, bend = 1) {
   const liveArr = live || [];
   // 跳转/变速到曲中时，可能调度到「起始时刻已过去」的延音音符：
   // 统一把触发时刻钳制到当前，避免 AudioParam/Oscillator 负时间报错（尾部仍可听到）
   time = Math.max(ctx.currentTime, time);
   const v = clamp(vel / 127, 0, 1);
   const peak = 0.11 + v * v * 0.92;
-  const freq = midiFreq(midi);
+  const freq = midiFreq(midi) * (Number.isFinite(bend) && bend > 0 ? bend : 1);
   // ★ 时值兜底（真正的根因）：note 的时值字段缺失/为 NaN 时，
   //   tStop = NaN → `o.stop(NaN)` 抛错被 try 吞掉、voiceEnv 的释放段也整段抛错，
   //   于是振荡器**永远不会停**、包络永远停在 sustain —— 用户听到的就是
@@ -152,7 +152,7 @@ export function playVoice(ctx, time, midi, vel, preset, out, endTime, live) {
     } else if ((midi >= 41 && midi <= 45 && midi !== 42) || (midi >= 47 && midi <= 50)) {
       const g = voiceEnv(ctx, time, to, { a: .002, d: .22, s: .05, r: .08, peak, end: endTime });
       const o = ctx.createOscillator(); o.type = 'sine';
-      const f = midiFreq(midi); o.frequency.setValueAtTime(f, time); o.frequency.exponentialRampToValueAtTime(f * .6, time + .2);
+      const f = midiFreq(midi) * (Number.isFinite(bend) && bend > 0 ? bend : 1); o.frequency.setValueAtTime(f, time); o.frequency.exponentialRampToValueAtTime(f * .6, time + .2);
       o.connect(g); o.start(time); reg(o);
     } else {
       const g = voiceEnv(ctx, time, to, { a: .002, d: .15, s: .05, r: .08, peak: peak * .8, end: endTime });
@@ -389,6 +389,7 @@ export class Synth {
     // 内置合成器的通道级 CC 状态（仅 CC7/CC11 在当前实现里可听；SF2 路径仍走完整 CC）
     this._internalCc7 = Array(16).fill(1);
     this._internalCc11 = Array(16).fill(1);
+    this._internalBend = Array(16).fill(1);
     this.panners = []; this.pan = [];
     // 通道混音状态（音色库/SF2 播放用；说明见 setChannelVol 一段的注释）
     this.chVol = {}; this.chMute = {}; this.chSolo = {}; this.chPan = {};
@@ -987,7 +988,7 @@ export class Synth {
     const ov = this._sf2ChProgOverride[ch];
     const preset = presetFromMode('auto', ov != null ? ov : note.prog, note.isDrum);
     const out = this.trackGains[note.trk];
-    playVoice(this.ctx, time, note.midi, note.vel, preset, out, endTime, this.live);
+    playVoice(this.ctx, time, note.midi, note.vel, preset, out, endTime, this.live, this._internalBend[ch & 15] || 1);
     this.activeNotes.push({ midi: note.midi, trk: note.trk, vel: note.vel, start: time, endTime });
     if (this.live.length > this._liveLimit) this.pruneLive(this._liveLimit);
   }

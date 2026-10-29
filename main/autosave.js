@@ -47,6 +47,29 @@ function writeAutosave(root, docId, model, meta) {
   }
 }
 
+/** 异步版本：JSON 序列化仍在主线程，但 32MB 写盘挪到 libuv，不再同步阻塞 IPC。 */
+async function writeAutosaveAsync(root, docId, model, meta) {
+  const dir = ensureDir(autosaveDir(root));
+  const id = safeId(docId);
+  let payload;
+  try {
+    const ts = Date.now();
+    payload = JSON.stringify({ format: "fufumidi-autosave", version: 1, docId: String(docId), ts, meta: meta || {}, data: model });
+  } catch (e) { return { ok: false, error: "草稿无法序列化：" + String((e && e.message) || e) }; }
+  const bytes = Buffer.byteLength(payload, "utf8");
+  if (bytes > MAX_BYTES) return { ok: false, error: "草稿过大（" + (bytes / 1048576).toFixed(1) + "MB > 32MB），已拒绝写入" };
+  const file = path.join(dir, id + ".json");
+  const tmp = file + ".tmp";
+  try {
+    await fs.promises.writeFile(tmp, payload, "utf8");
+    await fs.promises.rename(tmp, file);
+    return { ok: true, path: file, ts: JSON.parse(payload).ts, bytes };
+  } catch (e) {
+    try { await fs.promises.unlink(tmp); } catch (_) {}
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+}
+
 function listAutosaves(root) {
   const dir = autosaveDir(root);
   let names = [];
@@ -95,11 +118,11 @@ function registerAutosaveIpc({ ipcMain, root }) {
   ipcMain.handle("autosave:write", (_e, payload) => {
     const p = payload || {};
     if (p.docId == null) return { ok: false, error: "缺少 docId" };
-    return writeAutosave(root, p.docId, p.model, p.meta);
+    return writeAutosaveAsync(root, p.docId, p.model, p.meta);
   });
   ipcMain.handle("autosave:list", () => listAutosaves(root));
   ipcMain.handle("autosave:read", (_e, docId) => readAutosave(root, docId));
   ipcMain.handle("autosave:clear", (_e, docId) => clearAutosave(root, docId));
 }
 
-module.exports = { writeAutosave, listAutosaves, readAutosave, clearAutosave, registerAutosaveIpc, autosaveDir, safeId, MAX_BYTES };
+module.exports = { writeAutosave, writeAutosaveAsync, listAutosaves, readAutosave, clearAutosave, registerAutosaveIpc, autosaveDir, safeId, MAX_BYTES };
