@@ -197,6 +197,32 @@ export class Player {
     this.ctlEvents = ctl;
     this._ctlByCh = ctlByCh;
     this._bendByCh = bendByCh;
+    // CC64 延音踏板：把每个音符的结束延长到踏板抬起的 tick。
+    const sustainIntervals = new Map();
+    for (const c of ctl) {
+      if (c.kind !== 'cc' || c.cc !== 64) continue;
+      const ch = c.ch & 15;
+      if (c.val >= 64) {
+        if (!sustainIntervals.has(ch)) sustainIntervals.set(ch, []);
+        sustainIntervals.get(ch).push({ on: c.start, off: Infinity });
+      } else {
+        const list = sustainIntervals.get(ch);
+        const last = list && list[list.length - 1];
+        if (last && last.off === Infinity) last.off = c.start;
+      }
+    }
+    if (sustainIntervals.size) {
+      for (const n of this.events) {
+        const list = sustainIntervals.get((n.ch || 0) & 15);
+        if (!list) continue;
+        for (const iv of list) {
+          if (n.start >= iv.on && n.end < iv.off) {
+            n.end = Math.max(n.end, Math.min(iv.off, this.song.totalTicks || iv.off));
+            break;
+          }
+        }
+      }
+    }
     this.ccursor = 0;
     this._rebuildGaps();
   }
