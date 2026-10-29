@@ -9,6 +9,17 @@ Set-Location $root
 if (-not $SkipUi) { & npm --prefix frontend run build; if ($LASTEXITCODE -ne 0) { throw "frontend build failed" } }
 Write-Host "[1/3] electron-builder --win dir" -ForegroundColor Cyan
 & npx electron-builder --win dir --x64; if ($LASTEXITCODE -ne 0) { throw "dir build failed" }
+# P1 包体：bundle-python 产出的运行时仍带 pyc/lib/headers/tests（实测约 296 MiB），
+# 在 dir 之后、kachina/NSIS 之前裁掉；并用真实 import 自检，失败直接中止构建。
+$pyRoot = Join-Path $root "release\win-unpacked\resources\python"
+if (Test-Path (Join-Path $pyRoot "python.exe")) {
+  Write-Host "[prune] Python 运行时裁剪" -ForegroundColor Cyan
+  $env:FUFUMIDI_PY = $pyRoot
+  & node (Join-Path $root "scripts\prune-python-bundle.cjs"); if ($LASTEXITCODE -ne 0) { throw "prune-python-bundle failed" }
+  & (Join-Path $pyRoot "python.exe") -c "import numpy, scipy, librosa, soundfile, pretty_midi, mido, yaml, PIL, onnxruntime, basic_pitch, torch"; if ($LASTEXITCODE -ne 0) { throw "pruned Python import self-check failed" }
+  Remove-Item Env:FUFUMIDI_PY -ErrorAction SilentlyContinue
+} else { Write-Host "[prune] 找不到内置 python，跳过" -ForegroundColor Yellow }
+
 Write-Host "[2/3] build-kachina.ps1" -ForegroundColor Cyan
 & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "build-kachina.ps1") -Version $Version; if ($LASTEXITCODE -ne 0) { throw "kachina failed" }
 Write-Host "[3/3] electron-builder --win nsis (更新器已在 gen 之后同步)" -ForegroundColor Cyan
