@@ -594,6 +594,29 @@ function onBeforeUnload() {
 
 onMounted(() => setupGlobalHotkeys());
 
+// P1-5：输入框/下拉/文本域只有 placeholder 当标签，读屏器读不到名字。
+// 不逐文件改 68 处；运行期给没有 label 的控件补 aria-label（placeholder/title），
+// 新增浮层由 MutationObserver 继续补。
+let _a11yObserver = null;
+function labelA11yFields(root) {
+  const scope = root && root.querySelectorAll ? root : document;
+  for (const el of scope.querySelectorAll('input, textarea, select')) {
+    if (el.hasAttribute('aria-label') || el.hasAttribute('aria-labelledby') || el.closest('label')) continue;
+    const text = el.getAttribute('placeholder') || el.getAttribute('title') || '';
+    if (text) el.setAttribute('aria-label', text);
+  }
+}
+onMounted(() => {
+  labelA11yFields();
+  try {
+    _a11yObserver = new MutationObserver((list) => {
+      for (const m of list) for (const n of m.addedNodes) if (n.nodeType === 1) labelA11yFields(n);
+    });
+    _a11yObserver.observe(document.body, { childList: true, subtree: true });
+  } catch (e) {}
+});
+onBeforeUnmount(() => { try { _a11yObserver && _a11yObserver.disconnect(); } catch (e) {} _a11yObserver = null; });
+
 /* E2E 测试钩子（scripts/e2e）：只在 FUFUMIDI_E2E=1 的实例里注册，正常安装版不存在。
    用途：让交互回放能在**隔离数据根**里造一首最小 MIDI，从而进入编辑页/跑手势脚本，
    不依赖用户曲库。接口刻意做小：hasSong / importMidi / songCount。 */

@@ -45,6 +45,23 @@ function statTree(dir, depth = 0) {
   return { bytes: bytes, files: files };
 }
 
+async function statTreeAsync(dir, depth = 0) {
+  if (depth > 12) return { bytes: 0, files: 0 };
+  let ents = [];
+  try { ents = await fs.promises.readdir(dir, { withFileTypes: true }); } catch (e) { return { bytes: 0, files: 0 }; }
+  const parts = await Promise.all(ents.map(async (ent) => {
+    const p = path.join(dir, ent.name);
+    try {
+      if (ent.isDirectory()) return await statTreeAsync(p, depth + 1);
+      if (ent.isFile()) { const st = await fs.promises.stat(p); return { bytes: st.size, files: 1 }; }
+    } catch (e) {}
+    return { bytes: 0, files: 0 };
+  }));
+  let bytes = 0, files = 0;
+  for (const x of parts) { bytes += x.bytes; files += x.files; }
+  return { bytes, files };
+}
+
 /**
  * @param {Array<{id:string,label?:string,dir:string}>} areas
  * @returns {Promise<{areas:Array, totalBytes:number, updatedAt:number}>}
@@ -55,7 +72,7 @@ async function reportStorage(areas) {
   for (const a of areas || []) {
     const meta = CATEGORY_META[a.id] || { label: a.id, kind: 'safe' };
     const exists = !!(a.dir && fs.existsSync(a.dir));
-    const stat = exists ? statTree(a.dir) : { bytes: 0, files: 0 };
+    const stat = exists ? await statTreeAsync(a.dir) : { bytes: 0, files: 0 };
     total += stat.bytes;
     out.push({
       id: a.id, label: meta.label, path: a.dir || '', kind: meta.kind,
