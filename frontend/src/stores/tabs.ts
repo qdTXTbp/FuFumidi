@@ -11,7 +11,7 @@
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
 
-type Tab = { id: string; name: string };
+type Tab = { id: string; name: string; pinned?: boolean };
 
 const KEY = 'fufumidi.song-tabs.v1';
 const MAX_TABS = 12;
@@ -24,7 +24,7 @@ function read(): { tabs: Tab[]; activeId: string } {
     const tabs: Tab[] = (Array.isArray(j.tabs) ? j.tabs : [])
       .filter((t: any) => t && t.id && typeof t.name === 'string')
       .slice(0, MAX_TABS)
-      .map((t: any) => ({ id: String(t.id), name: String(t.name) }));
+      .map((t: any) => ({ id: String(t.id), name: String(t.name), pinned: !!t.pinned }));
     const activeId = tabs.some((t) => t.id === j.activeId) ? String(j.activeId) : (tabs[0] ? tabs[0].id : '');
     return { tabs, activeId };
   } catch (e) { return { tabs: [], activeId: '' }; }
@@ -79,9 +79,34 @@ export const useTabsStore = defineStore('songTabs', () => {
     return true;
   }
 
+  /** 固定/取消固定标签：固定的标签排在视觉左侧，关闭全部时保留 */
+  function togglePin(id: string | number) {
+    const sid = String(id || '');
+    const hit = tabs.value.find((t) => t.id === sid);
+    if (!hit) return false;
+    hit.pinned = !hit.pinned;
+    persist();
+    return true;
+  }
+
+  /** 关闭右侧未固定的标签；当前激活若被关掉则回退到 [id] */
+  function closeRight(id: string | number) {
+    const sid = String(id || '');
+    const i = tabs.value.findIndex((t) => t.id === sid);
+    if (i < 0) return 0;
+    const before = tabs.value.length;
+    tabs.value = tabs.value.filter((t, idx) => idx <= i || t.pinned);
+    if (!tabs.value.some((t) => t.id === activeId.value)) {
+      const fallback = tabs.value[Math.min(i, tabs.value.length - 1)];
+      activeId.value = fallback ? fallback.id : '';
+    }
+    persist();
+    return before - tabs.value.length;
+  }
+
   function closeOthers(id: string | number) {
     const sid = String(id || '');
-    tabs.value = tabs.value.filter((t) => t.id === sid);
+    tabs.value = tabs.value.filter((t) => t.id === sid || t.pinned);
     activeId.value = tabs.value.length ? sid : '';
     persist();
   }
@@ -107,7 +132,7 @@ export const useTabsStore = defineStore('songTabs', () => {
     return before - tabs.value.length;
   }
 
-  function clear() { tabs.value = []; activeId.value = ''; persist(); }
+  function clear(keepPinned = true) { tabs.value = keepPinned ? tabs.value.filter((t) => t.pinned) : []; activeId.value = tabs.value[0] ? tabs.value[0].id : ''; persist(); }
 
-  return { tabs, activeId, open, activate, close, closeOthers, move, hydrate, clear, maxTabs: MAX_TABS };
+  return { tabs, activeId, open, activate, close, closeOthers, closeRight, togglePin, move, hydrate, clear, maxTabs: MAX_TABS };
 });

@@ -1,7 +1,7 @@
 <script setup>
 // 多标签页：已打开曲目的浏览器式标签栏（切换 / 关闭 / 关闭全部 / 拖拽排序 / 键盘）。
 // 标签只是曲目入口，不复制 song 数据；关闭标签不会删除曲目。
-import { computed, onMounted, onBeforeUnmount, ref } from 'vue';
+import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from 'vue';
 import Icon from './Icon.vue';
 import { useAppStore } from '../stores/app';
 import { useTabsStore } from '../stores/tabs';
@@ -15,12 +15,18 @@ const router = useRouter();
 const visible = computed(() => store.tabs.length >= 1);
 const dragIndex = ref(-1);
 const tabMenu = ref(null);
+const scrollEl = ref(null);
+const canLeft = ref(false);
+const canRight = ref(false);
+const allMenu = ref(false);
 function openTabMenu(e, tb) { tabMenu.value = { x: e.clientX, y: e.clientY, tab: tb }; }
 function closeTabMenu() { tabMenu.value = null; }
 async function menuGroup() { const tb = tabMenu.value && tabMenu.value.tab; closeTabMenu(); if (tb) await editGroup(tb); }
 function menuUngroup() { const tb = tabMenu.value && tabMenu.value.tab; closeTabMenu(); if (!tb) return; delete groups.value[tb.id]; try { localStorage.setItem(GROUP_KEY, JSON.stringify(groups.value)); } catch (e) {} }
 function menuClose() { const tb = tabMenu.value && tabMenu.value.tab; closeTabMenu(); if (tb) closeTab({ stopPropagation() {} }, tb.id); }
 function menuCloseOthers() { const tb = tabMenu.value && tabMenu.value.tab; closeTabMenu(); if (tb) closeOthers({ stopPropagation() {} }, tb.id); }
+function menuPin() { const tb = tabMenu.value && tabMenu.value.tab; closeTabMenu(); if (tb) togglePin(tb.id); }
+function menuCloseRight() { const tb = tabMenu.value && tabMenu.value.tab; closeTabMenu(); if (tb) closeRight(tb.id); }
 const dragOver = ref(-1);
 const expanded = ref(false);
 const GROUP_KEY = 'fufumidi_tab_groups_v1';
@@ -34,15 +40,31 @@ async function editGroup(tb) {
   if (v) groups.value[tb.id] = v; else delete groups.value[tb.id];
   try { localStorage.setItem(GROUP_KEY, JSON.stringify(groups.value)); } catch (e) {}
 }
-const COLLAPSE_AT = 6;
-const shownTabs = computed(() => {
-  if (expanded.value || store.tabs.length <= COLLAPSE_AT) return store.tabs;
-  const head = store.tabs.slice(0, COLLAPSE_AT - 1);
-  const active = store.tabs.find((x) => x.id === store.activeId);
-  if (active && !head.some((x) => x.id === active.id)) head.push(active);
-  return head;
-});
-const hiddenCount = computed(() => Math.max(0, store.tabs.length - shownTabs.value.length));
+// 所有标签都渲染在可滚动条里，不再折叠成「更多」；溢出用左右箭头和全部标签菜单。
+function groupColor(id) {
+  const name = groupOf(id);
+  if (!name) return 'transparent';
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % 360;
+  return 'hsl(' + h + ' 64% 58%)';
+}
+function updateArrows() {
+  const el = scrollEl.value; if (!el) return;
+  canLeft.value = el.scrollLeft > 2;
+  canRight.value = el.scrollLeft + el.clientWidth < el.scrollWidth - 2;
+}
+function scrollTabs(dir) { const el = scrollEl.value; if (!el) return; el.scrollBy({ left: dir * Math.max(180, el.clientWidth * 0.55), behavior: 'smooth' }); }
+function onWheel(e) { const el = scrollEl.value; if (!el) return; if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) { el.scrollLeft += e.deltaY; e.preventDefault(); } }
+function ensureActiveVisible() {
+  const el = scrollEl.value; if (!el) return;
+  const node = el.querySelector('.song-tab.on');
+  if (node && node.scrollIntoView) node.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+  nextTick(updateArrows);
+}
+function togglePin(id) { store.togglePin(id); nextTick(updateArrows); }
+function closeRight(id) { store.closeRight(id); if (store.activeId) pick(store.activeId); }
+function openAllMenu() { allMenu.value = !allMenu.value; }
+function pickFromAll(id) { allMenu.value = false; pick(id); }
 
 async function pick(id) {
   if (!store.activate(id)) return;
@@ -102,36 +124,61 @@ function onKeydown(e) {
     cycle(e.shiftKey ? -1 : 1);
   }
 }
-onMounted(() => window.addEventListener('keydown', onKeydown, true));
-onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown, true));
+let ro = null;
+onMounted(() => {
+  window.addEventListener('keydown', onKeydown, true);
+  nextTick(updateArrows);
+  try { ro = new ResizeObserver(updateArrows); if (scrollEl.value) ro.observe(scrollEl.value); } catch (e) {}
+});
+onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown, true); try { ro && ro.disconnect(); } catch (e) {} });
+watch(() => store.activeId, () => nextTick(ensureActiveVisible));
+watch(() => store.tabs.length, () => nextTick(() => { updateArrows(); ensureActiveVisible(); }));
 </script>
 
 <template>
   <div v-if="visible" class="song-tabs" data-guide="song-tabs" role="tablist" :aria-label="t('已打开曲目')">
-    <div class="st-scroll">
-      <div v-for="(tb, i) in shownTabs" :key="tb.id" class="song-tab" :class="{ on: store.activeId === tb.id, dragging: dragIndex === i, over: dragOver === i }"
-           role="tab" :aria-selected="store.activeId === tb.id" :tabindex="store.activeId === tb.id ? 0 : -1" :data-song-id="tb.id" :title="tb.name"
+    <button class="st-arrow" :disabled="!canLeft" :title="t('向左滚动标签')" :aria-label="t('向左滚动标签')" @click="scrollTabs(-1)"><Icon name="back" :size="12" /></button>
+    <div ref="scrollEl" class="st-scroll" @scroll="updateArrows" @wheel="onWheel">
+      <div v-for="(tb, i) in store.tabs" :key="tb.id" class="song-tab" :class="{ on: store.activeId === tb.id, dragging: dragIndex === i, over: dragOver === i, pinned: tb.pinned }"
+           :style="{ '--tab-group': groupColor(tb.id) }"
+           role="tab" :aria-selected="store.activeId === tb.id" :tabindex="store.activeId === tb.id ? 0 : -1" :data-song-id="tb.id" :title="tb.name + (groupOf(tb.id) ? ' · ' + groupOf(tb.id) : '')"
            draggable="true" @click="pick(tb.id)" @keydown.enter="pick(tb.id)" @keydown.space.prevent="pick(tb.id)"
-           @auxclick.prevent="closeTab($event, tb.id)" @dblclick.stop="closeOthers($event, tb.id)"
+           @auxclick="$event.button === 1 && closeTab($event, tb.id)"
            @contextmenu.prevent="openTabMenu($event, tb)" @dragstart="onDragStart($event, i)" @dragover="onDragOver($event, i)" @drop="onDrop($event, i)" @dragend="onDragEnd">
-        <span v-if="groupOf(tb.id)" class="st-group" :title="t('分组：') + groupOf(tb.id)">{{ groupOf(tb.id).slice(0, 2) }}</span>
+        <Icon v-if="tb.pinned" name="pin" :size="10" class="st-pin" />
+        <span v-if="groupOf(tb.id)" class="st-group" :title="t('分组：') + groupOf(tb.id)" :style="{ color: groupColor(tb.id), borderColor: groupColor(tb.id) }">{{ groupOf(tb.id).slice(0, 4) }}</span>
         <span class="st-name">{{ tb.name }}</span>
-        <button class="st-close" data-guide="song-tab-close" :title="t('关闭此标签')" :aria-label="t('关闭此标签')" @click="closeTab($event, tb.id)">
-          <Icon name="plus" :size="10" :style="{ transform: 'rotate(45deg)' }" />
+        <span v-if="tb.pinned" class="st-lock">{{ t('固定') }}</span>
+        <button v-else class="st-close" data-guide="song-tab-close" :title="t('关闭此标签')" :aria-label="t('关闭此标签')" @click="closeTab($event, tb.id)">
+          <Icon name="close" :size="10" />
         </button>
       </div>
     </div>
-    <button v-if="hiddenCount > 0" class="st-tool st-more" :title="t('还有 ') + hiddenCount + t(' 个标签；点开折叠组')" @click="expanded = !expanded">{{ expanded ? t('收起') : t('更多') + ' ' + hiddenCount }}</button>
-    <button v-if="store.tabs.length > 1" class="st-tool" :title="t('关闭全部标签')" :aria-label="t('关闭全部标签')" @click="closeAll"><Icon name="close" :size="12" /></button>
+    <button class="st-arrow" :disabled="!canRight" :title="t('向右滚动标签')" :aria-label="t('向右滚动标签')" @click="scrollTabs(1)"><Icon name="forward" :size="12" /></button>
+    <button class="st-tool st-all" :title="t('全部标签')" :aria-label="t('全部标签')" @click="openAllMenu"><Icon name="menu" :size="14" /><span>{{ store.tabs.length }}</span></button>
+    <button v-if="store.tabs.length" class="st-tool" :title="t('关闭全部标签（保留固定）')" :aria-label="t('关闭全部标签（保留固定）')" @click="closeAll"><Icon name="close" :size="12" /></button>
   </div>
+
   <Teleport to="body">
     <div v-if="tabMenu" class="st-menu-mask" @click="closeTabMenu" @contextmenu.prevent="closeTabMenu"></div>
     <div v-if="tabMenu" class="st-menu" :style="{ left: tabMenu.x + 'px', top: tabMenu.y + 'px' }">
+      <button class="st-menu-item" @click="menuPin"><Icon name="pin" :size="12" /> {{ tabMenu.tab.pinned ? t('取消固定') : t('固定标签') }}</button>
       <button class="st-menu-item" @click="menuGroup"><Icon name="folder" :size="12" /> {{ t('设置分组') }}</button>
       <button v-if="groupOf(tabMenu.tab.id)" class="st-menu-item" @click="menuUngroup"><Icon name="minus" :size="12" /> {{ t('取消分组') }}</button>
       <span class="st-menu-sep"></span>
-      <button class="st-menu-item" @click="menuClose"><Icon name="plus" :size="12" style="transform:rotate(45deg)" /> {{ t('关闭标签') }}</button>
+      <button class="st-menu-item" @click="menuClose"><Icon name="close" :size="12" /> {{ t('关闭标签') }}</button>
       <button class="st-menu-item" @click="menuCloseOthers"><Icon name="close" :size="12" /> {{ t('关闭其他标签') }}</button>
+      <button class="st-menu-item" @click="menuCloseRight"><Icon name="forward" :size="12" /> {{ t('关闭右侧标签') }}</button>
+    </div>
+    <div v-if="allMenu" class="st-menu-mask" @click="allMenu = false"></div>
+    <div v-if="allMenu" class="st-menu st-all-menu">
+      <div class="st-menu-title">{{ t('全部标签') }}（{{ store.tabs.length }}）</div>
+      <button v-for="tb in store.tabs" :key="tb.id" class="st-menu-item st-all-item" :class="{ on: store.activeId === tb.id }" @click="pickFromAll(tb.id)">
+        <Icon :name="tb.pinned ? 'pin' : 'music'" :size="12" />
+        <span class="st-all-name">{{ tb.name }}</span>
+        <span v-if="groupOf(tb.id)" class="st-all-group" :style="{ color: groupColor(tb.id) }">{{ groupOf(tb.id) }}</span>
+        <Icon v-if="store.activeId === tb.id" name="check" :size="12" />
+      </button>
     </div>
   </Teleport>
 </template>
@@ -158,4 +205,31 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown, true));
 .st-menu-item { display: flex; align-items: center; gap: var(--sp-2); border: 0; background: transparent; color: var(--text2); padding: 6px 8px; border-radius: var(--r-sm); font-size: var(--fs-sm); text-align: left; cursor: pointer; }
 .st-menu-item:hover { background: var(--surface-soft); color: var(--text); }
 .st-menu-sep { height: 1px; background: var(--hairline); margin: 3px 4px; }
+
+/* tabs v2：更高命中区、可滚动条 + 左右箭头、全部标签菜单、固定/分组色 */
+.song-tabs { min-height: 38px; gap: 3px; padding: 2px 5px; }
+.st-scroll { gap: 4px; padding: 2px 0; scroll-behavior: smooth; }
+.song-tab { height: 28px; max-width: 230px; padding: 0 6px 0 9px; border-radius: var(--r-sm) var(--r-sm) 0 0; background: color-mix(in srgb, var(--surface) 58%, transparent); position: relative; }
+.song-tab:hover { background: var(--surface-soft); border-color: color-mix(in srgb, var(--accent-sky) 22%, var(--hairline)); }
+.song-tab.on { background: var(--surface); border-color: color-mix(in srgb, var(--accent-sky) 38%, var(--hairline)); border-bottom-color: var(--surface); box-shadow: 0 2px 0 var(--surface), inset 0 2px 0 var(--accent-sky); }
+.song-tab.pinned { border-left: 2px solid var(--accent-sky); }
+.song-tab::before { content: ''; position: absolute; left: 0; top: 5px; bottom: 5px; width: 2px; border-radius: 2px; background: var(--tab-group, transparent); }
+.st-pin { flex: none; color: var(--accent-sky); }
+.st-lock { flex: none; font-size: 9px; color: var(--text3); opacity: .7; }
+.st-group { max-width: 40px; padding: 0 3px; border: 1px solid; border-radius: var(--r-sm); font-size: 9px; line-height: 14px; background: transparent; }
+.st-close { width: 20px; height: 20px; opacity: .55; }
+.st-close:hover { background: color-mix(in srgb, var(--accent-red) 18%, var(--surface-soft)); color: var(--text); }
+.st-arrow { width: 22px; height: 26px; border: 1px solid transparent; border-radius: var(--r-sm); background: transparent; color: var(--text3); display: grid; place-items: center; flex: none; cursor: pointer; }
+.st-arrow:hover:not(:disabled) { color: var(--accent-sky); border-color: var(--hairline); background: var(--surface-soft); }
+.st-arrow:disabled { opacity: .25; cursor: default; }
+.st-all { width: auto; padding: 0 6px; gap: 3px; font-size: 10px; font-family: var(--font-num); }
+.st-menu { min-width: 220px; max-width: 300px; max-height: 420px; overflow: auto; }
+.st-all-menu { top: 40px; right: 8px; left: auto !important; }
+.st-menu-title { padding: 5px 8px 7px; color: var(--text3); font-size: var(--fs-xs); border-bottom: 1px solid var(--hairline); margin-bottom: 3px; }
+.st-menu-item { min-height: 30px; }
+.st-menu-item.on { background: var(--surface-soft); box-shadow: inset 2px 0 0 var(--accent-sky); }
+.st-all-item { justify-content: flex-start; }
+.st-all-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.st-all-group { flex: none; max-width: 70px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; opacity: .8; }
+@media (max-width: 760px) { .song-tab { max-width: 150px; } .st-arrow { display: none; } }
 </style>
