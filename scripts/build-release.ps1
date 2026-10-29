@@ -16,6 +16,7 @@ if (Test-Path (Join-Path $pyRoot "python.exe")) {
   Write-Host "[prune] Python 运行时裁剪" -ForegroundColor Cyan
   $env:FUFUMIDI_PY = $pyRoot
   & node (Join-Path $root "scripts\prune-python-bundle.cjs"); if ($LASTEXITCODE -ne 0) { throw "prune-python-bundle failed" }
+  & node (Join-Path $root "scripts\prune-python-unused.cjs"); if ($LASTEXITCODE -ne 0) { throw "prune-python-unused failed" }
   & (Join-Path $pyRoot "python.exe") -c "import numpy, scipy, librosa, soundfile, pretty_midi, mido, yaml, PIL, onnxruntime, basic_pitch, torch"; if ($LASTEXITCODE -ne 0) { throw "pruned Python import self-check failed" }
   Remove-Item Env:FUFUMIDI_PY -ErrorAction SilentlyContinue
 } else { Write-Host "[prune] 找不到内置 python，跳过" -ForegroundColor Yellow }
