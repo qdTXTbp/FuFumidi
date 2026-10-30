@@ -30,6 +30,9 @@ const zoom = ref(0.12);      // 每 tick 像素
 const snap = ref(true);
 const arrCtx = ref(null);
 const refAudio = computed(() => (song.value && song.value.arrange && song.value.arrange.audio) || null);
+let refEl = null;
+let refUrl = '';
+const refPlaying = ref(false);
 const HEADER_W = 160;
 const scrollX = ref(0);      // tick
 const rowH = 56;
@@ -499,9 +502,33 @@ async function pickReferenceAudio() {
     try { sec = await b.audioDuration(path); } catch (e) {}
     if (!song.value.arrange) song.value.arrange = {};
     song.value.arrange.audio = { path, name: String(path).replace(/^.*[\\/]/, ''), duration: Number(sec) || 0 };
+    stopRefAudio();
     app.toast(t('参考音频已加入编排'), 'ok');
     draw();
   } catch (e) { app.toast(t('参考音频载入失败：') + (e.message || e), 'warn'); }
+}
+/** 试听参考音频：从当前播放头对应的秒数开始；仅参考，不进 MIDI 混音。 */
+async function playRefAudio() {
+  const a = refAudio.value;
+  if (!a || !a.path) return;
+  try {
+    stopRefAudio();
+    if (!refUrl) {
+      const bytes = await window.fuBridge.readBinary(a.path);
+      refUrl = URL.createObjectURL(new Blob([bytes], { type: 'audio/mpeg' }));
+    }
+    refEl = new Audio(refUrl);
+    refEl.onended = () => { refPlaying.value = false; };
+    const tl = timelineOfSong(song.value);
+    const tick = Math.round(song.value.secToTick((app.curSec || 0) / (app.tempo || 1)));
+    refEl.currentTime = tl ? Math.max(0, secOfTick(tl, tick)) : 0;
+    await refEl.play();
+    refPlaying.value = true;
+  } catch (e) { app.toast(t('参考音频试听失败：') + (e.message || e), 'warn'); }
+}
+function stopRefAudio() {
+  if (refEl) { try { refEl.pause(); } catch (e) {} refEl = null; }
+  refPlaying.value = false;
 }
 function addMarkerHere() {
   const tl = timeline.value;
@@ -556,6 +583,8 @@ onMounted(async () => {
   window.addEventListener('keydown', onArrangeKey);
 });
 onBeforeUnmount(() => {
+  stopRefAudio();
+  if (refUrl) { try { URL.revokeObjectURL(refUrl); } catch (e) {} refUrl = ''; }
   if (window.__fufumidiArrange) { try { delete window.__fufumidiArrange; } catch (e) {} }
   if (tickTimer) clearInterval(tickTimer);
   while (cmdOffs.length) { try { cmdOffs.pop()(); } catch (e) {} }
@@ -582,6 +611,7 @@ onBeforeUnmount(() => {
       <button class="btn sm" data-guide="arrange-undo" :disabled="!histDepth.undo" @click="undoArrange">{{ t('撤销') }}</button>
       <button class="btn sm" data-guide="arrange-redo" :disabled="!histDepth.redo" @click="redoArrange">{{ t('重做') }}</button>
       <button class="btn sm" @click="pickReferenceAudio">{{ t('参考音频') }}</button>
+      <button v-if="refAudio" class="btn sm" @click="refPlaying ? stopRefAudio() : playRefAudio()">{{ refPlaying ? t('停止参考') : t('试听参考') }}</button>
       <button class="btn sm" @click="addMarkerHere">{{ t('加标记') }}</button>
       <button class="btn sm" @click="addRegionHere">{{ t('加区间') }}</button>
     </div>

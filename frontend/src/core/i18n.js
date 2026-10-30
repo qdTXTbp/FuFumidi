@@ -3041,6 +3041,10 @@ export const I18N_MAP = {
   '参考音频': 'Reference audio',
   '参考音频已加入编排': 'Reference audio added to arrangement',
   '参考音频载入失败：': 'Reference audio load failed: ',
+  '停止参考': 'Stop reference',
+  '试听参考': 'Preview reference',
+  '参考音频试听失败：': 'Reference audio preview failed: ',
+
   '已在编辑器定位，改动会回到同一曲目': 'Located in the editor; edits stay in the same song',
   '当前环境不支持选择音频': 'Audio selection is not supported here',
 
