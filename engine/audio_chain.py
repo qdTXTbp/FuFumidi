@@ -337,7 +337,7 @@ def _apply(mono, sr, params, log_cb, strong_runner, tmp_path=None):
            'before': before, 'after': after}
     if mode == 'off':
         # 默认不降噪时只说「电平归一」，避免用户误以为有降噪选项却没入口（2026-10-18 反馈）
-        _log(log_cb, '[预处理] 电平归一（降噪关闭）· %s' % ' + '.join(applied))
+        _log(log_cb, '[预处理] 降噪=off · 电平归一 · %s' % ' + '.join(applied))
     else:
         _log(log_cb, '[预处理] 降噪=%s · %s' % (mode, ' + '.join(applied)))
     _log(log_cb, '[体检] 噪声底 %.1f dBFS · 动态范围 %.1f dB · 峰值 %.1f dBFS · 安静段高频占比 %.3f'

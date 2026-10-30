@@ -67,3 +67,18 @@ jobs:
 
       - name: Verify asar contents
         run: npx --yes @electron/asar list dist/fufumidi-full.asar | findstr /C:"main.js" /C:"engine\music2midi.py" /C:"frontend\src\views\ViewResources.vue"
+
+  pytest:
+    # 6.4：611 个引擎测试进入 CI。当前部分用例依赖本机模型/临时目录，先以`continue-on-error`
+    # 挂为观测门禁；稳定后再改为 required（见 docs/plans/2026-10-30-completion-matrix.md）。
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Install engine test dependencies
+        run: python -m pip install -r engine/requirements-bundle.txt
+      - name: Run pytest suite
+        run: python -m pytest engine/tests -q
