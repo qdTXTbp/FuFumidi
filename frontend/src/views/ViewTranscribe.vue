@@ -125,6 +125,8 @@ const jobId = ref(0);
 const logs = ref([]);
 const logExpanded = ref(false);
 const lastOut = ref('');
+const lastSource = ref('');
+let srcAudio = null;
 const doneInfo = ref('');
 const gpuInfo = ref('');
 const gpuDetail = ref('');          // 驱动版本 / 共享显存回退支持（P2 驱动检测）
@@ -1805,7 +1807,7 @@ async function runBatch() {
   progress.value = dN && !eN ? 100 : (dN ? Math.round(dN / Math.max(1, totals.total) * 100) : progress.value);
   if (dN && !eN) {
     const last = runItems.filter((i) => i.status === 'done').pop();
-    if (last) { lastOut.value = last.out; doneInfo.value = t('成功 ') + dN + t(' 首') + (last.note_count != null ? ' · ' + last.note_count + t(' 个音符') : ''); logLine(doneInfo.value); await analyzeQuality(last.out); }
+    if (last) { lastOut.value = last.out; lastSource.value = last.path || ''; doneInfo.value = t('成功 ') + dN + t(' 首') + (last.note_count != null ? ' · ' + last.note_count + t(' 个音符') : ''); logLine(doneInfo.value); await analyzeQuality(last.out); }
     done.value = true;
     toast(chain ? t('顺序转录完成：成功 ') + dN + t(' 首（各队列产物已按各自歌单加入）') : t('批量转录完成：成功 ') + dN + t(' 首'), 'ok');
   } else if (dN) {
@@ -1855,6 +1857,23 @@ async function repairLongNotes() {
     await analyzeQuality(lastOut.value);
     toast(t('已修剪 ') + n + t(' 个超长音'), 'ok');
   } catch (e) { toast(t('修剪失败：') + (e.message || e), 'warn'); }
+}
+/** 试听原音频：读原文件到 Blob URL，避免 file:// 被渲染进程限制。 */
+async function playSourceAudio() {
+  if (!lastSource.value) { toast(t('没有可试听的原音频'), 'warn'); return; }
+  try {
+    stopSourceAudio();
+    const bytes = await bridge.readBinary(lastSource.value);
+    if (!bytes) { toast(t('无法读取原音频'), 'warn'); return; }
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'audio/mpeg' }));
+    srcAudio = new Audio(url);
+    srcAudio.onended = () => stopSourceAudio();
+    await srcAudio.play();
+    toast(t('试听原音频中'), 'ok');
+  } catch (e) { toast(t('原音频试听失败：') + (e.message || e), 'warn'); }
+}
+function stopSourceAudio() {
+  if (srcAudio) { try { srcAudio.pause(); } catch (e) {} srcAudio = null; }
 }
 async function openTranscribedForEdit() {
   if (!lastOut.value) return;
@@ -2066,6 +2085,7 @@ onMounted(() => {
   } catch (e) {}
 });
 onBeforeUnmount(() => {
+  stopSourceAudio();
   try { delete window.__fufumidiTranscribe; } catch (e) {}
   try { window.removeEventListener('keydown', onDocKeydown); } catch (e) {}
   if (trTimer) clearInterval(trTimer);

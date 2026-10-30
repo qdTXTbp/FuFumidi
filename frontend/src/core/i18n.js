@@ -3027,6 +3027,12 @@ export const I18N_MAP = {
   ' 个超长音': ' long notes',
   '修剪失败：': 'Trim failed: ',
   'MPE 弯音': 'MPE pitch bend',
+  '没有可试听的原音频': 'No source audio to preview',
+  '无法读取原音频': 'Cannot read source audio',
+  '试听原音频中': 'Previewing source audio',
+  '原音频试听失败：': 'Source audio preview failed: ',
+  '试听原音频': 'Preview source audio',
+
 
 
   '桌面引擎就绪': 'Desktop engine ready',
