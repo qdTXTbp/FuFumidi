@@ -643,6 +643,27 @@ async function exportMusicXML() {
   }
 }
 
+/** 6.3.3：导出当前声部的 MusicXML 分谱（不是整份总谱）。 */
+async function exportPartMusicXML() {
+  const s = song.value;
+  if (!s) { toast(t('请先载入 MIDI 文件'), 'warn'); return; }
+  try {
+    const ti = Math.max(0, Math.min(s.tracks.length - 1, Number(selTrackIdx.value) || 0));
+    const tr = s.tracks[ti] || {};
+    const xml = songToMusicXMLTrack(s, ti);
+    const bytes = new TextEncoder().encode(xml);
+    const base = (s.name || 'score').replace(/\.[^.]+$/, '');
+    const safe = String(tr.name || ('Part ' + (ti + 1))).replace(/[\\/:*?"<>|]+/g, '_').slice(0, 60);
+    const name = base + '-' + safe + '.musicxml';
+    const b = window.fuBridge;
+    if (b && b.saveBinary) {
+      const r = await b.saveBinary({ name, data: Array.from(bytes) });
+      if (r && r.ok) toast(t('已导出分谱：') + r.path, 'ok');
+      else if (r && !r.canceled) toast(t('分谱导出失败'), 'warn');
+    } else { toast(t('当前环境不支持导出'), 'warn'); }
+  } catch (e) { toast(t('分谱导出失败：') + (e.message || e), 'warn'); }
+}
+
 /* ---------------- PDF 导出（IPC printToPDF） ---------------- */
 async function exportPdf() {
   const b = window.fuBridge;
@@ -877,6 +898,7 @@ onBeforeUnmount(() => {
         <span class="score-sep"></span>
         <button class="btn sm" @click="importMusicXML" :disabled="midiBusy" :title="t('导入 MusicXML 文件')"><Icon name="import" :size="14" />{{ t('导入') }}</button>
         <button class="btn sm" @click="exportMusicXML" :disabled="!song" :title="t('导出 MusicXML（整份总谱，每个声部一条 part）')"><Icon name="save" :size="14" />{{ t('XML') }}</button>
+        <button class="btn sm" @click="exportPartMusicXML" :disabled="!song" :title="t('导出当前声部的 MusicXML 分谱')"><Icon name="save" :size="14" />{{ t('分谱') }}</button>
         <button class="btn sm" @click="exportStaffPng" :disabled="!isStaffLike || exporting" :title="mode === 'score' ? t('导出总谱 PNG') : ''"><Icon name="save" :size="14" />{{ t('PNG') }}</button>
         <button class="btn sm" @click="openScoreSplit" :disabled="!isStaffLike || !song" :title="t('分屏查看乐谱并点击定位')"><Icon name="viz" :size="14" />{{ t('分屏') }}</button>
       </div>

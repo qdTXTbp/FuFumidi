@@ -3032,6 +3032,13 @@ export const I18N_MAP = {
   '试听原音频中': 'Previewing source audio',
   '原音频试听失败：': 'Source audio preview failed: ',
   '试听原音频': 'Preview source audio',
+  '分谱': 'Part',
+  '导出当前声部的 MusicXML 分谱': 'Export the current part as MusicXML',
+  '已导出分谱：': 'Part exported: ',
+  '分谱导出失败': 'Part export failed',
+  '分谱导出失败：': 'Part export failed: ',
+  '当前环境不支持导出': 'Export is not supported in this environment',
+
 
 
 
