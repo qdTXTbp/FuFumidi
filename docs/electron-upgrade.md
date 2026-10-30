@@ -2,7 +2,7 @@
 
 ## 现状
 
-- 版本：electron@33.4.11（已 EOL）
+- 版本：electron@33.4.11（已 EOL）；npm 最新稳定 45.1.0（2026-10-30 实测）
 - 原生依赖：webwallgl（WE 背景）；BASS 由 Python 侧持有
 - 渲染进程：Vue 3 + Vite 6，未使用 Electron 33 专属 API
 
