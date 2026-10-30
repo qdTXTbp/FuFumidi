@@ -1727,7 +1727,14 @@ function selInfo() {
     vel: arr.length === 1 ? first.vel : null,
     start: arr.length === 1 ? first.start : null,
     len: arr.length === 1 ? (first.end - first.start) : null,
+    bend: arr.length === 1 ? (Number(first.bend) || 0) : null,
   };
+}
+function setSelBend(v) {
+  const tr = curTrack(); if (!tr || !selection.size) return;
+  pushState('MPE 弯音');
+  for (const n of selection) n.bend = clamp(Number(v) || 0, -12, 12);
+  afterEdit();
 }
 function setSelVel(v) {
   const tr = curTrack(); if (!tr || !selection.size) return;
@@ -2022,7 +2029,7 @@ defineExpose({
   deleteSelected, quantizeSelected, transposeSelected, velRampSelected,
   copySelected, pasteAt, duplicateSelected, selectSamePitch,
   selectAll, selectNone, selCount, selInfo,
-  setSelVel, setSelMidi, setSelStart, setSelLen, applyVelCurve, replaceNotes, selNotes, selRef, selectNotes, applyDraft,
+  setSelVel, setSelBend, setSelMidi, setSelStart, setSelLen, applyVelCurve, replaceNotes, selNotes, selRef, selectNotes, applyDraft,
   toggleMute, setSelMuted, selMuted,
   addPedal, delPedal, selSpan, addNote, deleteNotes, pushStateForTrack, notifyExternalEdit,
   // 参数化工具的实时预览（M2）

@@ -127,7 +127,7 @@ export class Player {
           const ch = n.ch != null ? n.ch : (tr.ch != null ? tr.ch : 0);
           const st0 = st ? st(ch, n.start) : null;
           arr.push({
-            start, end, midi: n.midi, vel: n.vel,
+            start, end, midi: n.midi, vel: n.vel, bend: Number(n.bend) || 0,
             trk: tr.index, ch,
             prog: st0 && st0.program != null ? st0.program : tr.program,
             bank: st0 ? st0.bank : 0,

@@ -3026,6 +3026,7 @@ export const I18N_MAP = {
   '已修剪 ': 'Trimmed ',
   ' 个超长音': ' long notes',
   '修剪失败：': 'Trim failed: ',
+  'MPE 弯音': 'MPE pitch bend',
 
 
   '桌面引擎就绪': 'Desktop engine ready',

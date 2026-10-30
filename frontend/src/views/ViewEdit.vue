@@ -163,7 +163,7 @@ const CC_OPTIONS = [
   [128, t('弯音 PB（±2 半音）')],
 ];
 
-const sel = reactive({ count: 0, midi: null, name: '', vel: null, start: null, len: null });
+const sel = reactive({ count: 0, midi: null, name: '', vel: null, start: null, len: null, bend: null });
 
 const SNAPS = [
   [0, t('关')], [1, t('1 拍')], [0.75, t('附点8分')], [0.6666666667, t('三连2分')], [0.5, '1/2'],
@@ -627,6 +627,7 @@ function refreshSel() {
   sel.vel = info && info.vel != null ? info.vel : null;
   sel.start = info && info.start != null ? info.start : null;
   sel.len = info && info.len != null ? info.len : null;
+  sel.bend = info && info.bend != null ? info.bend : null;
 }
 function onZoom(z) { zoomPct.value = Math.round(z * 100); }
 
@@ -2600,6 +2601,9 @@ onBeforeUnmount(() => {
             <div class="insp-row"><span>{{ t('音名') }}</span><b>{{ sel.name || '—' }}</b></div>
             <div class="insp-row"><span>{{ t('音高') }}</span><b>{{ sel.midi ?? '—' }}</b></div>
             <div class="insp-row"><span>{{ t('力度') }}</span><b>{{ sel.vel ?? '—' }}</b></div>
+            <div class="insp-row"><span>{{ t('MPE 弯音') }}</span>
+              <input type="number" class="num-input" :value="sel.bend ?? 0" step="0.1" min="-12" max="12" :disabled="!sel.count"
+                     @change="e => editor?.setSelBend(+e.target.value)" /></div>
             <NumSlider :model-value="sel.vel ?? 80" @update:model-value="v => { editor?.setSelVel(+v) }" :min="1" :max="127" :disabled="!sel.vel" range-class="insp-range" data-guide="velocity-slider" :input-width="56" no-input />
             <div class="insp-row"><span>{{ t('起点') }}</span>
               <input type="number" class="num-input" :value="sel.start ?? 0" step="1" min="0" :disabled="!sel.start"

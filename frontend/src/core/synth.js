@@ -988,7 +988,8 @@ export class Synth {
     const ov = this._sf2ChProgOverride[ch];
     const preset = presetFromMode('auto', ov != null ? ov : note.prog, note.isDrum);
     const out = this.trackGains[note.trk];
-    playVoice(this.ctx, time, note.midi, note.vel, preset, out, endTime, this.live, this._internalBend[ch & 15] || 1);
+    const _nb = Math.pow(2, (Number(note.bend) || 0) / 12);
+    playVoice(this.ctx, time, note.midi, note.vel, preset, out, endTime, this.live, (this._internalBend[ch & 15] || 1) * _nb);
     this.activeNotes.push({ midi: note.midi, trk: note.trk, vel: note.vel, start: time, endTime });
     if (this.live.length > this._liveLimit) this.pruneLive(this._liveLimit);
   }
