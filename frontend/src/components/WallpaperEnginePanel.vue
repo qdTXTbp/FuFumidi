@@ -67,6 +67,30 @@ async function savePreview(it) {
     } else { app.toast(t('当前环境不支持导出'), 'warn'); }
   } catch (e) { app.toast(t('导出预览图失败：') + (e.message || e), 'warn'); }
 }
+/** 6.4：录制当前屏幕/窗口 5 秒为 WebM（WE 背景在应用内渲染，录屏可直接带走）。 */
+async function recordWallpaper() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) { app.toast(t('当前环境不支持录屏导出'), 'warn'); return; }
+  let stream = null;
+  try {
+    stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30 }, audio: false });
+    const rec = new MediaRecorder(stream, { mimeType: MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9' : 'video/webm' });
+    const chunks = [];
+    rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+    const stopped = new Promise((res) => { rec.onstop = res; });
+    rec.start(250);
+    app.toast(t('录屏中：5 秒'), 'ok');
+    await new Promise((r) => setTimeout(r, 5000));
+    rec.stop();
+    await stopped;
+    const buf = new Uint8Array(await new Blob(chunks, { type: 'video/webm' }).arrayBuffer());
+    if (bridge && bridge.saveBinary) {
+      const r = await bridge.saveBinary({ name: 'wallpaper-record.webm', data: Array.from(buf) });
+      if (r && r.ok) app.toast(t('已导出录屏：') + r.path, 'ok');
+      else if (r && !r.canceled) app.toast(t('录屏导出失败'), 'warn');
+    }
+  } catch (e) { app.toast(t('录屏导出失败：') + (e.message || e), 'warn'); }
+  finally { if (stream) stream.getTracks().forEach((x) => x.stop()); }
+}
 function openFolder() { try { bridge.wallpaperEngine.openFolder(); } catch (e) {} }
 onMounted(() => load(false));
 const TYPES = { scene: t('场景'), web: t('网页'), video: t('视频'), application: t('应用') };
@@ -79,6 +103,7 @@ const TYPES = { scene: t('场景'), web: t('网页'), video: t('视频'), applic
       <span class="we-state" :class="{ on: detected.installed }">{{ detected.installed ? t('已检测到') : t('未检测到') }}</span>
       <span class="we-grow"></span>
       <button class="btn sm ghost" :disabled="busy" @click="load(true)">{{ busy ? t('扫描中…') : t('重新扫描') }}</button>
+      <button class="btn sm ghost" @click="recordWallpaper">{{ t('录制壁纸 5 秒') }}</button>
       <button v-if="detected.installed" class="btn sm ghost" @click="openFolder">{{ t('打开目录') }}</button>
     </div>
     <p v-if="detected.installDir" class="we-path">{{ detected.installDir }}</p>

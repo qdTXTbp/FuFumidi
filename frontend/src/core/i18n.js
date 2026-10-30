@@ -3046,6 +3046,13 @@ export const I18N_MAP = {
   '已设为桌面壁纸': 'Set as desktop wallpaper',
   '设为桌面壁纸失败：': 'Failed to set desktop wallpaper: ',
   '设为桌面壁纸': 'Set as desktop wallpaper',
+  '当前环境不支持录屏导出': 'Screen recording is not supported here',
+  '录屏中：5 秒': 'Recording: 5 seconds',
+  '已导出录屏：': 'Recording exported: ',
+  '录屏导出失败': 'Recording export failed',
+  '录屏导出失败：': 'Recording export failed: ',
+  '录制壁纸 5 秒': 'Record wallpaper 5s',
+
 
 
   '已导出分谱：': 'Part exported: ',
