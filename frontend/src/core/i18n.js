@@ -3037,6 +3037,12 @@ export const I18N_MAP = {
   '转录结果尚未入库，请先载入校对': 'The result is not in the library yet; load it for proofing first',
   '分谱': 'Part',
   '导出当前声部的 MusicXML 分谱': 'Export the current part as MusicXML',
+  '这个壁纸没有预览图': 'This wallpaper has no preview',
+  '已导出预览图：': 'Preview exported: ',
+  '导出预览图失败': 'Preview export failed',
+  '导出预览图失败：': 'Preview export failed: ',
+  '导出预览图': 'Export preview image',
+
   '已导出分谱：': 'Part exported: ',
   '分谱导出失败': 'Part export failed',
   '分谱导出失败：': 'Part export failed: ',
