@@ -3017,6 +3017,11 @@ export const I18N_MAP = {
   '修正输出文件不存在或已被删除': 'Refine output file missing or deleted',
   '已载入修正结果': 'Refine result loaded',
   '载入失败：': 'Load failed: ',
+  '移调 -1': 'Transpose -1',
+  '移调 +1': 'Transpose +1',
+  '输出文件不存在或已被删除': 'Output file missing or deleted',
+  '已载入转录结果，可校对': 'Transcription loaded for proofing',
+
   '桌面引擎就绪': 'Desktop engine ready',
   '请使用桌面版': 'Please use desktop app',
   '释放以上传': 'Release to upload',

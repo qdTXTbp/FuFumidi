@@ -16,9 +16,9 @@ FuFumidi is a fully offline desktop workstation for MIDI. It targets musicians, 
 
 The application is packaged as a classic Electron desktop app with a modern Vue 3 + TypeScript renderer, a bundled Python transcriber/runtime, and an optional Rust core. All audio, model weights and inference execute locally; transcription and editing never upload anything. Only when you opt in to cloud sync does your playlist and MIDI library get uploaded to your own cloud account.
 
-Current release line: **6.3.0** ([release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v6.3.0), stable channel; test builds are published under the [beta](https://github.com/qdTXTbp/FuFumidi/releases/tag/beta) tag).
+Current release line: **6.3.1** ([release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v6.3.1), stable channel; test builds are published under the [beta](https://github.com/qdTXTbp/FuFumidi/releases/tag/beta) tag).
 
-What's new in 6.3.0: note audition, multi-note dragging/snap, preserved transport and loop after edits, fixed logic-editor/macro undo, and a single UI-scale source. 6.3.0: surface materials (native / glass / acrylic / mica / frosted / velvet), a third-party resources disclaimer, and a FuMiVoice download entry on the home page. 6.2.9: the task center now reaches a real terminal state after completion, with filtering, search, history and result opening; the appearance drawer is consolidated into Theme / Wallpaper / Display tabs with one wallpaper source and apply target; local Wallpaper Engine projects can be scanned and rendered in-app (Scene / Web / Video), including the note-waterfall background; and transcription time estimates use the model window length plus measured per-window timing. 6.2.8 fixed long-audio Large-model progress, preserved the user's model selection when starting a queue, restored queue drag sorting, and corrected segmented tagger propagation. See the [release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v6.2.9) for details.
+What's new in 6.3.1: note audition, multi-note dragging and grid snap, preserved transport/loop after edits, logic-editor and macro undo fixes, a single UI-scale source, a redesigned scrollable song-tab bar (pin/group/overflow), arrangement clips in playback, internal CC7/CC11/CC64 and pitch bend, cross-measure MusicXML ties, a 32MB undo budget with action labels, core keyboard/dialog accessibility, a 596MB installer (down from 712MB), main-process file logs, and empty-catch CI gate. 6.3.1 also includes six surface materials, a third-party-resources disclaimer, and the FuMiVoice download entry. See the [6.3.1 release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v6.3.1) for details.
 
 ### What it does
 
@@ -105,8 +105,8 @@ The tuning workbench lets you **pick a MIDI directly from your existing music li
 
 The editor is the largest single surface of the application.
 
-- Piano roll with pencil, select and eraser tools, plus snap-to-grid from off up to 1/32.
-- Undo and redo on full track snapshots, so multi-track operations can be rolled back in one step.
+- Piano roll with pencil, select and eraser tools, snap-to-grid from off up to 1/32, click-to-audition and multi-note dragging.
+- Undo and redo on full track snapshots with a 32MB/80-step budget, action labels and a size/time history panel.
 - Note-edge stretching for independent start and length edits.
 - A velocity curve editor with envelope drawing over a selected range.
 - CC automation lanes for CC1 (modulation), CC7 (velocity), CC10 (pan), CC11 (expression) and CC64 (sustain), each drawable with a freehand, line or curve brush.

@@ -16,9 +16,9 @@ FuFumidi 是一款完全离线的 MIDI 桌面工作站，面向音乐人、编�
 
 应用基于 Electron 桌面壳 + Vue 3 + TypeScript 渲染层 + 内置 Python 转录运行时，并提供可选的原生 Rust 核心以加速曲库的批量操作。所有音频、模型权重与推理都在本地执行，转录与编辑全程不上传任何数据；只有在你自己开启云同步（可选）时，才会把歌单与 MIDI 曲目上传到你自己的云端账号。
 
-当前版本线：**6.3.0**（[发布说明](https://github.com/qdTXTbp/FuFumidi/releases/tag/v6.3.0)，正式版通道；测试版发布在 [beta](https://github.com/qdTXTbp/FuFumidi/releases/tag/beta) 标签下）。
+当前版本线：**6.3.1**（[发布说明](https://github.com/qdTXTbp/FuFumidi/releases/tag/v6.3.1)，正式版通道；测试版发布在 [beta](https://github.com/qdTXTbp/FuFumidi/releases/tag/beta) 标签下）。
 
-6.3.0 要点：音符试听、多选拖动/吸附、编辑保持走带与循环、逻辑编辑器/宏撤销修复、界面缩放单一来源。6.3.0 要点：外观新增六档界面材质、关于页第三方资源免责声明、首页 FuMiVoice 手机版下载入口。6.2.9 要点：任务中心完成后进入真实终态，新增筛选、搜索、历史与输出操作；外观抽屉整合为主题 / 壁纸 / 显示三页，壁纸来源与应用目标统一；本地 Wallpaper Engine 项目可扫描并在应用内渲染（Scene / Web / Video），并支持音符瀑布背景；转录时长按模型窗口长度和实测单窗口耗时估算。6.2.8 修复长音频 Large 模型进度、开始队列时保留手动模型选择、恢复队列拖动排序，并修正分段标签模型的参数传递。详见 [6.2.9 发布说明](https://github.com/qdTXTbp/FuFumidi/releases/tag/v6.2.9)。
+6.3.1 要点：音符试听、多选拖动与网格吸附、编辑后保持走带/循环、逻辑编辑器与宏撤销修复、界面缩放单一来源；标签页升级为可滚动/固定/分组/全部标签；编排片段进入播放；内置合成器 CC7/CC11/CC64 与弯音；乐谱跨小节 tie；撤销 32MB 预算与动作标签；核心键盘/浮层可访问性；安装包 712MB→596MB；主进程文件日志与空 catch CI 门禁。另含六档界面材质、第三方资源免责声明与首页 FuMiVoice 入口。详见 [6.3.1 发布说明](https://github.com/qdTXTbp/FuFumidi/releases/tag/v6.3.1)。
 
 ### 核心能力
 
