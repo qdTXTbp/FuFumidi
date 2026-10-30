@@ -17,6 +17,7 @@ const CHANGELOG = {
     '转录 AB：试听原音频与转录 MIDI。',
     '编排片段静音（comping 最小子集）；Wallpaper Engine 预览图导出。',
     'VST3 渲染队列：插件/输入/输出顺序执行。',
+    'WE 录屏导出 5 秒 WebM；静态壁纸可设为 Windows 桌面。',
     'UI token 审计保持 0 基线（颜色/字号/圆角/间距）。',
   ],
   // 6.3.0：界面材质、免责声明、FuMiVoice 下载入口、编辑手感 P0。
