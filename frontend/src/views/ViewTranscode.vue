@@ -41,7 +41,7 @@ watch(() => route.query.tab, (v) => {
       </button>
     </div>
     <Transition name="group-tab" mode="out-in">
-      <KeepAlive><component :is="cur" /></KeepAlive>
+      <KeepAlive :max="2"><component :is="cur" /></KeepAlive>
     </Transition>
   </div>
 </template>

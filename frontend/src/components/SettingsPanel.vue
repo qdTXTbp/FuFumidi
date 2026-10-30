@@ -1924,7 +1924,7 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
   .sp-tr.best { background: color-mix(in srgb, var(--accent) 10%, transparent); }
   .sp-tr.dead { opacity: .55; }
   .sp-act { text-align: right; }
-  .sp-use { font-size: var(--fs-sm); padding: 2px 8px; border-radius: var(--r-sm); cursor: pointer;
+  .sp-use { font-size: var(--fs-sm); min-height: 28px; padding: 0 8px; border-radius: var(--r-sm); cursor: pointer;
             border: 1px solid var(--hairline); background: transparent; color: var(--ink); }
   .sp-use:disabled { opacity: .4; cursor: default; }
   .sp-empty { padding: 10px; font-size: var(--fs-sm); color: var(--text-soft); }

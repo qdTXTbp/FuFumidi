@@ -999,7 +999,7 @@ _endHold();
 
 <style scoped>
 /* 全局 Web 弹窗（与 SideBar/ViewEdit 的 ed-modal 一致） */
-.ed-modal-mask { position: fixed; inset: 0; background: rgba(10,10,10,0.35); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+.ed-modal-mask { position: fixed; inset: 0; background: rgba(10,10,10,0.35); display: flex; align-items: center; justify-content: center; z-index: var(--z-modal); }
 .ed-modal { width: min(380px, 92vw); background: var(--canvas); border-radius: var(--r-lg); box-shadow: 0 24px 64px rgba(16,24,40,0.2); padding: var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-3); }
 .ed-modal-head { display: flex; align-items: center; gap: var(--sp-3); font-size: var(--fs-lg); color: var(--ink); }
 .ed-modal-head b { font-size: var(--fs-lg); }
@@ -1012,7 +1012,7 @@ _endHold();
 .imp-pl-new { display: flex; gap: var(--sp-2); align-items: center; }
 
 /* GPU 安装常驻通知条 */
-.gpu-bar { position: fixed; right: 16px; bottom: calc(var(--playerbar-h) + 8px); z-index: 980; width: min(340px, 90vw);
+.gpu-bar { position: fixed; right: 16px; bottom: calc(var(--playerbar-h) + 8px); z-index: var(--z-float); width: min(340px, 90vw);
   display: flex; align-items: flex-start; gap: var(--sp-3); padding: var(--sp-3) var(--sp-4); border-radius: var(--r-md);
   background: var(--canvas, var(--surface)); border: 1px solid var(--border, rgba(0,0,0,.12));
   box-shadow: 0 12px 32px rgba(16,24,40,.18); cursor: pointer; }
@@ -1032,7 +1032,7 @@ _endHold();
 .gpu-bar-x:hover { background: var(--surface-muted, var(--surface-soft)); color: var(--ink, var(--ink)); }
 
 /* ===== 模型下载：顶部通知条 ===== */
-.dl-noti { position: fixed; top: 0; left: 50%; transform: translate(-50%, 0); z-index: 995;
+.dl-noti { position: fixed; top: 0; left: 50%; transform: translate(-50%, 0); z-index: var(--z-toast);
   display: flex; flex-direction: column; align-items: center; pointer-events: none;
   transition: transform var(--motion-slow) var(--ease-out); padding-bottom: var(--sp-3); }
 .dl-noti.peek { transform: translate(-50%, calc(-100% + 26px)); }   /* 上移露出 26px 细条 */

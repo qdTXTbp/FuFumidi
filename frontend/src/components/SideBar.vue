@@ -983,16 +983,16 @@ const showAuth = ref(false);
           <small>{{ rowSub(s) ? rowSub(s) + ' · ' : '' }}{{ s.song ? s.song.tracks.length : (s.meta.tracks || '—') }} {{ t(' 轨 · ') }} {{ (s.meta.size / 1024).toFixed(0) }} KB<span v-if="fmtDur(s)"> · {{ fmtDur(s) }}</span></small>
         </div>
         <div class="si-tools" v-if="!playlist.batchOn">
-          <button class="icon-btn heart" :class="{ on: isFav(s.id) }" style="width:26px;height:26px;font-size:var(--fs-md)" :title="t('收藏')" :aria-label="t('收藏')" @click.stop="toggleFav(s.id)">
+          <button class="icon-btn heart" :class="{ on: isFav(s.id) }" style="width:28px;height:28px;font-size:var(--fs-md)" :title="t('收藏')" :aria-label="t('收藏')" @click.stop="toggleFav(s.id)">
             <Icon :name="isFav(s.id) ? 'heart' : 'heart-o'" :size="14" />
           </button>
-          <button class="icon-btn" style="width:26px;height:26px;font-size:var(--fs-md)" :title="t('添加到歌单')" :aria-label="t('添加到歌单')" @click.stop="openAddToPl(s.id)">
+          <button class="icon-btn" style="width:28px;height:28px;font-size:var(--fs-md)" :title="t('添加到歌单')" :aria-label="t('添加到歌单')" @click.stop="openAddToPl(s.id)">
             <Icon name="plus" :size="14" />
           </button>
-          <button class="icon-btn" style="width:26px;height:26px;font-size:var(--fs-md)" :title="t('编辑信息（重命名 / 艺术家 / 专辑 / 流派 / 标签）')" :aria-label="t('编辑信息')" @click.stop="openInfo(s)">
+          <button class="icon-btn" style="width:28px;height:28px;font-size:var(--fs-md)" :title="t('编辑信息（重命名 / 艺术家 / 专辑 / 流派 / 标签）')" :aria-label="t('编辑信息')" @click.stop="openInfo(s)">
             <Icon name="pencil" :size="13" />
           </button>
-          <button class="icon-btn" style="width:26px;height:26px;font-size:var(--fs-md)" :title="isFavView ? t('取消收藏') : (isVirtualView ? t('删除（含本地文件）') : t('从歌单移除'))" :aria-label="t('移除')" @click.stop="isFavView ? toggleFav(s.id) : (isVirtualView ? songDelete(s) : songRemove(s))">
+          <button class="icon-btn" style="width:28px;height:28px;font-size:var(--fs-md)" :title="isFavView ? t('取消收藏') : (isVirtualView ? t('删除（含本地文件）') : t('从歌单移除'))" :aria-label="t('移除')" @click.stop="isFavView ? toggleFav(s.id) : (isVirtualView ? songDelete(s) : songRemove(s))">
             <Icon name="trash" :size="14" />
           </button>
         </div>

@@ -993,7 +993,7 @@ onBeforeUnmount(() => {
 .zoom-fab { display: inline-flex; align-items: center; gap: 2px; }
 .zf-pct { font-size: var(--fs-xs); color: var(--stone); min-width: 40px; text-align: center; font-variant-numeric: tabular-nums; }
 .score-pop {
-  position: absolute; top: calc(100% + 6px); right: 10px; z-index: 60;
+  position: absolute; top: calc(100% + 6px); right: 10px; z-index: var(--z-ctx);
   background: var(--canvas); border: 1px solid var(--hairline);
   border-radius: var(--r-md); box-shadow: var(--shadow);
   padding: 10px 12px; display: flex; flex-direction: column; gap: var(--sp-2);
@@ -1048,7 +1048,7 @@ onBeforeUnmount(() => {
 
 /* 分页预览弹窗 */
 .pv-overlay {
-  position: fixed; inset: 0; z-index: 90;
+  position: fixed; inset: 0; z-index: var(--z-modal);
   background: rgba(10, 10, 10, 0.28);
   display: flex; align-items: center; justify-content: center;
   padding: 30px;

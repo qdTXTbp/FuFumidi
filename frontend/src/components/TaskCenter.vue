@@ -231,13 +231,13 @@ function iconOf(k) { return KIND_ICON[k] || 'task'; }
 
 <style scoped>
 /* ===== 6.2.0 悬浮球：可拖动 / 贴边隐藏 ===== */
-.task-center { position: fixed; z-index: 60; }
+.task-center { position: fixed; z-index: var(--z-overlay); }
 .tc-fab { position: relative; display: flex; align-items: center; justify-content: center; width: 38px; height: 38px; border-radius: var(--r-pill); border: 1px solid color-mix(in srgb, var(--accent-sky) 22%, var(--hairline)); background: color-mix(in srgb, var(--surface) 88%, transparent); color: var(--text2); cursor: grab; touch-action: none; user-select: none; box-shadow: 0 8px 22px rgba(0,0,0,.22); backdrop-filter: blur(10px); transition: border-color var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out); }
 .tc-fab:hover { color: var(--accent-sky); border-color: color-mix(in srgb, var(--accent-sky) 42%, var(--hairline)); }
 .tc-fab:active, .tc-fab.dragging { cursor: grabbing; box-shadow: 0 12px 30px rgba(0,0,0,.3); }
 .tc-fab.on { color: var(--accent-sky); border-color: color-mix(in srgb, var(--accent-sky) 46%, var(--hairline)); }
 .tc-badge { position: absolute; top: -5px; right: -5px; min-width: 16px; height: 16px; padding: 0 var(--sp-1); border-radius: var(--r-sm); background: var(--accent-sapphire); color: var(--on-sapphire); font-size: var(--fs-xs); line-height: 16px; text-align: center; }
-.tc-edge { position: fixed; z-index: 60; width: 26px; height: 52px; display: flex; align-items: center; justify-content: center; border: 0; background: color-mix(in srgb, var(--surface) 82%, transparent); color: var(--text2); cursor: pointer; box-shadow: 0 8px 22px rgba(0,0,0,.16); backdrop-filter: blur(10px); }
+.tc-edge { position: fixed; z-index: var(--z-overlay); width: 26px; height: 52px; display: flex; align-items: center; justify-content: center; border: 0; background: color-mix(in srgb, var(--surface) 82%, transparent); color: var(--text2); cursor: pointer; box-shadow: 0 8px 22px rgba(0,0,0,.16); backdrop-filter: blur(10px); }
 .tc-edge.left { left: 64px; border-radius: 0 var(--r-lg) var(--r-lg) 0; border-right: 1px solid var(--hairline); }
 .tc-edge.right { right: 0; border-radius: var(--r-lg) 0 0 var(--r-lg); border-left: 1px solid var(--hairline); }
 .tc-edge:hover { color: var(--accent-sky); }

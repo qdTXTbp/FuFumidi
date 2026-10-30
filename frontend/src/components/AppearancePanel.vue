@@ -269,7 +269,7 @@ onMounted(async () => {
 .ap-wp-actions { display: flex; gap: var(--sp-2); margin-top: var(--sp-2); flex-wrap: wrap; }
 .ap-row { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); margin-top: var(--sp-3); font-size: var(--fs-sm); color: var(--text2); }
 .ap-seg { display: inline-flex; padding: 2px; border: 1px solid var(--hairline); border-radius: var(--r-sm); background: var(--surface-soft); }
-.ap-seg button { border: 0; background: transparent; color: var(--text3); padding: 3px var(--sp-2); border-radius: var(--r-xs); font-size: var(--fs-xs); cursor: pointer; }
+.ap-seg button { border: 0; background: transparent; color: var(--text3); min-height: 28px; padding: 0 var(--sp-2); border-radius: var(--r-xs); font-size: var(--fs-xs); cursor: pointer; }
 .ap-seg button.on { background: var(--surface); color: var(--text); }
 .ap-slider { margin-top: var(--sp-3); }
 .ap-slider label { display: flex; align-items: center; justify-content: space-between; color: var(--text2); font-size: var(--fs-sm); }

@@ -3291,7 +3291,7 @@ onBeforeUnmount(() => {
 .ed-toolbar::-webkit-scrollbar { display: none; }
 .ed-view-switch { background: var(--surface-soft); border-radius: var(--r-md); padding: 2px; gap: 2px; }
 /* 分段控件内按钮压到 22px，加上 2px 内边距后整组正好 26px，与同排按钮同高同基线 */
-.ed-view-switch .et-btn { height: 22px; min-height: 22px; padding: 0 10px; }
+.ed-view-switch .et-btn { height: 28px; min-height: 28px; padding: 0 10px; }
 .ed-main { display: flex; gap: var(--sp-3); flex: 1; min-height: 0; }
 .ed-insp { width: var(--inspector-w); flex: none; display: flex; flex-direction: column; gap: var(--sp-2); overflow-y: auto; }
 /* 检查器与舞台之间的拖拽分隔条 */
@@ -3327,7 +3327,7 @@ onBeforeUnmount(() => {
 .et-group { display: flex; align-items: center; gap: var(--sp-1); }
 /* 统一 26px 基准高度：原先分段控件（padding 2px + 26px 按钮 = 30px）比同排按钮高 2px，
    是「功能栏错位」的直接原因 */
-.et-btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-1); height: 26px; min-height: 26px; padding: 0 9px; border: 1px solid transparent; border-radius: var(--r-md); background: transparent; font-size: var(--fs-sm); line-height: 1; white-space: nowrap; color: var(--slate); cursor: pointer; transition: background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out); }
+.et-btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-1); height: 28px; min-height: 28px; padding: 0 9px; border: 1px solid transparent; border-radius: var(--r-md); background: transparent; font-size: var(--fs-sm); line-height: 1; white-space: nowrap; color: var(--slate); cursor: pointer; transition: background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out); }
 .et-btn:hover { background: var(--surface-soft); color: var(--ink); }
 .et-btn.active { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .et-btn.danger { color: var(--error); }
@@ -3485,7 +3485,7 @@ onBeforeUnmount(() => {
 .ps-chip.on { background: var(--accent); color: var(--on-accent); }
 /* 上下文任务条：选中后原地出现高频操作。高度固定 32px，不随选择状态抖动 */
 .ed-taskbar { display: flex; align-items: center; gap: var(--sp-1); flex-wrap: nowrap; overflow-x: auto; flex: none; padding: 4px 8px; margin-bottom: 6px; min-height: 34px; }
-.ed-taskbar .et-btn { height: 24px; min-height: 24px; padding: 0 8px; font-size: var(--fs-sm); }
+.ed-taskbar .et-btn { height: 28px; min-height: 28px; padding: 0 8px; font-size: var(--fs-sm); }
 .ed-step-group .select-input { height: 24px; padding: 0 22px 0 7px; font-size: var(--fs-sm); }
 .ed-step-pos { font-family: var(--mono); font-size: var(--fs-xs); color: var(--ink); min-width: 34px; text-align: center; }
 /* 鼓组命名表：两列、行高压到 24px，一屏看全 30 个音 */

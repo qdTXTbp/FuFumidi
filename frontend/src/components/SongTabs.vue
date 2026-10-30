@@ -300,7 +300,7 @@ watch(() => store.tabs.length, () => nextTick(() => { updateArrows(); ensureActi
 .st-pin { flex: none; color: var(--accent-sky); }
 .st-lock { flex: none; font-size: 9px; color: var(--text3); opacity: .7; }
 .st-group { max-width: 40px; padding: 0 3px; border: 1px solid; border-radius: var(--r-sm); font-size: 9px; line-height: 14px; background: transparent; }
-.st-close { width: 20px; height: 20px; opacity: .55; }
+.st-close { width: 24px; height: 24px; opacity: .55; }
 .st-close:hover { background: color-mix(in srgb, var(--accent-red) 18%, var(--surface-soft)); color: var(--text); }
 .st-arrow { width: 22px; height: 26px; border: 1px solid transparent; border-radius: var(--r-sm); background: transparent; color: var(--text3); display: grid; place-items: center; flex: none; cursor: pointer; }
 .st-arrow:hover:not(:disabled) { color: var(--accent-sky); border-color: var(--hairline); background: var(--surface-soft); }
