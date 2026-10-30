@@ -24,4 +24,4 @@
 
 ## 当前决定
 
-本轮不冒险切 Electron：先把 6.3.1 的编辑/转录/乐谱功能收口。升级按 37.x 单独分支验证，避免把 UI 回归和运行时升级混在一起。
+已在 feat/electron37 分支实际升级到 37.10.3：源码模式启动首页正常、版本 6.3.1、npm test/typecheck/build:ui 通过。完整安装包仍等验收后构建，再做 webwallgl/printToPDF/WE 的真机回归。
