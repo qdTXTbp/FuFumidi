@@ -16,9 +16,9 @@ FuFumidi is a fully offline desktop workstation for MIDI. It targets musicians, 
 
 The application is packaged as a classic Electron desktop app with a modern Vue 3 + TypeScript renderer, a bundled Python transcriber/runtime, and an optional Rust core. All audio, model weights and inference execute locally; transcription and editing never upload anything. Only when you opt in to cloud sync does your playlist and MIDI library get uploaded to your own cloud account.
 
-Current release line: **6.2.2** ([release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v6.2.2), stable channel; test builds are published under the [beta](https://github.com/qdTXTbp/FuFumidi/releases/tag/beta) tag).
+Current release line: **6.3.0** ([release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v6.3.0), stable channel; test builds are published under the [beta](https://github.com/qdTXTbp/FuFumidi/releases/tag/beta) tag).
 
-What's new in 6.2.2: task center now shows running transcription/export jobs and can cancel them, score PNG/PDF exports are white A4 score pages with a rebuilt paginated preview, the waterfall background lives in the Wallpaper section with an app/waterfall target toggle, and resource tabs are unified. 6.2.1 brought the plugin center now lives in Resources with a rebuilt store/installed UI, the score page lost its title card and moved every action into the toolbar, the task-center ball can be dragged and tucked into either side, and sound effects default to 100%. 6.2.0 also brought the whole shell has been rebuilt around the FuFumidi brand — a five-entry left rail, song tabs in the top bar, a unified appearance drawer (themes, accent colour, static/dynamic wallpaper library, font size, density, UI scale, language and reduced motion), a chapter-based onboarding guide, and one consolidated wallpaper library with online search, direct-URL download and linked external folders. Navigation is regrouped: **Music** now holds playback, visualization and score; **Workspace** holds edit, lyrics, analysis and arrangement. The editor gained a compact draggable advanced-tools panel, and arrangement double-click now focuses the exact track by ID. All page-title stickers, black bars and wallpaper scrim/vignette overlays were removed. See the [release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v6.2.0) for details.
+What's new in 6.3.0: note audition, multi-note dragging and grid snap, preserved transport/loop after edits, logic-editor and macro undo fixes, a single UI-scale source, a redesigned scrollable song-tab bar (pin/group/overflow), arrangement clips in playback, internal CC7/CC11/CC64 and pitch bend, cross-measure MusicXML ties, a 32MB undo budget with action labels, core keyboard/dialog accessibility, a 596MB installer (down from 712MB), main-process file logs, and empty-catch CI gate. 6.3.0 also includes six surface materials, a third-party-resources disclaimer, and the FuMiVoice download entry. See the [6.3.0 release notes](https://github.com/qdTXTbp/FuFumidi/releases/tag/v6.3.0) for details.
 
 ### What it does
 
@@ -105,8 +105,8 @@ The tuning workbench lets you **pick a MIDI directly from your existing music li
 
 The editor is the largest single surface of the application.
 
-- Piano roll with pencil, select and eraser tools, plus snap-to-grid from off up to 1/32.
-- Undo and redo on full track snapshots, so multi-track operations can be rolled back in one step.
+- Piano roll with pencil, select and eraser tools, snap-to-grid from off up to 1/32, click-to-audition and multi-note dragging.
+- Undo and redo on full track snapshots with a 32MB/80-step budget, action labels and a size/time history panel.
 - Note-edge stretching for independent start and length edits.
 - A velocity curve editor with envelope drawing over a selected range.
 - CC automation lanes for CC1 (modulation), CC7 (velocity), CC10 (pan), CC11 (expression) and CC64 (sustain), each drawable with a freehand, line or curve brush.
