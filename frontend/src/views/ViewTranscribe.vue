@@ -9,7 +9,7 @@ import { clamp, esc, fmtTime } from '../core/util.js';
 import { t } from '../core/i18n.js';
 import { playDoneChime } from '../core/sfx.js';
 import NumSlider from '../components/NumSlider.vue';
-import { parseMidi, buildSong } from '../core/midi.js';
+import { parseMidi, buildSong, encodeMidi } from '../core/midi.js';
 
 const app = useAppStore();
 const playlist = usePlaylistStore();
@@ -1834,6 +1834,27 @@ async function analyzeQuality(path) {
     for (const [, d] of ev) { active += d; if (active > maxPoly) maxPoly = active; }
     quality.value = { notes: notes.length, tracks: song.tracks.filter((tr) => (tr.notes || []).length).length, sec: song.totalSec, longNotes, maxPoly };
   } catch (e) { quality.value = { error: String(e && e.message || e) }; }
+}
+/** 6.3.2：长音修复 —— 把超过 15 秒的音符截到 15 秒，写回原 MIDI。 */
+async function repairLongNotes() {
+  if (!lastOut.value || !quality.value || !quality.value.longNotes) return;
+  try {
+    const bytes = await bridge.readBinary(lastOut.value);
+    const song = buildSong(parseMidi(bytes));
+    let n = 0;
+    for (const tr of song.tracks) for (const note of tr.notes) {
+      if (song.baseSec(note.end) - song.baseSec(note.start) > 15) {
+        note.end = Math.max(note.start + 1, Math.round(song.secToTick(song.baseSec(note.start) + 15)));
+        n++;
+      }
+    }
+    if (!n) { toast(t('没有需要修剪的长音'), 'ok'); return; }
+    const out = encodeMidi(song.tracks.map((tr) => ({ name: tr.name, program: tr.program, ch: tr.ch, notes: tr.notes, ccs: tr.ccs || [] })), { division: song.tpb, tempoMap: song.tempoMap, sigMap: song.sigMap });
+    const r = await bridge.writeBinary(lastOut.value, Array.from(out));
+    if (!r || !r.ok) throw new Error((r && r.error) || 'write failed');
+    await analyzeQuality(lastOut.value);
+    toast(t('已修剪 ') + n + t(' 个超长音'), 'ok');
+  } catch (e) { toast(t('修剪失败：') + (e.message || e), 'warn'); }
 }
 async function openTranscribedForEdit() {
   if (!lastOut.value) return;

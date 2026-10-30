@@ -3021,6 +3021,12 @@ export const I18N_MAP = {
   '移调 +1': 'Transpose +1',
   '输出文件不存在或已被删除': 'Output file missing or deleted',
   '已载入转录结果，可校对': 'Transcription loaded for proofing',
+  '修剪长音': 'Trim long notes',
+  '没有需要修剪的长音': 'No long notes to trim',
+  '已修剪 ': 'Trimmed ',
+  ' 个超长音': ' long notes',
+  '修剪失败：': 'Trim failed: ',
+
 
   '桌面引擎就绪': 'Desktop engine ready',
   '请使用桌面版': 'Please use desktop app',

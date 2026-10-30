@@ -176,6 +176,10 @@ function registerDialogsIpc({ ipcMain, dialog, path, fs, app, spawnEngine }) {
   // 保存二进制（WAV / MIDI 导出）：原生保存对话框 → fs 写盘。
   // 绕开 Electron 33 失效的下载子系统：<a download> 经 will-download 的
   // preventDefault+setSavePath+resume 后下载会被 0 字节取消（blob/data/http 均如此）。
+  ipcMain.handle('file:writeBinary', async (_e, target, data) => {
+    try { await fs.promises.writeFile(target, Buffer.from(data)); return { ok: true }; }
+    catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+  });
   ipcMain.handle('file:saveBinary', async (_e, opts) => {
     try {
       const name = (opts && opts.name) || 'download.bin';
