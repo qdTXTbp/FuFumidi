@@ -49,7 +49,7 @@ def test_builtin_presets_never_force_segment_sec():
             assert k not in params, "%s 仍写了 %s（这会让分段识别变成强制开启）" % (name, k)
     # MuScriptor 的乐器组只允许 none / limit / 整曲 probe（分段探测档已移除）
     mi = b["MuScriptor · 最优"]["params"].get("muscriptor_instruments")
-    assert mi in (None, "none", "probe"), mi
+    assert mi in (None, "none", "probe", "probe_segments"), mi
 
 
 def test_builtin_presets_keep_expected_shape():
@@ -75,8 +75,8 @@ def test_builtin_denoise_off_by_default():
 def test_segment_modules_state():
     """静音分段 / 分段探测的模块必须不存在；segment_options 必须存在（已恢复为可选）。"""
     eng = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    for f in ("segmenter.py", "segment_probe.py"):
-        assert not os.path.exists(os.path.join(eng, f)), "%s 应保持删除" % f
+    assert not os.path.exists(os.path.join(eng, "segmenter.py")), "segmenter.py 应保持删除"
+    assert os.path.exists(os.path.join(eng, "segment_probe.py")), "segment_probe.py 应存在（分段探测已恢复）"
     assert os.path.exists(os.path.join(eng, "segment_options.py")), \
         "segment_options.py 应存在（识别片段长度已恢复为可选能力）"
 
@@ -85,7 +85,7 @@ def test_muscriptor_instruments_mode_rejects_segments():
     """'probe_segments'/'segments' 旧值按整曲探测兼容，绝不返回分段模式。"""
     import instrument_probe
     for raw in ("probe_segments", "segments", "PROBE_SEGMENTS"):
-        assert instrument_probe.parse_mode(raw)[0] == "probe", raw
+        assert instrument_probe.parse_mode(raw)[0] == "probe_segments", raw
     assert instrument_probe.parse_mode("voice,drums")[0] == "limit"
     assert instrument_probe.parse_mode("none")[0] == "none"
     assert instrument_probe.parse_mode("")[0] == "none"

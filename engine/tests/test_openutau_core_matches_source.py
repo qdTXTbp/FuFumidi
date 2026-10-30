@@ -11,6 +11,7 @@
 """
 
 import math
+import pytest
 import os
 import re
 import sys
@@ -25,6 +26,8 @@ if ENGINE not in sys.path:
 REF = os.environ.get('OPENUTAU_REF') or r'D:/FuFuMIDI/_ref/OpenUtau/OpenUtau.Core'
 #: 参考仓库根目录（预编译的 `runtimes/*/native/worldline.dll` 在这里）
 REF_ROOT = os.path.dirname(REF)
+PLUGIN_REF = os.path.join(os.path.dirname(REF), 'OpenUtau.Plugin.Builtin')
+needs_plugin_ref = pytest.mark.skipif(not os.path.isdir(PLUGIN_REF), reason='OpenUtau.Plugin.Builtin 参考源码不在')
 
 from singing.openutau import (  # noqa: E402
     NAME_IN_OCTAVE, Wave, CubicSplineSegment, CurveSource, IRenderer, MusicMath, NoteSource,
@@ -5688,6 +5691,7 @@ def test_phonemizers_against_real_singer():
         ph.singer = ph._saved
 
 
+@needs_plugin_ref
 def test_japanese_cvvc_phonemizer():
     """`Plugin.Builtin/JapaneseCVVCPhonemizer.cs` —— 三张表 + VC 插入。"""
     from singing.openutau import Note, PhonemeAttributes, registered
@@ -6103,6 +6107,7 @@ def _mk_mono(queries=None, vowels=(), glides=(), fallbacks=None, aliases=None):
     return ph
 
 
+@needs_plugin_ref
 def test_phoneme_based_phonemizer():
     """`PhonemeBasedPhonemizer` + `MonophonePhonemizer` —— 音素驱动那条基类线。"""
     from singing.openutau import Note, PhonemeAttributes, registered
@@ -6410,6 +6415,7 @@ def test_chinese_cvv_phonemizer():
           'got %r' % [p.phoneme for p in r3.phonemes])
 
 
+@needs_plugin_ref
 def test_arpabet_g2p_and_latin_diphone():
     """`G2p/ArpabetG2p.cs` + `LatinDiphonePhonemizer.cs`。"""
     from singing.openutau import Note
@@ -7451,6 +7457,7 @@ def test_syllable_based_phonemizer():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+@needs_plugin_ref
 def test_french_vccv_phonemizer():
     """`Plugin.Builtin/FrenchVCCVPhonemizer.cs`（294 行）—— `SyllableBased` 基类的
     **第一个真实用户**：覆盖 GetVowels/GetConsonants/GetDictionaryName/ProcessSyllable/
@@ -7673,6 +7680,7 @@ def test_french_vccv_phonemizer():
           'got %r' % [p.phoneme for p in r6b.phonemes])
 
 
+@needs_plugin_ref
 def test_french_cvvc_phonemizer():
     """`Plugin.Builtin/FrenchCVVCPhonemizer.cs`（757 行）—— `SyllableBased` 基类的
     **第二个真实用户**：同法语家族，验证更复杂的 `CheckAliasFormatting` / `ValidateAlias`
@@ -7918,6 +7926,7 @@ def test_french_cvvc_phonemizer():
           'got %r' % [p.phoneme for p in r6b.phonemes])
 
 
+@needs_plugin_ref
 def test_turkish_cvvc_phonemizer():
     """`Plugin.Builtin/TurkishCVVCPhonemizer.cs`（356 行）—— **直接继承 `Phonemizer`**，
     自己实现歌词分段、VC 边界计算与 oto 查询。零外部依赖。
@@ -8090,6 +8099,7 @@ def test_turkish_cvvc_phonemizer():
           [p.phoneme for p in r5.phonemes] == ['hello'])
 
 
+@needs_plugin_ref
 def test_arpasing_phonemizer():
     """`Plugin.Builtin/ArpasingPhonemizer.cs`（62 行）+ `Data/arpasing.template.yaml`。
 
@@ -8258,6 +8268,7 @@ def _workflow_project(tmp):
     return project, track, part, src
 
 
+@needs_plugin_ref
 def test_cantonese_cvvc_phonemizer():
     """`Plugin.Builtin/CantoneseCVVCPhonemizer.cs`（18 行）—— 粤语 CVVC。
 
@@ -8329,6 +8340,7 @@ def test_cantonese_cvvc_phonemizer():
         check('YUE CVVC.Romanize: 无粤拼表时原样返回 / 有表时不抛异常', False, repr(e))
 
 
+@needs_plugin_ref
 def test_cantonese_syo_phonemizer():
     """`Plugin.Builtin/CantoneseSyoPhonemizer.cs`（358 行）—— 粤语 Syo 式。
 
@@ -8460,6 +8472,7 @@ def test_cantonese_syo_phonemizer():
           _unpack(r6)[0] == ('- gwong', 0), 'got %r' % _unpack(r6))
 
 
+@needs_plugin_ref
 def test_chinese_cvv_plus_phonemizer():
     """`Plugin.Builtin/ChineseCVVPlusPhonemizer.cs`（374 行）—— 中文 CVV+。
 
