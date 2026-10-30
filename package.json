@@ -72,7 +72,7 @@
     "webwallgl": "^3.0.0"
   },
   "devDependencies": {
-    "electron": "33.4.11",
+    "electron": "^37.10.3",
     "electron-builder": "^26.15.3"
   }
 }
