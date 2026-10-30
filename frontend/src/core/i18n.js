@@ -3038,6 +3038,7 @@ export const I18N_MAP = {
   '分谱导出失败': 'Part export failed',
   '分谱导出失败：': 'Part export failed: ',
   '当前环境不支持导出': 'Export is not supported in this environment',
+  'Large 1.3B 是离线转录里最慢的一档：5 秒一段串行生成，3 分钟音频可能等十几到几十分钟；追求速度建议 Medium 300M，质量优先再选 Large。': 'Large 1.3B is the slowest offline option: one 5-second chunk at a time, a 3-minute track can take tens of minutes. Prefer Medium 300M for speed; choose Large only for maximum quality.',
 
 
 

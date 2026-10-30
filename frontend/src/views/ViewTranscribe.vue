@@ -2237,6 +2237,7 @@ onBeforeUnmount(() => {
           <button class="fu-ctl tr-pill" :class="{ active: msSize === 'large' }" @click="msSize = 'large'">Large · 1.3B<i v-if="modelInstalled('muscriptor_large') !== null" class="fu-badge ms-badge" :class="modelInstalled('muscriptor_large') ? 'ok' : 'miss'">{{ modelInstalled('muscriptor_large') ? t('已下载') : t('未下载') }}</i></button>
         </div>
         <div class="tr-perf-hint" v-if="umodel === 'muscriptor'">{{ t('未下载时请到资源中心 → 模型文件 按规格下载') }}</div>
+        <div class="tr-perf-hint tr-warn" v-if="umodel === 'muscriptor' && msSize === 'large'">{{ t('Large 1.3B 是离线转录里最慢的一档：5 秒一段串行生成，3 分钟音频可能等十几到几十分钟；追求速度建议 Medium 300M，质量优先再选 Large。') }}</div>
         <div class="tr-perf-hint" v-if="umodel === 'yourmt3'">{{ t('YourMT3+ 需先到资源中心下载运行时+权重（约 400 MB）') }}</div>
         <div class="tr-perf-hint" v-if="umodel === 'miros'">{{ t('MIROS 需先到资源中心下载运行时+权重（约 6 GB）') }}</div>
       </div>
