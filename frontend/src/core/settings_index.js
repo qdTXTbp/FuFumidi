@@ -10,13 +10,13 @@
  * @typedef {{id:string, tab:string, label:string, hint?:string, aliases?:string[]}} SettingEntry
  */
 export const SETTINGS_INDEX = [
-  { id: 'theme', tab: 'appearance', label: '界面模式', hint: '浅色 / 深色 / 跟随系统', aliases: ['主题', '暗色', '深色', '夜间模式', 'theme', 'dark'] },
-  { id: 'accent', tab: 'appearance', label: '强调色', hint: '按钮与高亮颜色', aliases: ['主题色', 'accent', '颜色'] },
-  { id: 'font_size', tab: 'appearance', label: '字号', hint: '界面文字大小', aliases: ['字小', '字大', '字体大小', '字号大小', 'font'] },
-  { id: 'density', tab: 'appearance', label: '信息密度', hint: '紧凑 / 舒适 / 宽松', aliases: ['紧凑', '间距', 'density'] },
-  { id: 'ui_scale', tab: 'appearance', label: '界面缩放', hint: '整体 UI 缩放（0.9 ~ 1.3）', aliases: ['缩放', '放大界面', 'zoom', 'scale'] },
-  { id: 'wallpaper', tab: 'appearance', label: '动态壁纸', hint: '自定义壁纸与开关', aliases: ['壁纸', '背景', 'wallpaper'] },
-  { id: 'lang', tab: 'appearance', label: '语言', hint: '界面语言（中文 / English / 日本語）', aliases: ['language', 'english', '日本語'] },
+
+
+
+
+
+
+
   { id: 'engine_mode', tab: 'feature', label: '默认引擎模式', hint: '转录新音频时默认使用的识别引擎', aliases: ['识别引擎', 'basic_pitch', 'piano', 'demucs', '模型'] },
   { id: 'perf_mode', tab: 'feature', label: '默认性能模式', hint: '最高质量 / 均衡 / 低配省资源', aliases: ['性能', 'CPU', '省资源', 'perf'] },
   { id: 'output_dir', tab: 'feature', label: '默认输出目录', hint: '转录结果的保存位置', aliases: ['保存目录', '导出目录', 'output', '路径'] },

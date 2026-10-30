@@ -55,7 +55,6 @@ onMounted(() => { void hkLoad(); window.addEventListener('keydown', hkOnKeydown,
 const TABS = computed(() => [
   { id: 'sound', label: t('音效'), icon: 'volume' },
   { id: 'gpu', label: 'GPU', icon: 'zap' },
-  { id: 'appearance', label: t('外观'), icon: 'palette' },
   { id: 'feature', label: t('功能'), icon: 'folder' },
   { id: 'keys', label: t('快捷键'), icon: 'kbd' },
   { id: 'cloud', label: t('云同步'), icon: 'cloud' },
@@ -68,7 +67,6 @@ const tab = ref('feature');
 const searchQuery = ref('');
 const searchHits = computed(() => (searchQuery.value.trim() ? searchSettings(searchQuery.value, 8) : []));
 let setFlashTimer = 0;
-function openAppearancePanel() { state.ui.settingsOpen = false; state.ui.appearanceOpen = true; }
 async function gotoSetting(e) {
   if (!e) return;
   searchQuery.value = '';
@@ -1242,7 +1240,6 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
       <div class="settings-head">
         <Icon name="gear" :size="17" />
         <span class="settings-title">{{ t('应用设置') }}</span>
-        <button class="btn sm ghost" :title="t('打开专门的外观页')" @click="openAppearancePanel"><Icon name="palette" :size="13" /> {{ t('外观') }}</button>
         <!-- P1-14 B4：设置搜索 -->
         <div class="settings-search">
           <Icon name="search" :size="13" />
@@ -1285,11 +1282,6 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
 
       <div class="settings-body">
         <div v-if="tab === 'sound'"><SoundSettings /></div>
-        <!-- ============ 外观（唯一入口转发） ============ -->
-        <div v-else-if="tab === 'appearance'" class="appearance-redirect">
-          <p class="ov-note">{{ t('主题、壁纸、界面材质、字号、密度、缩放与语言已统一到外观面板，设置里不再保留第二套控件。') }}</p>
-          <button class="btn primary" @click="openAppearancePanel">{{ t('打开外观面板') }}</button>
-        </div>
 
         <!-- ============ GPU 加速 ============ -->
         <div v-else-if="tab === 'gpu'">
@@ -1893,7 +1885,6 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
 </template>
 
 <style scoped>
-.appearance-redirect { display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-3); padding: var(--sp-3) 0; }
 </style>
 <style scoped>
 /* ---- 操作系统级全局热键（用户自己录制） ---- */
