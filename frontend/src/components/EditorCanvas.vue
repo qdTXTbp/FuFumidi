@@ -856,6 +856,8 @@ function draw() {
   const scaleSet = props.colorMode === 'scale' ? constrainPcsAt(null) : null;
   // 跨轨编辑：参与的轨道都按本色画并可选，其余仍旧压灰（保持「在编辑哪几条轨」的层级）
   const editIdx = new Set(editTrackList().map((x) => x.index));
+  // 大工程 LOD：缩到很小时只画中高力度音符，静音/轻力度音符留到放大后；选中项始终保留。
+  const lod = rowH.value < 3 || pxPerTick.value < 0.02;
   for (const tr of s.tracks) {
     const col = noteColor(tr.index, pal);
     const ns = tr.notes;
@@ -874,6 +876,7 @@ function draw() {
       const y = (hi - n.midi) * rowH.value;
       if (x > W || x + w2 < 0) continue;
       const sel = inEdit && selection.has(n);
+      if (lod && !sel && n.vel < 56) continue;
       // 着色方案：非当前轨道一律灰（保持「正在编辑哪条轨」的视觉层级）
       let fill = steel;
       if (inEdit) {

@@ -2800,6 +2800,20 @@ onBeforeUnmount(() => {
                       @select="refreshSel" @modify="onModified" @zoom="onZoom" @ctxmenu="openCtxMenu" @hover="onHover" @step="onStep"
                       :step-on="stepOn" :step-ticks="stepTicks" :edit-tracks="editTracks"
                       :underlay="underlayProp" />
+        <div v-if="sel.count" class="sel-bar" role="toolbar" aria-label="选区操作">
+          <span class="sel-bar-n">{{ sel.count }}{{ t(' 个') }}</span>
+          <button class="sel-bar-btn" :title="t('移调 -1')" @click="trDown">−1</button>
+          <button class="sel-bar-btn" :title="t('移调 +1')" @click="trUp">+1</button>
+          <button class="sel-bar-btn" :title="t('降八度')" @click="octDown">−8</button>
+          <button class="sel-bar-btn" :title="t('升八度')" @click="octUp">+8</button>
+          <span class="sel-bar-sep"></span>
+          <button class="sel-bar-btn" :title="t('力度 -5')" @click="velDown">v−</button>
+          <button class="sel-bar-btn" :title="t('力度 +5')" @click="velUp">v+</button>
+          <span class="sel-bar-sep"></span>
+          <button class="sel-bar-btn" :title="t('量化到吸附网格')" @click="quantize">{{ t('量化') }}</button>
+          <button class="sel-bar-btn" :title="t('克隆')" @click="dup">{{ t('克隆') }}</button>
+          <button class="sel-bar-btn danger" :title="t('删除 Del')" @click="del"><Icon name="trash" :size="12" /></button>
+        </div>
         <video ref="videoEl" v-if="videoUrl" :src="videoUrl" controls playsinline class="ed-video-overlay"></video>
         <!-- 悬停工具条（M3）：压到音符上就地出现，鼠标移到条上不消失 -->
         <div v-if="hoverInfo && !midiToolOpen" class="hv-bar" :style="hoverBarStyle"
@@ -3293,6 +3307,12 @@ onBeforeUnmount(() => {
 /* 分段控件内按钮压到 22px，加上 2px 内边距后整组正好 26px，与同排按钮同高同基线 */
 .ed-view-switch .et-btn { height: 28px; min-height: 28px; padding: 0 10px; }
 .ed-main { display: flex; gap: var(--sp-3); flex: 1; min-height: 0; }
+.sel-bar { position: absolute; left: 50%; top: 8px; transform: translateX(-50%); z-index: var(--z-float); display: flex; align-items: center; gap: 2px; padding: 3px 5px; border: 1px solid var(--hairline); border-radius: var(--r-md); background: var(--surface); box-shadow: var(--shadow); }
+.sel-bar-n { font-size: var(--fs-xs); color: var(--text3); padding: 0 4px; white-space: nowrap; }
+.sel-bar-btn { height: 24px; min-width: 24px; padding: 0 6px; border: 0; border-radius: var(--r-xs); background: transparent; color: var(--text2); font-size: var(--fs-xs); cursor: pointer; }
+.sel-bar-btn:hover { background: var(--surface-soft); color: var(--text); }
+.sel-bar-btn.danger { color: var(--t-err); }
+.sel-bar-sep { width: 1px; height: 14px; background: var(--hairline); margin: 0 2px; }
 .ed-insp { width: var(--inspector-w); flex: none; display: flex; flex-direction: column; gap: var(--sp-2); overflow-y: auto; }
 /* 检查器与舞台之间的拖拽分隔条 */
 .ed-split { flex: none; width: 7px; margin: 0 -4px; cursor: ew-resize; position: relative; touch-action: none; }
