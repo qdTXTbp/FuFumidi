@@ -131,7 +131,7 @@ function pathsFromLegacyJson(dir) {
       if (!st.isFile() || st.size > MAX_BYTES) continue;
     } catch (_) { continue; }
     n++;
-    try { collectPathStrings(JSON.parse(fs.readFileSync(p, 'utf8')), out, 0); } catch (_) {}
+    try { collectPathStrings(JSON.parse(fs.readFileSync(p, 'utf8')), out, 0); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
   }
   return out;
 }
@@ -227,10 +227,10 @@ function resolveRoot() {
     _rootFrom = picked.from;
     // 认领了历史目录：它是已存在的真实目录，标一个 ready 免得后续被当成「待迁移目标」
     if (picked.reason === 'adopted-previous' || picked.reason === 'user-data') {
-      try { markReady(_root); } catch (_) {}
+      try { markReady(_root); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
     } else if (picked.reason === 'install-dir' || picked.reason === 'configured') {
       // 全新安装：目录可能还不存在，这里建出来（等价于旧代码 writable() 的副作用）
-      try { ensure(_root); } catch (_) {}
+      try { ensure(_root); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
     }
     return _root;
   }
@@ -294,7 +294,7 @@ function discoveredRoots() {
 
 function at(...parts) { return path.join(resolveRoot(), ...parts); }
 
-function ensure(dir) { try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {} return dir; }
+function ensure(dir) { try { fs.mkdirSync(dir, { recursive: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } } return dir; }
 
 /* ---------------- 各功能区目录 ---------------- */
 
@@ -400,7 +400,7 @@ function markReady(dir) {
   try {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, READY_MARK), new Date().toISOString());
-  } catch (_) {}
+  } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
 }
 function dirSize(dir) {
   let total = 0;
@@ -412,7 +412,7 @@ function dirSize(dir) {
       try {
         if (it.isDirectory()) walk(p);
         else if (it.isFile()) total += fs.statSync(p).size;
-      } catch (_) {}
+      } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
     }
   };
   walk(dir);
@@ -436,7 +436,7 @@ async function dirSizeAsync(dir, budgetMs = 3000) {
       const p = path.join(d, it.name);
       if (it.isDirectory()) { await walk(p); continue; }
       if (!it.isFile()) continue;
-      try { total += (await fs.promises.stat(p)).size; } catch (_) {}
+      try { total += (await fs.promises.stat(p)).size; } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
       if (++pending >= 400) { pending = 0; await new Promise(r => setImmediate(r)); }
     }
   }
@@ -509,7 +509,7 @@ function copyDirProgress(src, dst, totalBytes, onBytes) {
         throw new Error('复制失败 ' + it.name + '：' + ((e && e.message) || e));
       }
       let sz = 0;
-      try { sz = (await fs.promises.stat(sp)).size; } catch (_) {}
+      try { sz = (await fs.promises.stat(sp)).size; } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
       copied += sz; since += sz;
       if (onBytes) onBytes(copied, totalBytes);
       // 每累计 ~8MB 让出一次事件循环：迁移期间进度窗才能持续刷新
@@ -528,27 +528,27 @@ function runMigration(items, onProgress) {
   const moved = [], failed = [];
   const steps = items.map((it, i) => async () => {
     const report = (phase, copied) => {
-      try { onProgress && onProgress({ ...it, index: i + 1, total: items.length, phase, copied: copied || 0 }); } catch (_) {}
+      try { onProgress && onProgress({ ...it, index: i + 1, total: items.length, phase, copied: copied || 0 }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
     };
     report('start');
     try {
       // 目标已有他人数据：跳过迁移（绝不清空），让调用方沿用旧路径
       if (it.conflict) throw new Error('数据目录中已有同名内容，为避免覆盖已跳过迁移');
       // 半成品清理：目标存在但没 ready 标记 → 上次中断，整目录重来
-      try { fs.rmSync(it.to, { recursive: true, force: true }); } catch (_) {}
-      try { fs.mkdirSync(path.dirname(it.to), { recursive: true }); } catch (_) {}
+      try { fs.rmSync(it.to, { recursive: true, force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
+      try { fs.mkdirSync(path.dirname(it.to), { recursive: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
       // 先落「迁移中」标记：中途崩溃/断电时下次启动才知道这个半成品可以安全清掉
       try {
         fs.mkdirSync(it.to, { recursive: true });
         fs.writeFileSync(path.join(it.to, MIGRATING_MARK), new Date().toISOString());
-      } catch (_) {}
+      } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
       const free = freeSpace(path.dirname(it.to));
       if (free != null && it.size && free < it.size * 1.05) {
         throw new Error('目标磁盘剩余空间不足（需要 ' + Math.ceil(it.size / 1048576) + ' MB）');
       }
       // 同盘 rename 瞬时完成；跨盘回退「逐文件复制 + 进度 + 删除旧副本」
       let done = false;
-      try { fs.renameSync(it.from, it.to); done = true; } catch (_) {}
+      try { fs.renameSync(it.from, it.to); done = true; } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
       if (!done) {
         report('copy', 0);
         await copyDirProgress(it.from, it.to, it.size, (copied) => report('copy', copied));
@@ -556,13 +556,13 @@ function runMigration(items, onProgress) {
         fs.rmSync(it.from, { recursive: true, force: true });
       }
       markReady(it.to);
-      try { fs.rmSync(path.join(it.to, MIGRATING_MARK), { force: true }); } catch (_) {}
+      try { fs.rmSync(path.join(it.to, MIGRATING_MARK), { force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
       moved.push(it.name);
       report('done', it.size);
     } catch (e) {
       failed.push({ name: it.name, error: String((e && e.message) || e) });
       // 迁移失败：该项继续沿用旧路径（不只是本次进程，重启后 pendingMigration 也会再试）
-      try { fs.rmSync(it.to, { recursive: true, force: true }); } catch (_) {}
+      try { fs.rmSync(it.to, { recursive: true, force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
       report('failed');
     }
   });

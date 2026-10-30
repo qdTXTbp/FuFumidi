@@ -39,7 +39,7 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
     return _dsSession;
   };
   const dropSession = () => {
-    if (_dsSession) { try { _dsSession.kill(); } catch (e) {} _dsSession = null; }
+    if (_dsSession) { try { _dsSession.kill(); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } _dsSession = null; }
   };
 
   // 通用声码器：openvpi 社区声码器项目（DiffSinger Community Vocoder Project）
@@ -95,7 +95,7 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
       fs.mkdirSync(dsRoot(), { recursive: true });
       const cur = readRuntime();
       fs.writeFileSync(runtimeFile(), JSON.stringify({ ...cur, ...patch, updatedAt: new Date().toISOString() }, null, 2), 'utf8');
-    } catch (e) {}
+    } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
   }
   function findInTree(root, fileName, depth = 4) {
     // 深度受限地查找文件（声库根可能是 zip 解压后的子目录）
@@ -121,7 +121,7 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
         const st = fs.statSync(p);
         if (st.isDirectory()) sum += dirBytes(p); else sum += st.size;
       }
-    } catch (e) {}
+    } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     return sum;
   }
   const vbInstalled = (it) => !!findInTree(path.join(vbRoot(), it.dirName), 'dsconfig.yaml', 0);
@@ -134,7 +134,7 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
       try { entries = fs.readdirSync(cur); } catch (e) { return cur; }
       const dirs = [], files = [];
       for (const n of entries) {
-        try { (fs.statSync(path.join(cur, n)).isDirectory() ? dirs : files).push(n); } catch (e) {}
+        try { (fs.statSync(path.join(cur, n)).isDirectory() ? dirs : files).push(n); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       }
       // 平台噪音目录忽略（macOS zip 会带 __MACOSX）
       const realDirs = dirs.filter(n => n !== '__MACOSX' && !n.startsWith('.'));
@@ -185,13 +185,13 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
         const m = fs.readFileSync(ct, 'utf8').match(/^\s*name\s*=\s*(.+?)\s*$/mi);
         if (m) name = m[1].trim();
       }
-    } catch (e) {}
+    } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     if (!name) {
       try {
         const y = fs.readFileSync(path.join(best, 'dsconfig.yaml'), 'utf8');
         const m = y.match(/^\s*name\s*:\s*(.+?)\s*$/mi);
         if (m) name = m[1].replace(/^["']|["']$/g, '').trim();
-      } catch (e) {}
+      } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     }
     if (!name) name = path.basename(best);
     return { root: best, name };
@@ -207,7 +207,7 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
     if (/^\s*(vocoder|sample_rate|hop_size)\s*:/mi.test(cfg)) score += 2;
     try {
       if (fs.readdirSync(dir).some(n => /\.onnx$/i.test(n))) score += 5;
-    } catch (e) {}
+    } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     const base = path.basename(dir).toLowerCase();
     // 子模型目录明显不是根
     if (/^(dsdur|dspitch|dsvariance|dsvocoder|dsacoustic)$/.test(base)) score -= 20;
@@ -338,7 +338,7 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
         voicebanks = fs.readdirSync(vbRoot())
           .filter(n => { try { return fs.statSync(path.join(vbRoot(), n)).isDirectory(); } catch (e) { return false; } })
           .filter(n => !!findInTree(path.join(vbRoot(), n), 'dsconfig.yaml', 0));
-      } catch (e) {}
+      } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       return {
         ok: true,
         enabled: enabledNow,
@@ -465,7 +465,7 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
         const AdmZip = require('adm-zip');
         const zip = new AdmZip(zipPath);
         const stage = path.join(dlDir, 'vocoder-extract');
-        try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e2) {}
+        try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e2) { try { require('./log').write('WARN', 'optional failure', String((e2 && e2.stack) || e2)); } catch (_) { /* log failure ignored */ } }
         fs.mkdirSync(stage, { recursive: true });
         const _zsafe = safeExtractAllTo(zip, stage);
 
@@ -488,8 +488,8 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
         const keep = files.filter(f => /\.onnx$/i.test(f) || /config|\.yaml|\.json$/i.test(path.basename(f)));
         for (const f of keep) fs.copyFileSync(f, path.join(vDir, path.basename(f)));
         writeRuntime({ vocoder: { file: path.basename(onnxF), spec: VOCODER_SPEC.id } });
-        try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e2) {}
-        try { fs.rmSync(zipPath, { force: true }); } catch (e2) {}
+        try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e2) { try { require('./log').write('WARN', 'optional failure', String((e2 && e2.stack) || e2)); } catch (_) { /* log failure ignored */ } }
+        try { fs.rmSync(zipPath, { force: true }); } catch (e2) { try { require('./log').write('WARN', 'optional failure', String((e2 && e2.stack) || e2)); } catch (_) { /* log failure ignored */ } }
       } else {
         send({ phase: 'vocoder', percent: 100, text: '声码器已就绪', done: true, step: 'vocoder', existed: true });
       }
@@ -514,7 +514,7 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
     const keys = [..._dlAborts.keys()];
     for (const k of keys) {
       const ent = _dlAborts.get(k);
-      try { if (ent && ent.ctrl) ent.ctrl.abort(); } catch (e) {}
+      try { if (ent && ent.ctrl) ent.ctrl.abort(); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     }
     return { ok: true };
   });
@@ -527,10 +527,10 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
       const inDataRoot = (p) => {
         try { return path.resolve(p).startsWith(path.resolve(Paths.dataRoot()) + path.sep); } catch (e) { return false; }
       };
-      if (inDataRoot(root)) { try { fs.rmSync(root, { recursive: true, force: true }); } catch (e) {} }
+      if (inDataRoot(root)) { try { fs.rmSync(root, { recursive: true, force: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } }
       if (alsoVoicebanks) {
         const vdir = path.resolve(vbRoot());
-        if (inDataRoot(vdir)) { try { fs.rmSync(vdir, { recursive: true, force: true }); } catch (e) {} }
+        if (inDataRoot(vdir)) { try { fs.rmSync(vdir, { recursive: true, force: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } }
       }
       _depsCache = { at: 0, data: null };
       return { ok: true };
@@ -548,7 +548,7 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
       for (const name of fs.readdirSync(root)) {
         const dir = path.join(root, name);
         let isDir = false;
-        try { isDir = fs.statSync(dir).isDirectory(); } catch (e) {}
+        try { isDir = fs.statSync(dir).isDirectory(); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
         if (!isDir) continue;
         const cfgDir = findInTree(dir, 'dsconfig.yaml', 0);
         if (cfgDir) list.push({ name, dir: cfgDir, size: dirBytes(dir) });
@@ -665,7 +665,7 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
         };
       } finally {
         if (cleanupStage) {
-          try { if (stage && fs.existsSync(stage)) fs.rmSync(stage, { recursive: true, force: true }); } catch (e2) {}
+          try { if (stage && fs.existsSync(stage)) fs.rmSync(stage, { recursive: true, force: true }); } catch (e2) { try { require('./log').write('WARN', 'optional failure', String((e2 && e2.stack) || e2)); } catch (_) { /* log failure ignored */ } }
         }
       }
     } catch (err) {
@@ -749,7 +749,7 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
       const AdmZip = require('adm-zip');
       const zip = new AdmZip(zipPath);
       const stage = path.join(dlDir, it.id + '-extract');
-      try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e2) {}
+      try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e2) { try { require('./log').write('WARN', 'optional failure', String((e2 && e2.stack) || e2)); } catch (_) { /* log failure ignored */ } }
       fs.mkdirSync(stage, { recursive: true });
       const _zsafe = safeExtractAllTo(zip, stage);
 
@@ -757,11 +757,11 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
       const cfgDir = findInTree(stage, 'dsconfig.yaml', 4);
       if (!cfgDir) throw new Error('声库包里没有 dsconfig.yaml（包结构可能已变更）');
       const finalDir = path.join(vbRoot(), it.dirName);
-      try { fs.rmSync(finalDir, { recursive: true, force: true }); } catch (e2) {}
+      try { fs.rmSync(finalDir, { recursive: true, force: true }); } catch (e2) { try { require('./log').write('WARN', 'optional failure', String((e2 && e2.stack) || e2)); } catch (_) { /* log failure ignored */ } }
       fs.mkdirSync(path.dirname(finalDir), { recursive: true });
       fs.cpSync(cfgDir, finalDir, { recursive: true });
-      try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e2) {}
-      try { fs.rmSync(zipPath, { force: true }); } catch (e2) {}
+      try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e2) { try { require('./log').write('WARN', 'optional failure', String((e2 && e2.stack) || e2)); } catch (_) { /* log failure ignored */ } }
+      try { fs.rmSync(zipPath, { force: true }); } catch (e2) { try { require('./log').write('WARN', 'optional failure', String((e2 && e2.stack) || e2)); } catch (_) { /* log failure ignored */ } }
       if (!findInTree(finalDir, 'dsconfig.yaml', 0)) throw new Error('安装后未找到 dsconfig.yaml');
       send({ id, phase: 'done', percent: 100, done: true });
       return { ok: true, name: it.name, dir: finalDir, size: dirBytes(finalDir) };
@@ -781,7 +781,7 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
     const key = path.join(Paths.tempDir(), 'diffsinger-dl', it.id + '.zip');
     const ent = _dlAborts.get(key);
     // ent 就是下载器持有的那个 entry，标记 + abort 都能被立刻感知
-    if (ent) { ent.isUserAbort = true; ent.aborted = true; try { ent.ctrl.abort(); } catch (e) {} }
+    if (ent) { ent.isUserAbort = true; ent.aborted = true; try { ent.ctrl.abort(); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } }
     return { ok: true };
   });
 
@@ -917,7 +917,7 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
       const AdmZip = require('adm-zip');
       const zip = new AdmZip(zipPath);
       const stage = path.join(dlDir, 'ms-' + id + '-extract');
-      try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e2) {}
+      try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e2) { try { require('./log').write('WARN', 'optional failure', String((e2 && e2.stack) || e2)); } catch (_) { /* log failure ignored */ } }
       fs.mkdirSync(stage, { recursive: true });
       const _zsafe = safeExtractAllTo(zip, stage);
 
@@ -932,8 +932,8 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
       let i = 2;
       while (fs.existsSync(finalDir)) { finalDir = path.join(root, id + '_' + i++); }
       fs.cpSync(cfgDir, finalDir, { recursive: true });
-      try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e2) {}
-      try { fs.rmSync(zipPath, { force: true }); } catch (e2) {}
+      try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e2) { try { require('./log').write('WARN', 'optional failure', String((e2 && e2.stack) || e2)); } catch (_) { /* log failure ignored */ } }
+      try { fs.rmSync(zipPath, { force: true }); } catch (e2) { try { require('./log').write('WARN', 'optional failure', String((e2 && e2.stack) || e2)); } catch (_) { /* log failure ignored */ } }
       if (!findInTree(finalDir, 'dsconfig.yaml', 0)) throw new Error('安装后未找到 dsconfig.yaml');
       stopCompressTicker();
       send({ phase: 'done', percent: 100, text: '安装完成', done: true });
@@ -955,7 +955,7 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
     const id = String(name || '');
     const key = path.join(Paths.tempDir(), 'diffsinger-dl', 'ms-' + id + '.zip');
     const ent = _dlAborts.get(key);
-    if (ent) { ent.isUserAbort = true; ent.aborted = true; try { ent.ctrl.abort(); } catch (e) {} }
+    if (ent) { ent.isUserAbort = true; ent.aborted = true; try { ent.ctrl.abort(); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } }
     return { ok: true };
   });
 
@@ -1041,7 +1041,7 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
           for (const s of names) all.add(s);
         }
       }
-    } catch (e) {}
+    } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     return { ok: true, items, speakers: [...all] };
   });
 
@@ -1063,10 +1063,10 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
       if (fs.existsSync(dep)) {
         for (const n of fs.readdirSync(dep)) {
           const p = path.join(dep, n);
-          try { if (fs.statSync(p).isDirectory() && fs.existsSync(path.join(p, 'vocoder.yaml'))) push(p, n); } catch (e) {}
+          try { if (fs.statSync(p).isDirectory() && fs.existsSync(path.join(p, 'vocoder.yaml'))) push(p, n); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
         }
       }
-    } catch (e) {}
+    } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     return { ok: true, items, dir: vocoderDir() };
   });
 
@@ -1110,8 +1110,8 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
     let tempoJson = null;   // 多点变速（同走 @文件）
     // 统一出口：清理临时音符文件后再 resolve，避免长曲反复渲染堆积垃圾
     const done = (r) => {
-      if (notesJson) { try { fs.unlinkSync(notesJson); } catch (e) {} notesJson = null; }
-      if (tempoJson) { try { fs.unlinkSync(tempoJson); } catch (e) {} tempoJson = null; }
+      if (notesJson) { try { fs.unlinkSync(notesJson); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } notesJson = null; }
+      if (tempoJson) { try { fs.unlinkSync(tempoJson); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } tempoJson = null; }
       resolve(r);
       return undefined;
     };
@@ -1171,7 +1171,7 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
             const onnx = fs.readdirSync(vd).find(n => /\.onnx$/i.test(n));
             if (onnx) args.push('--vocoder', path.join(vd, onnx));
           }
-        } catch (e) {}
+        } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       }
       // ---- 常驻会话优先（省 Python 启动 + torch import + 声库加载固定开销）----
       // 会话失败（进程崩溃/超时）→ 丢掉会话、回退一次性 spawn：功能永远可用。
@@ -1184,7 +1184,7 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
               if (outPath) {
                 fs.mkdirSync(path.dirname(outPath), { recursive: true });
                 try { fs.renameSync(r.out, outPath); }
-                catch (e) { fs.copyFileSync(r.out, outPath); try { fs.unlinkSync(r.out); } catch (e2) {} }
+                catch (e) { fs.copyFileSync(r.out, outPath); try { fs.unlinkSync(r.out); } catch (e2) { try { require('./log').write('WARN', 'optional failure', String((e2 && e2.stack) || e2)); } catch (_) { /* log failure ignored */ } } }
                 return done({ ok: true, savedTo: outPath, duration_ms: r.duration_ms, warnings: r.warnings || [] });
               }
               const bytes = fs.readFileSync(r.out);
@@ -1216,7 +1216,7 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
       spawnEngine(args, {
         script: 'engine_diffsinger.py',
         timeoutMs: 20 * 60 * 1000,
-        onProgress: (p) => { try { send(p); } catch (e) {} },
+        onProgress: (p) => { try { send(p); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } },
         onDone: (code, r) => {
           if (r && r.result && r.result.ok && r.result.out && fs.existsSync(r.result.out)) {
             try {
@@ -1224,7 +1224,7 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
               if (outPath) {
                 fs.mkdirSync(path.dirname(outPath), { recursive: true });
                 try { fs.renameSync(r.result.out, outPath); }
-                catch (e) { fs.copyFileSync(r.result.out, outPath); try { fs.unlinkSync(r.result.out); } catch (e2) {} }
+                catch (e) { fs.copyFileSync(r.result.out, outPath); try { fs.unlinkSync(r.result.out); } catch (e2) { try { require('./log').write('WARN', 'optional failure', String((e2 && e2.stack) || e2)); } catch (_) { /* log failure ignored */ } } }
                 return done({ ok: true, savedTo: outPath, duration_ms: r.result.duration_ms, warnings: r.result.warnings || [] });
               }
               const bytes = fs.readFileSync(r.result.out);
@@ -1276,16 +1276,16 @@ function registerDiffsingerIpc({ ipcMain, BrowserWindow, path, fs, os, app, dial
           }
           if (!ok) continue;
           let size = 0;
-          try { size = dirBytes(dir); } catch (e) {}
+          try { size = dirBytes(dir); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
           out.push({ kind, name, dir, size, id: kind + ':' + name });
         }
-      } catch (e) {}
+      } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       return out;
     };
     // 两侧各自容错：任一目录不可访问（未创建 / 权限）时不连累另一侧
     let utauRoot = '', dsRoot = '';
-    try { utauRoot = Paths.voicebanksDir(); } catch (e) {}
-    try { dsRoot = Paths.diffsingerVoicebanksDir(); } catch (e) {}
+    try { utauRoot = Paths.voicebanksDir(); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
+    try { dsRoot = Paths.diffsingerVoicebanksDir(); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     try {
       const utau = scan(utauRoot, 'utau');
       const ds = scan(dsRoot, 'diffsinger');

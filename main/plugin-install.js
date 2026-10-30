@@ -41,7 +41,7 @@ function cacheDir() {
 
 /** 确保目录存在（fs.mkdirSync 幂等） */
 function ensureDir(dir) {
-  try { fs.mkdirSync(dir, { recursive: true }); } catch (e) {}
+  try { fs.mkdirSync(dir, { recursive: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
   return dir;
 }
 
@@ -61,7 +61,7 @@ function movePath(src, dest) {
   }
   // 跨设备：逐级复制后删源
   fs.cpSync(src, dest, { recursive: true, force: true, errorOnExist: false });
-  try { fs.rmSync(src, { recursive: true, force: true }); } catch (e) {}
+  try { fs.rmSync(src, { recursive: true, force: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
 }
 
 function randToken() {
@@ -129,7 +129,7 @@ async function download(opts) {
 
   if (!res.ok) {
     let detail = '';
-    try { detail = (await res.json()).error || ''; } catch (e) {}
+    try { detail = (await res.json()).error || ''; } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     return { ok: false, error: detail || ('下载失败（HTTP ' + res.status + '）') };
   }
 
@@ -138,7 +138,7 @@ async function download(opts) {
   const ctype = String(res.headers.get('content-type') || '').toLowerCase();
   if (ctype && !ctype.includes('zip') && !ctype.includes('octet-stream')) {
     let detail = '';
-    try { detail = (await res.clone().json()).error || ''; } catch (e) {}
+    try { detail = (await res.clone().json()).error || ''; } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     return { ok: false, error: detail || ('平台返回的不是插件包（Content-Type: ' + ctype + '）') };
   }
 
@@ -337,7 +337,7 @@ function install(opts) {
   // 先解压到暂存目录，校验通过后再移动到位 ——
   // 避免解到一半失败留下半个插件目录
   const stage = path.join(Paths.tempDir(), 'plugin-install', 'stage-' + token);
-  try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e) {}
+  try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
   ensureDir(stage);
 
   let AdmZip;
@@ -349,7 +349,7 @@ function install(opts) {
     maxTotalBytes: MAX_UNPACKED_BYTES,
   });
   if (!zs.ok) {
-    try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e) {}
+    try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     return { ok: false, error: '解压安全校验未通过：' + zs.error };
   }
 
@@ -357,13 +357,13 @@ function install(opts) {
   const srcRoot = info.prefix ? path.join(stage, info.prefix) : stage;
   const manifestPath = path.join(srcRoot, 'plugin.json');
   if (!fs.existsSync(manifestPath)) {
-    try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e) {}
+    try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     return { ok: false, error: '解压后找不到 plugin.json' };
   }
   // 清单里的 entry 必须在包里真实存在，否则装上也是坏的
   const entryRel = String(info.manifest.entry || 'index.js').replace(/\\/g, '/');
   if (!fs.existsSync(path.join(srcRoot, entryRel))) {
-    try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e) {}
+    try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     return { ok: false, error: `清单声明的入口 ${entryRel} 在包里不存在` };
   }
 
@@ -373,7 +373,7 @@ function install(opts) {
   const realRoot = path.resolve(userPluginsDir);
   // 双保险：目标必须落在插件根目录内
   if (realDest !== realRoot && !realDest.startsWith(realRoot + path.sep)) {
-    try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e) {}
+    try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     return { ok: false, error: '目标路径越界，已中止' };
   }
 
@@ -392,16 +392,16 @@ function install(opts) {
       if (backupDir && fs.existsSync(backupDir) && !fs.existsSync(destDir)) {
         movePath(backupDir, destDir);
       }
-    } catch (e2) {}
-    try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e2) {}
+    } catch (e2) { try { require('./log').write('WARN', 'optional failure', String((e2 && e2.stack) || e2)); } catch (_) { /* log failure ignored */ } }
+    try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e2) { try { require('./log').write('WARN', 'optional failure', String((e2 && e2.stack) || e2)); } catch (_) { /* log failure ignored */ } }
     return { ok: false, error: '安装失败：' + (e && e.message || e) };
   }
 
-  try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e) {}
+  try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
 
   if (removePending) {
     pending.delete(token);
-    try { fs.rmSync(meta.zipPath, { force: true }); } catch (e) {}
+    try { fs.rmSync(meta.zipPath, { force: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
   }
 
   return {
@@ -422,7 +422,7 @@ function discard(token) {
   const meta = pending.get(token);
   if (!meta) return { ok: false, error: '记录不存在' };
   pending.delete(token);
-  try { fs.rmSync(meta.zipPath, { force: true }); } catch (e) {}
+  try { fs.rmSync(meta.zipPath, { force: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
   return { ok: true };
 }
 

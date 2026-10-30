@@ -40,8 +40,8 @@ function registerVideoIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEn
   function dropStream(id, removeFile) {
     const st = STREAMS.get(id);
     if (!st) return;
-    try { fs.closeSync(st.fd); } catch (e) {}
-    if (removeFile) { try { fs.unlinkSync(st.path); } catch (e) {} }
+    try { fs.closeSync(st.fd); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
+    if (removeFile) { try { fs.unlinkSync(st.path); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } }
     STREAMS.delete(id);
   }
   /** 清掉临时目录里的陈旧产物。
@@ -54,9 +54,9 @@ function registerVideoIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEn
       const now = Date.now();
       for (const name of fs.readdirSync(dir)) {
         const p = path.join(dir, name);
-        try { if (now - fs.statSync(p).mtimeMs > maxAgeMs) fs.unlinkSync(p); } catch (e) {}
+        try { if (now - fs.statSync(p).mtimeMs > maxAgeMs) fs.unlinkSync(p); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       }
-    } catch (e) {}
+    } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
   }
 
   ipcMain.handle('video:exportBegin', async (_e, opts) => {
@@ -94,7 +94,7 @@ function registerVideoIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEn
   ipcMain.handle('video:exportEnd', async (evt, opts) => {
     const st = STREAMS.get(opts && opts.id);
     if (!st) return { ok: false, error: 'stream-not-found' };
-    try { fs.closeSync(st.fd); } catch (e) {}
+    try { fs.closeSync(st.fd); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     st.fd = null;
     const cleanup = () => { dropStream(opts.id, true); };
     if (!st.bytes) { cleanup(); return { ok: false, error: 'empty-stream' }; }
@@ -157,8 +157,8 @@ function registerVideoIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEn
         "print(json.dumps({'ok': r.returncode == 0, 'err': (r.stderr or b'').decode('utf-8', 'replace')[-300:]}))";
       const rr = await runEngineInline(code);
       const d = parsePyJson(rr.out);
-      try { fs.unlinkSync(st.path); } catch (e) {}
-      if (wav) { try { fs.unlinkSync(wav); } catch (e) {} }
+      try { fs.unlinkSync(st.path); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
+      if (wav) { try { fs.unlinkSync(wav); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } }
       STREAMS.delete(opts.id);
       if (d && d.ok) return { ok: true, path: out, bytes: st.bytes, copy: true };
       return { ok: false, error: (d && d.err) || (rr.out || 'ffmpeg failed').slice(-300) };
@@ -200,7 +200,7 @@ function registerVideoIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEn
         ', capture_output=True)\n' +
         "print(json.dumps({'ok': r.returncode == 0, 'err': (r.stderr or b'').decode('utf-8', 'replace')[-300:]}))";
       const rr = await runEngineInline(code);
-      try { fs.unlinkSync(webm); if (wav) fs.unlinkSync(wav); } catch (e) {}
+      try { fs.unlinkSync(webm); if (wav) fs.unlinkSync(wav); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       const d = parsePyJson(rr.out);
       if (d && d.ok) return { ok: true, path: out };
       return { ok: false, error: (d && d.err) || (rr.out || 'ffmpeg failed').slice(-300) };

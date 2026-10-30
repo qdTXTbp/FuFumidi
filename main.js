@@ -116,7 +116,7 @@ app.commandLine.appendSwitch('disable-gpu-process-crash-limit');
 try {
   const chromiumCache = Paths.cacheDir('chromium');
   if (chromiumCache) app.commandLine.appendSwitch('disk-cache-dir', chromiumCache);
-} catch (_) {}
+} catch (_) { try { require('./main/log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
 
 const isDev = !app.isPackaged;
 
@@ -136,7 +136,7 @@ if (!gotLock) {
 
   app.whenReady().then(async () => {
     configureSession({ session, dialog, app });
-    try { installLogging({ app, dir: Paths.logDir(), fs }); } catch (e) {}
+    try { installLogging({ app, dir: Paths.logDir(), fs }); } catch (e) { try { require('./main/log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     registerSystemIpc({ ipcMain, integrity, BrowserWindow, path, shell, app, fs, spawnEngine, dialog });
     registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, readSettings });
     registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEngineInline, spawnEngine });
@@ -145,7 +145,7 @@ if (!gotLock) {
   const taskCenter = getTaskCenter({
     emit: (ev) => {
       for (const w of BrowserWindow.getAllWindows()) {
-        try { w.webContents.send('task:update', ev); } catch (e) {}
+        try { w.webContents.send('task:update', ev); } catch (e) { try { require('./main/log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       }
     },
   });
@@ -165,8 +165,8 @@ if (!gotLock) {
     // 必须在模型服务、GPU 服务之前完成，避免服务拿到半成品目录。
     await prepareDataRoot();
     // 模型目录迁移 + 内置模型 junction（须在模型服务注册前完成 junction，迁移可后台）
-    try { linkBundledModels(); } catch (_) {}
-    try { healModelsDir(); } catch (_) {} // 清除断链（安装器替换 resources/models 后旧 junction 目标消失）
+    try { linkBundledModels(); } catch (_) { try { require('./main/log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
+    try { healModelsDir(); } catch (_) { try { require('./main/log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } } // 清除断链（安装器替换 resources/models 后旧 junction 目标消失）
     migrateUserModels();
     ModelsService = registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsDir, engineDir, sha256File, readSettings, resolvePython });
     DbService = createDbService({ app, path, fs });
@@ -275,7 +275,7 @@ let _tray = null;
 function setupTray({ win, app, readSettings, rootDir }) {
   // Tray 只能用真实磁盘图标：打包后 __dirname 在 asar 内，build/ 图标经 extraResources
   // 落到 resources/icon.png；开发模式回退源码树 build/。
-  let toTrayOn = () => { let v = true; try { const s = readSettings(); v = !(s && s.close_to_tray === false); } catch (_) {} return v; };
+  let toTrayOn = () => { let v = true; try { const s = readSettings(); v = !(s && s.close_to_tray === false); } catch (_) { try { require('./main/log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } } return v; };
   try {
     const iconCandidates = [
       path.join(process.resourcesPath || '', 'icon.png'),
@@ -351,9 +351,9 @@ function ensureRuntimeDlls(pyExe) {
       if (!/\.dll$/i.test(f)) continue;
       const dst = path.join(pyDir, f);
       if (fs.existsSync(dst)) continue;
-      try { fs.copyFileSync(path.join(src, f), dst); } catch (_) {}
+      try { fs.copyFileSync(path.join(src, f), dst); } catch (_) { try { require('./main/log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
     }
-  } catch (_) {}
+  } catch (_) { try { require('./main/log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
 }
 // ---- 独立 Python 3.12 引擎运行时 ----
 // ROCm 增强包只有 cp312 轮子，而内置运行时是 3.11，所以需要第二套完整运行时。
@@ -390,7 +390,7 @@ function pythonMinorOfDir(dir) {
       const m = /^python(\d)(\d+)\.dll$/i.exec(f);
       if (m) return m[1] + '.' + m[2];
     }
-  } catch (_) {}
+  } catch (_) { try { require('./main/log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
   return null;
 }
 /** 指定次版本的可用解释器（'3.12' 为空表示独立运行时尚未就绪） */
@@ -443,7 +443,7 @@ async function prepareDataRoot() {
   try { pending = Paths.pendingMigration(); } catch (e) { console.warn('[data-root] 检查失败:', e && e.message); }
   if (!pending.length) {
     // 记下本次用的数据根：下次换安装位置/重装时靠它把旧目录找回来（见 paths.js rememberRoot）
-    try { Paths.rememberRoot(); } catch (_) {}
+    try { Paths.rememberRoot(); } catch (_) { try { require('./main/log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
     console.log('[data-root] ' + Paths.dataRoot() + ' (from=' + Paths.rootFrom() + ')');
     return;
   }
@@ -456,7 +456,7 @@ async function prepareDataRoot() {
       splash.webContents.executeJavaScript(
         'window.__t(' + JSON.stringify(txt) + ',' + (pct == null ? 'null' : Number(pct)) + ')', true
       ).catch(() => {});
-    } catch (_) {}
+    } catch (_) { try { require('./main/log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
   };
   try {
     splash = new BrowserWindow({
@@ -467,7 +467,7 @@ async function prepareDataRoot() {
       webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: false, devTools: false },
     });
     splash.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(dataRootSplashHtml()));
-    splash.once('ready-to-show', () => { try { splash.show(); } catch (_) {} });
+    splash.once('ready-to-show', () => { try { splash.show(); } catch (_) { try { require('./main/log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } } });
   } catch (_) { splash = null; }
   setText('正在把依赖与模型迁移到工具目录（约 ' + mb + ' MB，仅首次）…', 0);
   let rep = { moved: [], failed: [] };
@@ -482,10 +482,10 @@ async function prepareDataRoot() {
   }
   // 迁移失败项：本次运行继续沿用旧路径（旧数据仍可用），下次启动会重试
   for (const f of rep.failed) {
-    try { Paths.useLegacyFor(f.name, Paths.legacyPathOf(f.name)); } catch (_) {}
+    try { Paths.useLegacyFor(f.name, Paths.legacyPathOf(f.name)); } catch (_) { try { require('./main/log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
   }
-  if (splash && !splash.isDestroyed()) { try { splash.destroy(); } catch (_) {} }
-  try { Paths.rememberRoot(); } catch (_) {}
+  if (splash && !splash.isDestroyed()) { try { splash.destroy(); } catch (_) { try { require('./main/log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } } }
+  try { Paths.rememberRoot(); } catch (_) { try { require('./main/log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
   console.log('[data-root] root=' + Paths.dataRoot() + ' (from=' + Paths.rootFrom() + ') moved=[' + rep.moved.join(',') + '] failed=' + JSON.stringify(rep.failed));
 }
 function dataRootSplashHtml() {
@@ -536,9 +536,9 @@ function linkBundledModels() {
       if (!st.isDirectory()) continue;
       const dst = path.join(to, name);
       if (fs.existsSync(dst)) continue;
-      try { fs.symlinkSync(src, dst, 'junction'); } catch (_) {}
+      try { fs.symlinkSync(src, dst, 'junction'); } catch (_) { try { require('./main/log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
     }
-  } catch (_) {}
+  } catch (_) { try { require('./main/log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
 }
 // 修复断链：安装器更新会整体替换 resources/models，旧 junction 的目标目录可能随之消失，
 // 残留断链让后续 mkdir/statSync 报 ENOENT（表现为「模型下载损坏 / 无法下载」）。启动时清除断链占位。
@@ -548,12 +548,12 @@ function healModelsDir() {
     for (const name of fs.readdirSync(root)) {
       const p = path.join(root, name);
       let st = null;
-      try { st = fs.statSync(p); } catch (_) {}
+      try { st = fs.statSync(p); } catch (_) { try { require('./main/log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
       if (!st) {
-        try { fs.rmSync(p, { recursive: true, force: true }); console.warn('[models] 已移除断链占位:', name); } catch (_) {}
+        try { fs.rmSync(p, { recursive: true, force: true }); console.warn('[models] 已移除断链占位:', name); } catch (_) { try { require('./main/log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
       }
     }
-  } catch (_) {}
+  } catch (_) { try { require('./main/log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
 }
 // 一次性迁移：把旧安装目录内已下载的模型复制到用户目录（升级自旧版的用户资产救援）
 function migrateUserModels() {
@@ -570,7 +570,7 @@ function migrateUserModels() {
         const s = path.join(src, name), d = path.join(dst, name);
         const st = fs.lstatSync(s);
         if (st.isDirectory()) copyDir(s, d);
-        else if (!fs.existsSync(d)) { try { fs.copyFileSync(s, d); moved++; } catch (_) {} }
+        else if (!fs.existsSync(d)) { try { fs.copyFileSync(s, d); moved++; } catch (_) { try { require('./main/log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } } }
       }
     };
     copyDir(from, to);
@@ -595,13 +595,13 @@ function engineEnv(extra) {
   Paths.applyToEnv(env);
   // 引擎侧也要能看到配置文件与版本（engine/diag.py 会打进诊断包）
   env.FUFUMIDI_SETTINGS_PATH = Paths.settingsFile();
-  try { env.FUFUMIDI_APP_VERSION = app.getVersion(); } catch (_) {}
+  try { env.FUFUMIDI_APP_VERSION = app.getVersion(); } catch (_) { try { require('./main/log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
   // HuggingFace 令牌：主进程下载走 HTTP 头，Python 侧（huggingface_hub）只认环境变量，
   // 不注入的话引擎回退到按规格名走 HF 时会因为读不到 $HF_HOME/token 而 401
   try {
     const st = readSettings();
     if (st && st.hf_token) env.HF_TOKEN = String(st.hf_token).trim();
-  } catch (_) {}
+  } catch (_) { try { require('./main/log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
   // 只挂「与当前解释器 ABI 匹配」的增强包：三种包都按 CPython 次版本编译
   // （cuda → cp311，rocm → cp312）。把不匹配的塞进 PYTHONPATH 会拖进
   // 一堆加载不了的 .pyd，比不挂更糟。装了但版本不匹配的，视为「已安装未启用」，
@@ -644,7 +644,7 @@ async function resetBaseToCpu() {
     if (fs.existsSync(sp)) {
       for (const name of fs.readdirSync(sp)) {
         if (/^(torch_directml|onnxruntime_gpu|onnxruntime_directml)/.test(name)) {
-          try { fs.rmSync(path.join(sp, name), { recursive: true, force: true }); } catch (e) {}
+          try { fs.rmSync(path.join(sp, name), { recursive: true, force: true }); } catch (e) { try { require('./main/log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
         }
       }
     }
@@ -671,14 +671,14 @@ let DbService = null;
 let _quitting = false;
 app.on('before-quit', (e) => {
   if (_quitting) return; // 二次进入（app.quit 重放）直接放行
-  if (!DbService) { try { stopEngineWorker(); } catch (err) {} killAll(); if (ModelsService) ModelsService.closeAll(); return; }
+  if (!DbService) { try { stopEngineWorker(); } catch (err) { try { require('./main/log').write('WARN', 'optional failure', String((err && err.stack) || err)); } catch (_) { /* log failure ignored */ } } killAll(); if (ModelsService) ModelsService.closeAll(); return; }
   // 给渲染进程最后一刻的 SQLite 写入（歌单/收藏 fire-and-forget）留出落盘时间，再关闭数据库
   _quitting = true;
   e.preventDefault();
   killAll();
   if (ModelsService) ModelsService.closeAll();
   setTimeout(async () => {
-    try { await DbService.close(); } catch (err) {}
+    try { await DbService.close(); } catch (err) { try { require('./main/log').write('WARN', 'optional failure', String((err && err.stack) || err)); } catch (_) { /* log failure ignored */ } }
     app.quit();
   }, 400);
 });

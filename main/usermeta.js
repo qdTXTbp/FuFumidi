@@ -100,7 +100,7 @@ function createUserMeta(opts) {
       fs.renameSync(tmp, p);       // 同卷 rename 原子：不会留下半个 JSON
       return true;
     } catch (e) {
-      try { fs.unlinkSync(tmp); } catch (e2) {}
+      try { fs.unlinkSync(tmp); } catch (e2) { try { require('./log').write('WARN', 'optional failure', String((e2 && e2.stack) || e2)); } catch (_) { /* log failure ignored */ } }
       return false;
     }
   }

@@ -32,7 +32,7 @@ async function fetchThumbDataCached(net, url, cachePath) {
     if (data && data.startsWith('data:image/')) {
       const base64 = data.split(',')[1];
       if (base64) {
-        try { fs.writeFileSync(cachePath, Buffer.from(base64, 'base64')); } catch (e) {}
+        try { fs.writeFileSync(cachePath, Buffer.from(base64, 'base64')); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       }
     }
     return data;
@@ -124,7 +124,7 @@ function registerWallpaperIpc({ ipcMain, app, fs: f, net, runEngineInline, parse
     ? DS.cnbRepoReleaseUrl(DS.CNB_MIRROR_REPOS.media, 'wallpapers-v1', name)
     : cnbWallpaperUrl(name));
   const thumbCacheDir = Paths.cacheDir('wallpaper-thumbs');
-  try { f.mkdirSync(thumbCacheDir, { recursive: true }); } catch (e) {}
+  try { f.mkdirSync(thumbCacheDir, { recursive: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
   async function ensureFolderThumb(videoPath) {
     try {
       const st = f.statSync(videoPath);
@@ -142,7 +142,7 @@ function registerWallpaperIpc({ ipcMain, app, fs: f, net, runEngineInline, parse
       const rr = await runEngineInline(code);
       const d = parsePyJson ? parsePyJson(rr.out) : null;
       if (d && d.ok && f.existsSync(thumbPath) && f.statSync(thumbPath).size > 0) return thumbPath;
-    } catch (e) {}
+    } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     return '';
   }
   // 远程壁纸目录缓存：5 分钟内直接复用 GitHub API 结果
@@ -158,7 +158,7 @@ function registerWallpaperIpc({ ipcMain, app, fs: f, net, runEngineInline, parse
           if (cached && Array.isArray(cached.vids) && Array.isArray(cached.thumbs)) return cached;
         }
       }
-    } catch (e) {}
+    } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     let res;
     try { res = await Promise.race([
       net.fetch(`https://api.github.com/repos/${WALLPAPER_REPO}/contents/${WALLPAPER_DIR}`, {
@@ -173,7 +173,7 @@ function registerWallpaperIpc({ ipcMain, app, fs: f, net, runEngineInline, parse
     const items = await res.json();
     const vids = items.filter(x => x.type === 'file' && /\.(mp4|webm|mov)$/i.test(x.name));
     const thumbs = items.filter(x => x.type === 'file' && /\.(jpg|jpeg|png)$/i.test(x.name));
-    try { f.writeFileSync(cacheFile, JSON.stringify({ vids, thumbs })); } catch (e) {}
+    try { f.writeFileSync(cacheFile, JSON.stringify({ vids, thumbs })); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     return { vids, thumbs };
   }
   ipcMain.handle('wallpaper:list', async () => {
@@ -214,7 +214,7 @@ function registerWallpaperIpc({ ipcMain, app, fs: f, net, runEngineInline, parse
       try {
         const locals = await listLocalWallpapers();
         if (locals.length) return { ok: true, list: locals, offline: true, error: String((e && e.message) || e) };
-      } catch (err) {}
+      } catch (err) { try { require('./log').write('WARN', 'optional failure', String((err && err.stack) || err)); } catch (_) { /* log failure ignored */ } }
       return { ok: false, error: String((e && e.message) || e) };
     }
   });
@@ -229,7 +229,7 @@ function registerWallpaperIpc({ ipcMain, app, fs: f, net, runEngineInline, parse
       if (!video.startsWith(path.resolve(dir) + path.sep)) return { ok: false, error: 'path outside wallpaper dir' };
       if (!f.existsSync(video)) return { ok: false, error: 'not found' };
       f.unlinkSync(video);
-      try { f.unlinkSync(video + '.ok'); } catch (e) {}   // 完成标记一并删除
+      try { f.unlinkSync(video + '.ok'); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }   // 完成标记一并删除
       const thumb = path.join(dir, name.replace(/\.(mp4|webm|mov|jpg|jpeg|png|webp|avif|gif)$/i, '') + '.jpg');
       if (f.existsSync(thumb)) f.unlinkSync(thumb);
       return { ok: true };
@@ -256,7 +256,7 @@ function registerWallpaperIpc({ ipcMain, app, fs: f, net, runEngineInline, parse
       const totalSize = f.statSync(srcPath).size || 0;
       let copied = 0;
       const notify = (p) => {
-        try { if (event && !event.sender.isDestroyed()) event.sender.send('wallpaper:addLocalProgress', { path: dest, progress: Math.max(0, Math.min(1, p)) }); } catch (e) {}
+        try { if (event && !event.sender.isDestroyed()) event.sender.send('wallpaper:addLocalProgress', { path: dest, progress: Math.max(0, Math.min(1, p)) }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       };
       notify(0);
       await new Promise((resolve, reject) => {
@@ -286,7 +286,7 @@ function registerWallpaperIpc({ ipcMain, app, fs: f, net, runEngineInline, parse
       const safe = String(name || 'wallpaper').replace(/[\\/:*?"<>|]/g, '_');
       const dest = path.join(dir, safe);
       const sendP = (p) => {
-        try { if (evt && !evt.sender.isDestroyed()) evt.sender.send('wallpaper:downloadProgress', { name: safe, progress: p }); } catch (e) {}
+        try { if (evt && !evt.sender.isDestroyed()) evt.sender.send('wallpaper:downloadProgress', { name: safe, progress: p }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       };
       sendP(0);
       // 候选源：CNB 镜像（国内快）与 GitHub media，按下载源偏好排序，逐个回退
@@ -308,7 +308,7 @@ function registerWallpaperIpc({ ipcMain, app, fs: f, net, runEngineInline, parse
       const size = r.size;
       if (size <= 0) return { ok: false, error: '下载文件为空（网络受限或文件被拦截），已回退在线壁纸' };
       // 完成标记：与视频同名，界面据此判定「已下载」
-      try { f.writeFileSync(dest + '.ok', '1', 'utf8'); } catch (e) {}
+      try { f.writeFileSync(dest + '.ok', '1', 'utf8'); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       sendP(1);
       return { ok: true, path: dest, name: safe, size };
     } catch (e) {
@@ -358,7 +358,7 @@ function registerWallpaperIpc({ ipcMain, app, fs: f, net, runEngineInline, parse
       try {
         const list = await bingWallpaperFallback();
         if (list.length) return { ok: true, list, page: 1, last: 1, source: 'Bing 每日壁纸', warning: String((e && e.message) || e) };
-      } catch (e2) {}
+      } catch (e2) { try { require('./log').write('WARN', 'optional failure', String((e2 && e2.stack) || e2)); } catch (_) { /* log failure ignored */ } }
       return { ok: false, error: '在线壁纸搜索失败：' + String((e && e.message) || e) };
     }
   });
@@ -374,7 +374,7 @@ function registerWallpaperIpc({ ipcMain, app, fs: f, net, runEngineInline, parse
       try {
         const head = await net.fetch(src, { method: 'HEAD', headers: { 'User-Agent': 'FuFumidi' } });
         ct = String(head.headers.get('content-type') || '').toLowerCase();
-      } catch (e) {}
+      } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       const urlPath = (() => { try { return new URL(src).pathname; } catch (e) { return src; } })();
       const extOfUrl = (path.extname(urlPath) || '').toLowerCase();
       const imageExt = /\.(jpe?g|png|webp|avif|gif|bmp)$/i.test(extOfUrl);
@@ -397,7 +397,7 @@ function registerWallpaperIpc({ ipcMain, app, fs: f, net, runEngineInline, parse
       const dest = path.join(dir, safeBase + '-' + stamp + ext);
       const r = await FastDL.downloadFast({ urls: [src], dest, minSize: 64 * 1024, headers: { 'user-agent': 'FuFumidi' }, label: safeBase });
       if (!r || !r.size) return { ok: false, error: '视频下载失败' };
-      try { f.writeFileSync(dest + '.ok', '1', 'utf8'); } catch (e) {}
+      try { f.writeFileSync(dest + '.ok', '1', 'utf8'); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       return { ok: true, path: dest, name: path.basename(dest), kind: 'video', size: r.size };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
@@ -422,7 +422,7 @@ function registerWallpaperIpc({ ipcMain, app, fs: f, net, runEngineInline, parse
           const ext = path.extname(it.name).toLowerCase();
           const kind = imageExt.has(ext) ? 'image' : videoExt.has(ext) ? 'video' : '';
           if (!kind) continue;
-          let size = 0; try { size = f.statSync(full).size; } catch (e) {}
+          let size = 0; try { size = f.statSync(full).size; } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
           if (size <= 0) continue;
           out.push({ path: full, name: it.name, kind, size });
         }

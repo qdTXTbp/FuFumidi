@@ -54,7 +54,7 @@ async function statTreeAsync(dir, depth = 0) {
     try {
       if (ent.isDirectory()) return await statTreeAsync(p, depth + 1);
       if (ent.isFile()) { const st = await fs.promises.stat(p); return { bytes: st.size, files: 1 }; }
-    } catch (e) {}
+    } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     return { bytes: 0, files: 0 };
   }));
   let bytes = 0, files = 0;
@@ -102,12 +102,12 @@ function pruneLogs(dir, keepLatest) {
   try {
     files = fs.readdirSync(dir, { withFileTypes: true })
       .filter((e) => e.isFile())
-      .map((e) => { const p = path.join(dir, e.name); let mtime = 0; let size = 0; try { const st = fs.statSync(p); mtime = st.mtimeMs; size = st.size; } catch (err) {} return { p, mtime, size }; })
+      .map((e) => { const p = path.join(dir, e.name); let mtime = 0; let size = 0; try { const st = fs.statSync(p); mtime = st.mtimeMs; size = st.size; } catch (err) { try { require('./log').write('WARN', 'optional failure', String((err && err.stack) || err)); } catch (_) { /* log failure ignored */ } } return { p, mtime, size }; })
       .sort((a, b) => b.mtime - a.mtime);
   } catch (e) { return { removedBytes: 0, removedFiles: 0 }; }
   let removedBytes = 0, removedFiles = 0;
   for (let i = Math.max(0, Number(keepLatest) || 5); i < files.length; i++) {
-    try { fs.unlinkSync(files[i].p); removedBytes += files[i].size; removedFiles += 1; } catch (e) {}
+    try { fs.unlinkSync(files[i].p); removedBytes += files[i].size; removedFiles += 1; } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
   }
   return { removedBytes: removedBytes, removedFiles: removedFiles };
 }
@@ -129,7 +129,7 @@ function emptyDir(dir) {
         fs.unlinkSync(p);
         removedBytes += s.size; removedFiles += 1;
       }
-    } catch (e) {}
+    } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
   }
   return { removedBytes: removedBytes, removedFiles: removedFiles };
 }

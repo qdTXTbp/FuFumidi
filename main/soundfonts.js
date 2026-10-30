@@ -527,7 +527,7 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
       }
       // 稳定顺序：按名字排，免得每次刷新顺序乱跳（用户自定义排序由 usermeta 的 order 决定）
       customs.sort((a, b) => String(a.name).localeCompare(String(b.name), 'zh'));
-    } catch (e) {}
+    } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     return { registry: out, customs, dir: sfDir() };
   });
 
@@ -597,7 +597,7 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
       const fin = await statFile(out);
       // 完整性：注册表给了体积区间，落在区间外的一律当半成品删掉，避免「假音色库」
       if (!isCompleteSf(it, fin)) {
-        try { fs.rmSync(out, { force: true }); } catch (_) {}
+        try { fs.rmSync(out, { force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
         return { ok: false, error: '文件不完整（' + fin + ' 字节不在 ' + it.minSize + '..' + (it.maxSize || '∞') + ' 之间），可能被代理拦截，请重试或手动导入' };
       }
       send({ id, received: fin, total: fin, percent: 100, done: true });
@@ -621,7 +621,7 @@ function registerSoundfontWorkshopIpc({ ipcMain, BrowserWindow, app, path, fs, n
     c.isUserAbort = true;
     c.cancelRequested = true;
     let aborted = false;
-    try { if (c.ctrl) { c.ctrl.abort(); aborted = true; } } catch (e) {}
+    try { if (c.ctrl) { c.ctrl.abort(); aborted = true; } } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     return { ok: true, aborted };
   });
 

@@ -34,10 +34,10 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       for (const name of fs.readdirSync(root)) {
         const p = path.join(root, name);
         let st = null;
-        try { st = fs.statSync(p); } catch (_) {}
-        if (!st) { try { fs.rmSync(p, { recursive: true, force: true }); } catch (_) {} }
+        try { st = fs.statSync(p); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
+        if (!st) { try { fs.rmSync(p, { recursive: true, force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } } }
       }
-    } catch (_) {}
+    } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
   }
   const MODEL_REGISTRY = {
     piano_transcription: {
@@ -357,12 +357,12 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       try {
         const r = await net.fetch(u, { headers: { 'user-agent': 'FuFumidi' } });
         if (r.ok) { manifest = await r.json(); break; }
-      } catch (e) {}
+      } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     }
     if (!manifest) {
-      try { manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8')); } catch (e) {}
+      try { manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8')); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     } else {
-      try { fs.writeFileSync(manifestFile, JSON.stringify(manifest), 'utf8'); } catch (e) {}
+      try { fs.writeFileSync(manifestFile, JSON.stringify(manifest), 'utf8'); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     }
     // 幂等重建注册表
     for (const k of Object.keys(_msstRegistry)) delete _msstRegistry[k];
@@ -408,8 +408,8 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     const items = [];
     // ★ 兜底：清单里任何一处抛都会让界面显示「模型全没了」（renderer 拿到 reject 就当空数组）。
     //   条目本身出问题只该跳过它自己 —— 所以整个收集过程包在 try 里，有多少返回多少。
-    const guard = (fn) => { try { return fn(); } catch (e) { try { console.warn('[models] 列条目失败:', e && e.message); } catch (_) {} } };
-    try { await ensureMsstModels(); } catch (e) {}
+    const guard = (fn) => { try { return fn(); } catch (e) { try { console.warn('[models] 列条目失败:', e && e.message); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } } } };
+    try { await ensureMsstModels(); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     // ★ 「已下载但跑不动」的**唯一判据处**：与 main/separate-common.js 同一份逻辑，
     //   界面里不许再另写一套。MSST 模型走下面第二个循环，两处都必须带上这个字段 ——
     //   漏一处就会出现「列表里显示已下载、一点就报缺少配置文件」（实测踩过）。
@@ -512,7 +512,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     return items;
   });
   ipcMain.handle('model:cancel', async (_e, id) => {
-    if (id) { _modelCancels.add(id); try { const c = _modelAborts.get(id); if (c) c.abort(); } catch (e) {} }
+    if (id) { _modelCancels.add(id); try { const c = _modelAborts.get(id); if (c) c.abort(); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } }
     return { ok: true };
   });
   ipcMain.handle('model:delete', async (_e, id) => {
@@ -679,7 +679,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
         }
         return { ok: true, path: destDir, size: totalSize, model: dest };
       } finally {
-        try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (e) {}
+        try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       }
     } catch (e) {
       return { ok: false, error: String((e && e.message) || e) };
@@ -689,7 +689,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     try {
       const win = BrowserWindow.fromWebContents(_e.sender);
       const key = win ? win.id : 0;
-      if (_folderWatchers.has(key)) { try { _folderWatchers.get(key).close(); } catch (e) {} _folderWatchers.delete(key); }
+      if (_folderWatchers.has(key)) { try { _folderWatchers.get(key).close(); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } _folderWatchers.delete(key); }
       if (!enabled || !dir || !fs.existsSync(dir)) return { ok: true };
       const exts = new Set(['.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg', '.opus', '.wma', '.mp4', '.mkv', '.avi', '.mov', '.webm']);
       let timer = null;
@@ -706,7 +706,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
   ipcMain.handle('model:pause', async (_e, id) => {
-    if (id) { _modelPause.add(id); try { const c = _modelAborts.get(id); if (c) c.abort(); } catch (e) {} }
+    if (id) { _modelPause.add(id); try { const c = _modelAborts.get(id); if (c) c.abort(); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } }
     return { ok: true };
   });
   // HuggingFace 整仓下载（MuScriptor / Aria-AMT）。
@@ -816,7 +816,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
           return { ok: true, path: destDir, size, config: got.path, configFrom: got.from };
         }
       }
-    } catch (e) {}
+    } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     if (win && !win.isDestroyed()) win.webContents.send('model:progress', { id: spec.id, received: size, total: size, percent: 100, done: true, speed: 0 });
     return { ok: true, path: destDir, size };
   }
@@ -869,7 +869,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       try {
         const r = await net.fetch(u, { headers, signal: ctrl.signal });
         if (r.ok) { manifest = await r.json(); break; }
-      } catch (e) {}
+      } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     }
     const meta = manifest && manifest[_cat] && manifest[_cat][spec.sizeKey];
     if (!meta || !meta.parts) throw new Error('分卷清单获取失败：请确认 Models 仓库已发布 ' + spec.sizeKey + ' 分卷（manifest.json）');
@@ -887,9 +887,9 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     if (fs.existsSync(outFile)) {
       const sz = fs.statSync(outFile).size;
       if (sz >= (spec.minSize || 0)) { sendP({ received: sz, total: sz, percent: 100, done: true }); return { ok: true, path: destDir, size: sz, existed: true }; }
-      try { fs.rmSync(outFile, { force: true }); } catch (_) {}   // 上次中断残留的半成品
+      try { fs.rmSync(outFile, { force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }   // 上次中断残留的半成品
     }
-    try { fs.rmSync(outFile + '.tmp', { force: true }); } catch (_) {}
+    try { fs.rmSync(outFile + '.tmp', { force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
     const partsDir = path.join(destDir, '.parts');
     fs.mkdirSync(partsDir, { recursive: true });
     // 3) 期望字节数（固定 25 MiB 切片；清单不自洽时退化成「只校验总大小」）
@@ -902,9 +902,9 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       const dest = path.join(partsDir, partName(i));
       const want = expectBytes(i);
       let have = 0;
-      try { have = fs.statSync(dest).size; } catch (_) {}
+      try { have = fs.statSync(dest).size; } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
       if (have > 0 && (!want || have === want)) { reuseBytes += have; continue; }
-      if (have > 0) { try { fs.rmSync(dest, { force: true }); } catch (_) {} }
+      if (have > 0) { try { fs.rmSync(dest, { force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } } }
       jobs.push({ urls: partUrls(partName(i)), dest, expectSize: want, minSize: 1024, label: partName(i), singleStream: true });
       needBytes += want || (total ? Math.ceil(total / parts) : 0);
     }
@@ -912,7 +912,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     FastDL.checkDiskSpace(outFile, (needBytes || total) * 2 + 64 * 1024 * 1024);
     // 6) 只测速一次，其余分卷复用同一份源顺序（省掉每卷一次测速）
     let hostRank = [];
-    try { hostRank = FastDL.hostRankOf(await FastDL.rankMirrors(partUrls(partName(1)), ctrl)); } catch (_) {}
+    try { hostRank = FastDL.hostRankOf(await FastDL.rankMirrors(partUrls(partName(1)), ctrl)); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
     const partsConcurrency = Math.min(FastDL.PARTS_CONCURRENCY, Math.max(1, jobs.length));
     const denom = total || (reuseBytes + needBytes);
     sendP({
@@ -946,7 +946,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     }
     // 8) 按序合并（先写临时文件再原子重命名，中断不会留下半成品最终文件）
     const tmpOut = outFile + '.tmp';
-    try { fs.rmSync(tmpOut, { force: true }); } catch (_) {}
+    try { fs.rmSync(tmpOut, { force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
     const ws = fs.createWriteStream(tmpOut);
     ws.on('error', () => {});   // 消费 'error'，防 EPERM 等未捕获异常打崩主进程
     for (let i = 1; i <= parts; i++) {
@@ -962,20 +962,20 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     await new Promise((res2, rej2) => ws.end((err) => (err ? rej2(err) : res2())));
     const size = fs.statSync(tmpOut).size;
     if (total && size !== total) {
-      try { fs.rmSync(tmpOut, { force: true }); } catch (_) {}
+      try { fs.rmSync(tmpOut, { force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
       throw new Error('合并后大小不符：' + size + '/' + total + '（分卷不完整，已丢弃半成品；重试只补缺的卷）');
     }
     // 9) SHA256：失败说明分卷整体不可信 → 连 .parts 一起丢弃，避免「每次都卡在同一处」
     if (meta.sha256) {
       const hash = await sha256File(tmpOut);
       if (hash !== meta.sha256) {
-        try { fs.rmSync(tmpOut, { force: true }); } catch (_) {}
-        try { fs.rmSync(partsDir, { recursive: true, force: true }); } catch (_) {}
-        try { fs.rmSync(outFile, { force: true }); } catch (_) {}
+        try { fs.rmSync(tmpOut, { force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
+        try { fs.rmSync(partsDir, { recursive: true, force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
+        try { fs.rmSync(outFile, { force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
         throw new Error('SHA256 校验失败：' + String(hash).slice(0, 12) + '…（已丢弃全部分卷，重试会重新下载；反复失败请换下载源）');
       }
     }
-    try { fs.rmSync(outFile, { force: true }); } catch (_) {}
+    try { fs.rmSync(outFile, { force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
     fs.renameSync(tmpOut, outFile);
     const finalSize = fs.statSync(outFile).size;
     if (finalSize < (spec.minSize || 0)) throw new Error('下载文件不完整：' + finalSize + ' bytes');
@@ -990,10 +990,10 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       };
       const cfg = muscriptorConfigs[spec.sizeKey];
       if (cfg) {
-        try { fs.writeFileSync(path.join(destDir, 'config.json'), JSON.stringify(cfg, null, 2), 'utf8'); } catch (e) {}
+        try { fs.writeFileSync(path.join(destDir, 'config.json'), JSON.stringify(cfg, null, 2), 'utf8'); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       }
     }
-    try { fs.rmSync(partsDir, { recursive: true, force: true }); } catch (_) {}
+    try { fs.rmSync(partsDir, { recursive: true, force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
     sendP({ received: finalSize, total: finalSize, percent: 100, done: true, speed: 0 });
     return { ok: true, path: destDir, size: finalSize };
   }
@@ -1019,17 +1019,17 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     //   `.tmp` / `.part`（半成品）。以前只删 `.tmp`/`.part`，失败一次就留几个 GB 且
     //   模型清单仍显示「未安装」，用户手动删目录也清不掉。
     for (const suffix of ['.oudep', '.parts', '.tmp', '.part']) {
-      try { fs.rmSync(p + suffix, { recursive: true, force: true }); } catch (_) {}
+      try { fs.rmSync(p + suffix, { recursive: true, force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
     }
   }
 
   /** 随包模型目录（安装版 resources/models，开发期仓库 resources/models） */
   function bundledModelsDir() {
     const cands = [];
-    try { if (process.resourcesPath) cands.push(path.join(process.resourcesPath, 'models')); } catch (_) {}
+    try { if (process.resourcesPath) cands.push(path.join(process.resourcesPath, 'models')); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
     cands.push(path.join(__dirname, '..', 'resources', 'models'));
     for (const c of cands) {
-      try { if (fs.statSync(c).isDirectory()) return c; } catch (_) {}
+      try { if (fs.statSync(c).isDirectory()) return c; } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
     }
     return '';
   }
@@ -1172,9 +1172,9 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       return { ok: true, path: destDir, size: finalSize, unpacked: true };
     } finally {
       // 成功与失败都清临时产物：压缩包不留双份，分片目录不留几个 GB
-      try { fs.rmSync(archive, { force: true }); } catch (_) {}
-      try { fs.rmSync(partsDir, { recursive: true, force: true }); } catch (_) {}
-      try { FastDL.cleanSegments(archive); } catch (_) {}
+      try { fs.rmSync(archive, { force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
+      try { fs.rmSync(partsDir, { recursive: true, force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
+      try { FastDL.cleanSegments(archive); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
     }
   }
 
@@ -1292,8 +1292,8 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       if (spec.sha256) {
         const hash = await sha256File(dest);
         if (hash !== spec.sha256) {
-          try { fs.rmSync(dest, { force: true }); } catch (_) {}
-          try { FastDL.cleanSegments(dest); } catch (_) {}
+          try { fs.rmSync(dest, { force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
+          try { FastDL.cleanSegments(dest); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
           throw new Error('SHA256 校验失败：' + hash + '（文件已丢弃，请重试或换源）');
         }
       }
@@ -1409,7 +1409,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
             }
           }
           break;
-        } catch (e) {}
+        } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       }
     }
     _upstreamCfg = out;
@@ -1431,7 +1431,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       // ★ noProbe + 先清 .part：这些小文件用"探测 + 断点续传"那套会自伤 ——
       //   上一次留下 2727 B 的 .part，续传时按 content-length 再核一次就变成"2727/1147 大小不符"
       //   （实测 42 个只落地 18 个，其余全卡在这一步）。单流、不探测、每次从头拉。
-      try { fs.rmSync(dst + '.part', { force: true }); } catch (e) {}
+      try { fs.rmSync(dst + '.part', { force: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       items.push({
         urls: cfgUrls(f.repo, f.dir, f.name),
         singleStream: true, noProbe: true,
@@ -1509,11 +1509,11 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
           if (buf.length < 200 || (clen && buf.length !== clen)) continue;
           fs.writeFileSync(dst, buf);
           break;
-        } catch (e) {}
+        } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       }
       hit = pickYml(modelDirAbs, want);
       if (hit) return { path: hit, from: 'model-repo' };
-      try { fs.rmSync(dst, { force: true }); } catch (_) {}
+      try { fs.rmSync(dst, { force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
     }
     if (!hit) {
       await fetchConfigsToCache(onText);
@@ -1528,7 +1528,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
         || (w ? list.find((x) => x.norm && (x.norm.includes(w) || w.includes(x.norm))) : null);
       if (cand) {
         const dst = path.join(cfgCacheDir(), cand.name);
-        try { fs.mkdirSync(cfgCacheDir(), { recursive: true }); } catch (e) {}
+        try { fs.mkdirSync(cfgCacheDir(), { recursive: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
         try {
           if (onText) onText('下载配置 ' + cand.name);
           await FastDL.downloadFast({
@@ -1537,7 +1537,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
             headers: { 'user-agent': 'FuFumidi' }, label: cand.name,
           });
           hit = pickYml(cfgCacheDir(), want) || dst;
-        } catch (e) { try { fs.rmSync(dst, { force: true }); } catch (_) {} }
+        } catch (e) { try { fs.rmSync(dst, { force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } } }
       }
     }
     if (hit) return { path: hit, from: 'upstream' };
@@ -1562,14 +1562,14 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
         const mm = /RESULT\s+(\S+)/.exec(out || '');
         if (mm && mm[1] && mm[1] !== 'None' && fs.existsSync(mm[1])) {
           const dst = path.join(modelDirAbs, want || path.basename(mm[1]));
-          try { fs.copyFileSync(mm[1], dst); } catch (e) {}
+          try { fs.copyFileSync(mm[1], dst); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
           if (fs.existsSync(dst)) return { path: dst, from: 'generated' };
           return { path: mm[1], from: 'generated' };
         }
         hit = pickYml(modelDirAbs, want) || pickYml(autocfgDir(), want);
         if (hit) return { path: hit, from: 'generated' };
       }
-    } catch (e) {}
+    } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     return null;
   }
 

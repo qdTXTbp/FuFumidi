@@ -80,7 +80,7 @@ function pickOutputDir(cfg, { readSettings, Paths, fs }) {
     const srcDir = src.replace(/[\\/][^\\/]*$/, '');
     dir = srcDir && srcDir !== src ? srcDir : Paths.tempDir();
   }
-  try { fs.mkdirSync(dir, { recursive: true }); } catch (e) { dir = Paths.tempDir(); try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {} }
+  try { fs.mkdirSync(dir, { recursive: true }); } catch (e) { dir = Paths.tempDir(); try { fs.mkdirSync(dir, { recursive: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } } }
   return dir;
 }
 

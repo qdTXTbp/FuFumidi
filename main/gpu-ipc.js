@@ -62,8 +62,8 @@ function registerGpuIpc({
       if (!pid) return;
       const { spawnSync } = require('child_process');
       if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true });
-      else { try { process.kill(-pid, 'SIGKILL'); } catch (e) {} }
-    } catch (e) {}
+      else { try { process.kill(-pid, 'SIGKILL'); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } }
+    } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
   }
 
   /** 该 kind 的语言/环境前置条件（供 UI 与错误信息复用） */
@@ -106,8 +106,8 @@ function registerGpuIpc({
   // 取消进行中的 GPU 增强包安装/下载：杀掉 pip 进程树并中止下载流。
   ipcMain.handle('gpu:cancelInstall', async () => {
     _gpuCanceled = true;
-    try { if (_gpuDownloadCtl) _gpuDownloadCtl.abort(); } catch (e) {}
-    try { if (_gpuInstallProc && _gpuInstallProc.pid) _killProcTree(_gpuInstallProc.pid); } catch (e) {}
+    try { if (_gpuDownloadCtl) _gpuDownloadCtl.abort(); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
+    try { if (_gpuInstallProc && _gpuInstallProc.pid) _killProcTree(_gpuInstallProc.pid); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     return { ok: true };
   });
 
@@ -368,7 +368,7 @@ function registerGpuIpc({
       await Promise.all(Array.from({ length: Math.max(1, Math.min(PART_CONCURRENCY, jobs.length)) }, () => worker()));
       const paths = jobs.map((j) => j.outPath);
       if (_gpuCanceled) {
-        try { fs.rmSync(dlDir, { recursive: true, force: true }); } catch (e) {}
+        try { fs.rmSync(dlDir, { recursive: true, force: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
         return { ok: false, canceled: true, error: '已取消下载' };
       }
       if (isSplit) {
@@ -457,7 +457,7 @@ function registerGpuIpc({
     ].join(String.fromCharCode(10));
     const r = await runEngineInline(code);
     const m = (r.out || '').match(/###BACKEND\s+(\{.*\})/);
-    if (m) { try { return JSON.parse(m[1]); } catch (e) {} }
+    if (m) { try { return JSON.parse(m[1]); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } }
     return { ok: false, error: String((r.out || r.error || '验证输出解析失败')).slice(-300) };
   }
 
@@ -506,7 +506,7 @@ function registerGpuIpc({
     ].filter(Boolean).join('\n');
     const r = await runEngineInline(code);
     const m = (r.out || '').match(/###BACKEND\s+(\{.*\})/);
-    if (m) { try { return JSON.parse(m[1]); } catch (e) {} }
+    if (m) { try { return JSON.parse(m[1]); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } }
     return { ok: false, error: String((r.out || r.error || '验证输出解析失败')).slice(-300) };
   }
 
@@ -587,7 +587,7 @@ function registerGpuIpc({
       }
       // 用户取消：清理半装的 targetSite，避免残留损坏的 site-packages 被 PYTHONPATH 加载
       if (_gpuCanceled) {
-        try { fs.rmSync(targetSite, { recursive: true, force: true }); } catch (e) {}
+        try { fs.rmSync(targetSite, { recursive: true, force: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
         send({ percent: 0, text: '已取消安装', done: true });
         return { ok: false, canceled: true, kind, error: '已取消安装' };
       }

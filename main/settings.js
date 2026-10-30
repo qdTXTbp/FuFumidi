@@ -95,9 +95,9 @@ function readSettings() {
     return { ...DEFAULT_SETTINGS, ...JSON.parse(fs.readFileSync(settingsPath(), 'utf8')) };
   } catch (e) {
     const p = settingsPath();
-    try { if (fs.existsSync(p)) fs.renameSync(p, p + '.corrupt-' + Date.now()); } catch (e2) {}
+    try { if (fs.existsSync(p)) fs.renameSync(p, p + '.corrupt-' + Date.now()); } catch (e2) { try { require('./log').write('WARN', 'optional failure', String((e2 && e2.stack) || e2)); } catch (_) { /* log failure ignored */ } }
     const repaired = { ...DEFAULT_SETTINGS, guide_done: true };
-    try { writeSettings(repaired); } catch (e3) {}
+    try { writeSettings(repaired); } catch (e3) { try { require('./log').write('WARN', 'optional failure', String((e3 && e3.stack) || e3)); } catch (_) { /* log failure ignored */ } }
     return repaired;
   }
 }

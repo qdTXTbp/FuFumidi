@@ -73,7 +73,7 @@ function registerCoverIpc({ ipcMain, BrowserWindow, path, fs, dialog, shell, spa
   ipcMain.handle('cover:cancel', async () => {
     if (!current) return { ok: true, canceled: false };
     current.aborted = true;
-    try { current.child.kill(); } catch (e) {}
+    try { current.child.kill(); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     return { ok: true, canceled: true };
   });
 

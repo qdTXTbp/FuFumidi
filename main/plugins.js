@@ -34,7 +34,7 @@ function createPluginService({ app, path, fs, shell, ipcMain, BrowserWindow, rea
   });
 
   function registerPluginsIpc() {
-    try { fs.mkdirSync(PLUGINS_USER_DIR(), { recursive: true }); } catch (e) {}
+    try { fs.mkdirSync(PLUGINS_USER_DIR(), { recursive: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     pluginHost.setRoots([PLUGINS_USER_DIR(), path.join(__dirname, '..', 'plugins')]);
     pluginHost.loadAll();
 
@@ -101,7 +101,7 @@ function createPluginService({ app, path, fs, shell, ipcMain, BrowserWindow, rea
         const store = Object.assign({}, s.plugin_installs || {});
         store[slug] = { version: r.manifest && r.manifest.version, at: Date.now() };
         if (writeSettings) writeSettings({ plugin_installs: store });
-      } catch (e) {}
+      } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       return r;
     });
 

@@ -112,7 +112,7 @@ function writeGpuManifest(kind, meta) {
     const dir = gpuEnhanceDir(kind);
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({ kind, installedAt: new Date().toISOString(), ...(meta || {}) }, null, 2), 'utf8');
-  } catch (e) {}
+  } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
 }
 function installGpuSite(kind, srcSite, meta) {
   if (!fs.existsSync(srcSite)) throw new Error('缺少 site-packages 目录');
@@ -128,7 +128,7 @@ function installGpuSite(kind, srcSite, meta) {
     fs.rmSync(finalDir, { recursive: true, force: true });
     fs.renameSync(tmpDir, finalDir);
   } catch (e) {
-    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
     throw e;
   }
 }

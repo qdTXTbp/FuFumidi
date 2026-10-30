@@ -26,7 +26,7 @@ function createDbService({ app, path: p, fs: f }) {
     try {
       f.mkdirSync(dbDir, { recursive: true });
       f.writeFileSync(jsonPath, JSON.stringify(jsonData), 'utf8');
-    } catch (e) {}
+    } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
   }
 
   async function init() {
@@ -46,7 +46,7 @@ function createDbService({ app, path: p, fs: f }) {
       return db;
     } catch (e) {
       mode = 'json';
-      try { jsonData = JSON.parse(f.readFileSync(jsonPath, 'utf8')); } catch (e2) {}
+      try { jsonData = JSON.parse(f.readFileSync(jsonPath, 'utf8')); } catch (e2) { try { require('./log').write('WARN', 'optional failure', String((e2 && e2.stack) || e2)); } catch (_) { /* log failure ignored */ } }
       return null;
     }
   }
@@ -54,7 +54,7 @@ function createDbService({ app, path: p, fs: f }) {
   function persist() {
     if (mode === 'sqlite' && db) {
       const data = db.export();
-      try { f.writeFileSync(dbPath, Buffer.from(data)); } catch (e) {}
+      try { f.writeFileSync(dbPath, Buffer.from(data)); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     } else if (mode === 'json') {
       saveJson();
     }
@@ -199,11 +199,11 @@ function createDbService({ app, path: p, fs: f }) {
 
   async function close() {
     if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; persistNow(); }
-    try { await persistPromise; } catch (e) {}
-    try { await writeQ; } catch (e) {}
+    try { await persistPromise; } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
+    try { await writeQ; } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     // 先等待写入队列落盘，再关闭数据库（避免退出时歌单/收藏写丢失）
     return writeQ.then(() => {
-      try { if (db) { db.close(); db = null; } } catch (e) {}
+      try { if (db) { db.close(); db = null; } } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     });
   }
 

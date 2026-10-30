@@ -61,7 +61,7 @@ function createHotkeys({ readSettings, writeSettings, getWindow }) {
   function unregisterAll() {
     for (const a of HOTKEY_ACTIONS) {
       const it = state.map[a.id];
-      if (it && it.accel) { try { globalShortcut.unregister(it.accel); } catch (e) {} }
+      if (it && it.accel) { try { globalShortcut.unregister(it.accel); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } }
     }
     state.active = {};
     state.failed = {};
@@ -103,7 +103,7 @@ function createHotkeys({ readSettings, writeSettings, getWindow }) {
 
   /** 退出前必须注销，否则会留下系统级幽灵热键（重装前后都可能踩到） */
   function dispose() {
-    try { globalShortcut.unregisterAll(); } catch (e) {}
+    try { globalShortcut.unregisterAll(); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     state.active = {};
     state.failed = {};
   }

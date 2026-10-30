@@ -48,7 +48,7 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
     return _openUtauSession;
   };
   const dropOpenUtauSession = () => {
-    if (_openUtauSession) { try { _openUtauSession.kill(); } catch (e) {} _openUtauSession = null; }
+    if (_openUtauSession) { try { _openUtauSession.kill(); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } _openUtauSession = null; }
   };
 
   // ---- 声库根判定与显示名（对齐上游 VoicebankLoader / VoicebankInstaller）----
@@ -71,12 +71,12 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
         const m = line.trim().match(/^(?:name|名前)\s*[=：:]\s*(.+)$/i);
         if (m) { name = m[1].trim(); break; }
       }
-    } catch (e) {}
+    } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     try {
       const y = fs.readFileSync(path.join(dir, 'character.yaml'), 'utf8');
       const m = y.match(/^\s*name\s*:\s*(.+?)\s*$/mi);
       if (m && m[1].trim()) name = m[1].replace(/^["']+|["']+$/g, '').trim();
-    } catch (e) {}
+    } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     return name || '';
   };
 
@@ -178,7 +178,7 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
         try {
           fs.writeFileSync(path.join(outDir, 'character.txt'), '\n', 'utf8');
           fs.writeFileSync(path.join(outDir, 'character.yaml'), 'textFileEncoding: utf-8\n', 'utf8');
-        } catch (e) {}
+        } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       }
       return { ok: true, name: bankDisplayName(outDir) || path.basename(outDir), dir: outDir };
     } catch (err) {
@@ -458,8 +458,8 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
     const done = (r) => {
       if (settled) return undefined;
       settled = true;
-      if (notesJson) { try { fs.unlinkSync(notesJson); } catch (e) {} notesJson = null; }
-      if (tempoJson) { try { fs.unlinkSync(tempoJson); } catch (e) {} tempoJson = null; }
+      if (notesJson) { try { fs.unlinkSync(notesJson); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } notesJson = null; }
+      if (tempoJson) { try { fs.unlinkSync(tempoJson); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } tempoJson = null; }
       resolve(r);
       return undefined;
     };
@@ -532,7 +532,7 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
                 if (outPath) {
                   fs.mkdirSync(path.dirname(outPath), { recursive: true });
                   try { fs.renameSync(r.out, outPath); }
-                  catch (e) { fs.copyFileSync(r.out, outPath); try { fs.unlinkSync(r.out); } catch (e2) {} }
+                  catch (e) { fs.copyFileSync(r.out, outPath); try { fs.unlinkSync(r.out); } catch (e2) { try { require('./log').write('WARN', 'optional failure', String((e2 && e2.stack) || e2)); } catch (_) { /* log failure ignored */ } } }
                   return done({ ok: true, savedTo: outPath, duration_ms: r.duration_ms, warnings: r.warnings || [] });
                 }
                 const bytes = fs.readFileSync(r.out);
@@ -566,7 +566,7 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
               if (outPath) {
                 fs.mkdirSync(path.dirname(outPath), { recursive: true });
                 try { fs.renameSync(r.result.out, outPath); }
-                catch (e) { fs.copyFileSync(r.result.out, outPath); try { fs.unlinkSync(r.result.out); } catch (e2) {} }
+                catch (e) { fs.copyFileSync(r.result.out, outPath); try { fs.unlinkSync(r.result.out); } catch (e2) { try { require('./log').write('WARN', 'optional failure', String((e2 && e2.stack) || e2)); } catch (_) { /* log failure ignored */ } } }
                 return done({ ok: true, savedTo: outPath, duration_ms: r.result.duration_ms, warnings: r.result.warnings || [] });
               }
               // 直接回 Buffer（结构化克隆按字节传递）：整轨 WAV 可达数十 MB，
@@ -734,7 +734,7 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
         const st = fs.statSync(p);
         if (st.isDirectory()) sum += dirBytes(p); else sum += st.size;
       }
-    } catch (e) {}
+    } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     return sum;
   }
 
@@ -818,7 +818,7 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
       const norm = (p) => String(p).replace(/\\/g, '/');
       const needle = it.subdir ? '/' + it.subdir + '/' : null;
       const stage = path.join(dlDir, it.id + '-extract');
-      try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e2) {}
+      try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e2) { try { require('./log').write('WARN', 'optional failure', String((e2 && e2.stack) || e2)); } catch (_) { /* log failure ignored */ } }
       fs.mkdirSync(stage, { recursive: true });
       let count = 0;
       for (const e of zip.getEntries()) {
@@ -847,15 +847,15 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
 
       // 落盘到 <voicebanks>/<dirName>
       const finalDir = vbDirOf(it);
-      try { fs.rmSync(finalDir, { recursive: true, force: true }); } catch (e2) {}
+      try { fs.rmSync(finalDir, { recursive: true, force: true }); } catch (e2) { try { require('./log').write('WARN', 'optional failure', String((e2 && e2.stack) || e2)); } catch (_) { /* log failure ignored */ } }
       fs.mkdirSync(path.dirname(finalDir), { recursive: true });
       try {
         fs.renameSync(otoRoot, finalDir);
       } catch (e2) {
         fs.cpSync(otoRoot, finalDir, { recursive: true });
       }
-      try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e2) {}
-      try { fs.rmSync(zipPath, { force: true }); } catch (e2) {}
+      try { fs.rmSync(stage, { recursive: true, force: true }); } catch (e2) { try { require('./log').write('WARN', 'optional failure', String((e2 && e2.stack) || e2)); } catch (_) { /* log failure ignored */ } }
+      try { fs.rmSync(zipPath, { force: true }); } catch (e2) { try { require('./log').write('WARN', 'optional failure', String((e2 && e2.stack) || e2)); } catch (_) { /* log failure ignored */ } }
       if (!findOto(finalDir, 0)) throw new Error('安装后未找到 oto.ini');
       send({ id, phase: 'done', percent: 100, done: true });
       return { ok: true, name: it.name, dir: finalDir, files: count, size: dirBytes(finalDir) };
@@ -868,7 +868,7 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
   });
 
   ipcMain.handle('utau:cancelVoicebankDownload', async (_e, id) => {
-    try { const c = _vbAborts.get(id); if (c) { c.isUserAbort = true; c.ctrl.abort(); } } catch (e) {}
+    try { const c = _vbAborts.get(id); if (c) { c.isUserAbort = true; c.ctrl.abort(); } } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     return { ok: true };
   });
 }

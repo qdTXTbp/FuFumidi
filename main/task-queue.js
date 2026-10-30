@@ -32,7 +32,7 @@ function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngi
         fs.unlinkSync(probe);
       } catch (e) {
         dir = path.join(Paths.tempDir(), 'fufumidi');
-        try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {}
+        try { fs.mkdirSync(dir, { recursive: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
       }
       cfg.out = path.join(dir, base + '.mid');
       let n = 1;
@@ -43,7 +43,7 @@ function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngi
       kind: 'transcribe',
       title: '转录：' + baseName,
       cancelable: true,
-      onCancel: () => { try { if (cancelEngineJob) cancelEngineJob(cfg.id); } catch (e) {} },
+      onCancel: () => { try { if (cancelEngineJob) cancelEngineJob(cfg.id); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } },
     }) : null;
     const runSpawn = () => new Promise((resolve, reject) => {
       const args = ['convert', cfg.audio, '-o', cfg.out];
@@ -95,14 +95,14 @@ function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngi
           onDone: (code, r) => {
             convertChildren.delete(cfg.id);
             if (r.result) {
-              try { if (r.result.ok) task && task.done(r.result); else task && task.fail(r.result.error || '转录失败'); } catch (e) {}
+              try { if (r.result.ok) task && task.done(r.result); else task && task.fail(r.result.error || '转录失败'); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
               pluginHost.emit('transcribe-done', { ok: !!r.result.ok, out: r.result.out, note_count: r.result.note_count, mode: cfg.mode, perf: cfg.perf });
               return resolve(r.result);
             }
-            if (!r.result) { try { task && task.fail((r.err || r.out || '转录失败').slice(-400)); } catch (e) {} }
+            if (!r.result) { try { task && task.fail((r.err || r.out || '转录失败').slice(-400)); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } }
             resolve({ ok: code === 0, code, out: cfg.out, error: (r.err || r.out || '').slice(-400) });
           },
-          onError: (e) => { convertChildren.delete(cfg.id); try { task && task.fail(e); } catch (err) {} reject(new Error(e)); },
+          onError: (e) => { convertChildren.delete(cfg.id); try { task && task.fail(e); } catch (err) { try { require('./log').write('WARN', 'optional failure', String((err && err.stack) || err)); } catch (_) { /* log failure ignored */ } } reject(new Error(e)); },
         });
         convertChildren.set(cfg.id, child);
       } catch (e) { reject(new Error(String(e))); }
@@ -113,7 +113,7 @@ function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngi
         cfg.__win = win; cfg.__logId = cfg.id; cfg.__task = task;
         const workerRes = await engineWorkerConvert(cfg);
         if (workerRes && workerRes.ok) {
-          try { task && task.done(workerRes); } catch (e) {}
+          try { task && task.done(workerRes); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
           pluginHost.emit('transcribe-done', { ok: true, out: workerRes.out, note_count: workerRes.note_count, mode: cfg.mode, perf: cfg.perf });
           return workerRes;
         }
@@ -127,10 +127,10 @@ function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngi
     }
     try {
       const _out = await runSpawn();
-      if (!_out || !_out.ok) { try { task && task.fail((_out && _out.error) || '转录失败'); } catch (e) {} }
+      if (!_out || !_out.ok) { try { task && task.fail((_out && _out.error) || '转录失败'); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } }
       return _out;
     } catch (e) {
-      try { task && task.fail(e); } catch (err) {}
+      try { task && task.fail(e); } catch (err) { try { require('./log').write('WARN', 'optional failure', String((err && err.stack) || err)); } catch (_) { /* log failure ignored */ } }
       throw e;
     }
   });
@@ -142,7 +142,7 @@ function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngi
     const f = Paths.pauseFlagFile();
     try {
       if (on) { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, String(Date.now())); }
-      else { try { fs.unlinkSync(f); } catch (e2) {} }
+      else { try { fs.unlinkSync(f); } catch (e2) { try { require('./log').write('WARN', 'optional failure', String((e2 && e2.stack) || e2)); } catch (_) { /* log failure ignored */ } } }
       return { ok: true, paused: !!on, file: f };
     } catch (e) {
       return { ok: false, error: String((e && e.message) || e) };
@@ -212,7 +212,7 @@ function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngi
       const id = cfg && (cfg.model || cfg.modelId || cfg.sepModel);
       const cur = resolveSeparateModel ? resolveSeparateModel(id) : null;
       if (cur && cur.exists && !cur.configPath && ensureSepConfig) await ensureSepConfig(id);
-    } catch (e) {}
+    } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     return new Promise((resolve, reject) => {
     const win2 = win;
     // ★ 参数构造集中在 main/separate-common.js —— 音频处理面板与翻唱工作流共用同一份，
@@ -253,7 +253,7 @@ function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngi
     // ★ worker 路径（engine.js 常驻 worker）记的是另一本账，必须也问一次 ——
     //   否则前端点「取消转录」永远拿到 { ok: false }，正在跑的转录照旧跑完。
     if (cancelEngineJob) {
-      try { if (cancelEngineJob(id)) return { ok: true }; } catch (e) {}
+      try { if (cancelEngineJob(id)) return { ok: true }; } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     }
     return { ok: false };
   });

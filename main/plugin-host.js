@@ -35,7 +35,7 @@ function engineScript(app, rootDir) {
   try {
     const packed = path.join(process.resourcesPath || '', 'engine', 'plugin_render.py');
     if (fs.existsSync(packed)) return packed;
-  } catch (e) {}
+  } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
   return dev;
 }
 
@@ -48,7 +48,7 @@ function run(py, args, opts = {}) {
     try {
       child = spawn(py, args, { windowsHide: true, env: { ...process.env } });
     } catch (e) { finish({ code: -1, out: '', err: String(e && e.message || e) }); return; }
-    const timer = setTimeout(() => { try { child.kill(); } catch (e) {} finish({ code: -1, out, err: err + '\nTimeout', timeout: true }); }, opts.timeoutMs || 10 * 60 * 1000);
+    const timer = setTimeout(() => { try { child.kill(); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } finish({ code: -1, out, err: err + '\nTimeout', timeout: true }); }, opts.timeoutMs || 10 * 60 * 1000);
     child.stdout.on('data', (d) => { out += String(d); });
     child.stderr.on('data', (d) => { err += String(d); if (err.length > 200000) err = err.slice(-200000); });
     child.on('error', (e) => { clearTimeout(timer); finish({ code: -1, out, err: err + '\n' + String(e && e.message || e) }); });
@@ -59,7 +59,7 @@ function run(py, args, opts = {}) {
 function parseLastJson(text) {
   const lines = String(text || '').trim().split(/\r?\n/).filter(Boolean);
   for (let i = lines.length - 1; i >= 0; i--) {
-    try { return JSON.parse(lines[i]); } catch (e) {}
+    try { return JSON.parse(lines[i]); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
   }
   return null;
 }
@@ -102,7 +102,7 @@ function registerPluginIpc({ ipcMain, app, dialog, BrowserWindow, readSettings, 
       const s = readSettings ? readSettings() : {};
       const list = Array.isArray(s['plugin.dirs']) ? s['plugin.dirs'].slice() : [];
       if (!list.includes(dir)) list.push(dir);
-      try { writeSettings({ 'plugin.dirs': list.slice(0, 20) }); } catch (e) {}
+      try { writeSettings({ 'plugin.dirs': list.slice(0, 20) }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     }
     return { ok: true, dir };
   });

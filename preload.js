@@ -445,9 +445,9 @@ contextBridge.exposeInMainWorld('fuBridge', {
     clearFinished: () => ipcRenderer.invoke('tasks:clearFinished'),
     demo: (opts) => ipcRenderer.invoke('tasks:demo', opts),
     onUpdate: (cb) => {
-      const fn = (_e, ev) => { try { cb(ev); } catch (e) {} };
+      const fn = (_e, ev) => { try { cb(ev); } catch (e) { try { console.warn('[preload] optional failure', e); } catch (_) { /* log failure ignored */ } } };
       ipcRenderer.on('task:update', fn);
-      return () => { try { ipcRenderer.removeListener('task:update', fn); } catch (e) {} };
+      return () => { try { ipcRenderer.removeListener('task:update', fn); } catch (e) { try { console.warn('[preload] optional failure', e); } catch (_) { /* log failure ignored */ } } };
     },
   },
   // P0-4 音频导出：渲染进程编码好 WAV 字节，主进程负责原子落盘 + 写 manifest

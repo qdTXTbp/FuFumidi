@@ -65,7 +65,7 @@ function runCommand(cmd, args, timeoutMs) {
       finish({ code: -1, out: '', err: String(e && e.message || e), spawnError: true });
       return;
     }
-    const timer = setTimeout(() => { try { child.kill(); } catch (e) {} finish({ code: -1, out, err: err + '\nTimeout', timeout: true }); }, timeoutMs);
+    const timer = setTimeout(() => { try { child.kill(); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } finish({ code: -1, out, err: err + '\nTimeout', timeout: true }); }, timeoutMs);
     child.stdout.on('data', (d) => { out += String(d); if (out.length > 200000) out = out.slice(-200000); });
     child.stderr.on('data', (d) => { err += String(d); if (err.length > 200000) err = err.slice(-200000); });
     child.on('error', (e) => { clearTimeout(timer); finish({ code: -1, out, err: err + '\n' + String(e && e.message || e), spawnError: true }); });

@@ -16,7 +16,7 @@ const { DEFAULT_SETTINGS } = require('./settings');
 function fileAssocIconSpec({ app }) {
   try {
     if (app && app.isPackaged) return `"${process.execPath}",0`;
-  } catch (e) {}
+  } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
   const devIcon = path.join(__dirname, '..', 'build', 'icon.ico');
   if (fs.existsSync(devIcon)) return `"${devIcon}",0`;
   return `"${process.execPath}",0`;
@@ -35,9 +35,9 @@ function registerSettingsIpc({ ipcMain, readSettings, writeSettings, db }) {
           // 导致「是否首次启动」等判断失效。
           return { ...DEFAULT_SETTINGS, ...fileSettings, ...sqliteSettings };
         }
-      } catch (e) {}
+      } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       // 首次迁移：把 settings.json 写入 SQLite
-      try { await db.kvSet('settings', fileSettings); } catch (e) {}
+      try { await db.kvSet('settings', fileSettings); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     }
     return fileSettings;
   });
@@ -51,7 +51,7 @@ function registerSettingsIpc({ ipcMain, readSettings, writeSettings, db }) {
     }
     writeSettings(merged);
     if (db && typeof db.kvSet === 'function') {
-      try { await db.kvSet('settings', merged); } catch (e) {}
+      try { await db.kvSet('settings', merged); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     }
     // 返回 { ok } 让前端 store 能正确回写内存，而不是返回裸 settings 对象（r.ok 恒为 undefined）
     return { ok: true, settings: readSettings() };
@@ -78,7 +78,7 @@ function registerSettingsIpc({ ipcMain, readSettings, writeSettings, db }) {
         await run(['add', `${hkcu}\\.mid`, '/ve', '/d', progID, '/f']);
         await run(['add', `${hkcu}\\.midi`, '/ve', '/d', progID, '/f']);
         // 让资源管理器刷新图标缓存（失败不影响关联本身）
-        try { execFile('ie4uinit.exe', ['-show'], { windowsHide: true }, () => {}); } catch (e) {}
+        try { execFile('ie4uinit.exe', ['-show'], { windowsHide: true }, () => {}); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       } else {
         // 删除 HKCU 覆盖（NSIS 安装时注册的 HKCR 关联由系统回退）
         await run(['delete', `${hkcu}\\.mid`, '/f']);
@@ -103,10 +103,10 @@ function registerSettingsIpc({ ipcMain, readSettings, writeSettings, db }) {
           if (s && s.file_assoc !== false) {
             applyFileAssoc(true).catch(() => {});
           }
-        } catch (e) {}
+        } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       }, 3000).unref?.();
     }
-  } catch (e) {}
+  } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
 }
 
 module.exports = { registerSettingsIpc };

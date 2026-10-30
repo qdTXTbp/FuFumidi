@@ -238,7 +238,7 @@ function registerProjectIpc({ ipcMain, dialog, path, fs, spawnEngine }) {
     const fp = r.filePaths[0];
 
     const outJson = path.join(Paths.tempDir(), 'fufumidi', `ustx_import_${Date.now()}_${process.pid}.json`);
-    try { fs.mkdirSync(path.dirname(outJson), { recursive: true }); } catch (e) {}
+    try { fs.mkdirSync(path.dirname(outJson), { recursive: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
 
     const run = await runUstxEngine(['import', '--in', fp, '--out', outJson]);
     const res = run.result;
@@ -251,7 +251,7 @@ function registerProjectIpc({ ipcMain, dialog, path, fs, spawnEngine }) {
     } catch (e) {
       return { ok: false, error: '转换结果读取失败：' + String(e && e.message || e) };
     }
-    try { fs.unlinkSync(res.jsonPath || outJson); } catch (e) {}
+    try { fs.unlinkSync(res.jsonPath || outJson); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     return {
       ok: true,
       filePath: fp,
@@ -281,11 +281,11 @@ function registerProjectIpc({ ipcMain, dialog, path, fs, spawnEngine }) {
 
     // 交换 JSON + 伴奏源路径走 @临时文件（整轨音符 JSON 会撞 Windows 32K 上限）
     const reqFile = path.join(Paths.tempDir(), 'fufumidi', `ustx_export_${Date.now()}_${process.pid}.json`);
-    try { fs.mkdirSync(path.dirname(reqFile), { recursive: true }); } catch (e) {}
+    try { fs.mkdirSync(path.dirname(reqFile), { recursive: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     fs.writeFileSync(reqFile, JSON.stringify({ project: p.json, audioFiles: p.audioFiles || [] }), 'utf8');
 
     const run = await runUstxEngine(['export', '--project', '@' + reqFile, '--out', target]);
-    try { fs.unlinkSync(reqFile); } catch (e) {}
+    try { fs.unlinkSync(reqFile); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     const res = run.result;
     if (!res || !res.ok) {
       return { ok: false, error: (res && res.error) || ('导出 .ustx 失败' + firstErrLine(run.err)) };

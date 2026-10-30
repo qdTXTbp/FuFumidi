@@ -165,8 +165,8 @@ function registerFeedbackIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, sp
       if (b.health) fs.writeFileSync(repPath, b.health, 'utf8');
       const res = await runEngine(['--out', r.filePath, '--md', mdPath,
         '--report', b.health ? repPath : '', '--diag', b.diag.ok ? b.diag.path : ''], 'feedback_bundle.py', 180000);
-      try { fs.rmSync(mdPath, { force: true }); } catch (e) {}
-      try { fs.rmSync(repPath, { force: true }); } catch (e) {}
+      try { fs.rmSync(mdPath, { force: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
+      try { fs.rmSync(repPath, { force: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       if (!res.ok || !(res.result && res.result.ok)) return { ok: false, error: (res.result && res.result.error) || res.error || '打包失败' };
       return { ok: true, path: r.filePath, bytes: res.result.bytes, entries: res.result.entries, stripped: res.result.stripped };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
@@ -191,7 +191,7 @@ function registerFeedbackIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, sp
       let lastErr = '';
       for (const base of BASES) {
         const ctrl = new AbortController();
-        const timer = setTimeout(() => { try { ctrl.abort(); } catch (e) {} }, BASE_TIMEOUT_MS);
+        const timer = setTimeout(() => { try { ctrl.abort(); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } }, BASE_TIMEOUT_MS);
         try {
           const res = await net.fetch(base + '/feedback', {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -200,7 +200,7 @@ function registerFeedbackIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, sp
           clearTimeout(timer);
           const j = await res.json().catch(() => null);
           if (res.ok && j && j.ok) {
-            if (b.diag.ok) { try { fs.rmSync(b.diag.path, { force: true }); } catch (e) {} }
+            if (b.diag.ok) { try { fs.rmSync(b.diag.path, { force: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } }
             return { ok: true, id: j.id, url: j.url, path: j.path, issue: j.issue || null };
           }
           lastErr = (j && j.error) || ('HTTP ' + res.status);
@@ -215,8 +215,8 @@ function registerFeedbackIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, sp
       if (b.health) fs.writeFileSync(repPath, b.health, 'utf8');
       const packed = await runEngine(['--out', local, '--md', mdPath,
         '--report', b.health ? repPath : '', '--diag', b.diag.ok ? b.diag.path : ''], 'feedback_bundle.py', 180000);
-      try { fs.rmSync(mdPath, { force: true }); } catch (e) {}
-      try { fs.rmSync(repPath, { force: true }); } catch (e) {}
+      try { fs.rmSync(mdPath, { force: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
+      try { fs.rmSync(repPath, { force: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       return { ok: false, error: lastErr || '上传失败', savedLocal: !!(packed.ok && packed.result && packed.result.ok), localPath: local, markdown: b.markdown };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });

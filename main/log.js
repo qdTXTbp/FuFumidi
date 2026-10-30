@@ -12,9 +12,9 @@ function rotate(dir) {
     const st = fs.statSync(logFile);
     if (st.size < 5 * 1024 * 1024) return;
     const old = logFile + '.1';
-    try { fs.rmSync(old, { force: true }); } catch (e) {}
+    try { fs.rmSync(old, { force: true }); } catch (e) { /* logging must never throw */ }
     fs.renameSync(logFile, old);
-  } catch (e) {}
+  } catch (e) { /* logging must never throw */ }
 }
 function write(level, message, extra) {
   if (!logFile) return;
@@ -22,7 +22,7 @@ function write(level, message, extra) {
     rotate(path.dirname(logFile));
     const line = new Date().toISOString() + ' [' + level + '] ' + String(message || '') + (extra ? ' ' + extra : '') + '\n';
     fs.appendFileSync(logFile, line, 'utf8');
-  } catch (e) {}
+  } catch (e) { /* logging must never throw */ }
 }
 function installLogging({ app, dir, fs: f } = {}) {
   try {
@@ -34,7 +34,7 @@ function installLogging({ app, dir, fs: f } = {}) {
     process.on('unhandledRejection', (err) => write('ERROR', 'unhandledRejection ' + ((err && err.stack) || err)));
     app.on('render-process-gone', (_e, _wc, details) => write('ERROR', 'render-process-gone', JSON.stringify(details || {})));
     app.on('child-process-gone', (_e, details) => write('ERROR', 'child-process-gone', JSON.stringify(details || {})));
-  } catch (e) {}
+  } catch (e) { /* logging must never throw */ }
   return { write, logFile: () => logFile };
 }
 module.exports = { installLogging, write };

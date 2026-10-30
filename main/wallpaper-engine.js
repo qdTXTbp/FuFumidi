@@ -73,7 +73,7 @@ function resolveMain(dir, declared, type) {
   const cands = type === 'scene' ? [declared, 'scene.pkg', 'scene.json'] : [declared];
   for (const c of cands) { if (c && exists(path.join(dir, c))) return c; }
   if (type === 'scene') {
-    try { const p = fs.readdirSync(dir).filter((n) => /\.pkg$/i.test(n)); if (p.length === 1) return p[0]; } catch (e) {}
+    try { const p = fs.readdirSync(dir).filter((n) => /\.pkg$/i.test(n)); if (p.length === 1) return p[0]; } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
   }
   return declared || '';
 }
@@ -119,7 +119,7 @@ function contentType(p) {
   const e = path.extname(p).toLowerCase();
   return ({ '.html': 'text/html; charset=utf-8', '.htm': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.mp4': 'video/mp4', '.webm': 'video/webm', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.wav': 'audio/wav', '.pkg': 'application/octet-stream', '.tex': 'application/octet-stream', '.svg': 'image/svg+xml' }[e] || 'application/octet-stream');
 }
-function send(res, status, body, headers) { try { res.writeHead(status, Object.assign({ 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' }, headers || {})); res.end(body); } catch (e) {} }
+function send(res, status, body, headers) { try { res.writeHead(status, Object.assign({ 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' }, headers || {})); res.end(body); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } }
 function serveFile(req, res, file) {
   try {
     const st = fs.statSync(file);
@@ -163,7 +163,7 @@ function ensureServer() {
         }
         if (rest === '/engine.js') {
           let p = '';
-          try { p = path.join(path.dirname(require.resolve('webwallgl/package.json')), 'webwallgl.global.min.js'); } catch (e) {}
+          try { p = path.join(path.dirname(require.resolve('webwallgl/package.json')), 'webwallgl.global.min.js'); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
           if (!p) return send(res, 404, 'webwallgl missing');
           return serveFile(req, res, p);
         }
@@ -197,6 +197,6 @@ function registerWallpaperEngineIpc({ ipcMain, shell, app }) {
     return { ok: true, url: base + '/render?' + q.toString(), item: it };
   });
   ipcMain.handle('wallpaperEngine:openFolder', async () => { const d = await detect(); if (d.installDir && shell) shell.openPath(d.installDir); return { ok: !!d.installDir }; });
-  if (app && app.on) app.on('before-quit', () => { try { if (server) server.close(); } catch (e) {} server = null; origin = ''; });
+  if (app && app.on) app.on('before-quit', () => { try { if (server) server.close(); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } server = null; origin = ''; });
 }
 module.exports = { registerWallpaperEngineIpc, detect, scanSync };

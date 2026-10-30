@@ -143,7 +143,7 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, 
       try { return { release: await fetchCnbRelease('stable'), channel: 'stable' }; } catch (e) { /* 回退 GitHub */ }
     }
     if (ch === 'beta') {
-      try { const r = await fetchChannelRelease('beta'); if (r) return { release: r, channel: 'beta' }; } catch (e) {}
+      try { const r = await fetchChannelRelease('beta'); if (r) return { release: r, channel: 'beta' }; } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     }
     return { release: await fetchChannelRelease('stable'), channel: 'stable' };
   }
@@ -232,7 +232,7 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, 
         if (manifest) {
           const v = await verifyManifest({ filePath: dest, manifest: manifest });
           if (!v.ok) {
-            try { fs.unlinkSync(dest); } catch (e) {}
+            try { fs.unlinkSync(dest); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
             return { ok: false, error: '安装包签名校验失败：' + v.error, verified: false };
           }
           verified = true;
@@ -278,7 +278,7 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, 
               bytes += chunk.value.length;
             }
           }
-        } finally { try { await reader.cancel(); } catch (e) {} }
+        } finally { try { await reader.cancel(); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } }
       }
       // ★ 拿到的必须真是安装包：安装包是 PE，头两个字节必然是 "MZ"。
       //   镜像返回 200 但塞了 HTML 拦截页/改写内容时，只看 HTTP 状态会把它判成"最快"，
@@ -312,7 +312,7 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, 
         const s = list[next++];
         const row = await probeSource(s);
         out.push(row);
-        try { if (!evt.sender.isDestroyed()) evt.sender.send('update:speedtest:progress', row); } catch (e) {}
+        try { if (!evt.sender.isDestroyed()) evt.sender.send('update:speedtest:progress', row); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       }
     };
     await Promise.all(Array.from({ length: Math.min(3, list.length) }, worker));
@@ -382,7 +382,7 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, 
       const { spawn } = require('child_process');
       const child = spawn(un, [], { detached: true, stdio: 'ignore' });
       child.unref();
-      setTimeout(() => { try { app.quit(); } catch (e) {} }, 600);
+      setTimeout(() => { try { app.quit(); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } }, 600);
       return { ok: true };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
@@ -411,7 +411,7 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, 
       label: 'FuFumidi.update.exe',
     });
     if (r && r.size && updaterLooksConfigured(fs.readFileSync(dest))) {
-      try { fs.chmodSync(dest, 0o755); } catch (_) {}
+      try { fs.chmodSync(dest, 0o755); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
       return { ok: true, path: dest, size: r.size };
     }
     return { ok: false, error: '下载到的更新器仍未嵌入应用配置（大小 ' + (r && r.size) + '）' };
@@ -439,7 +439,7 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, 
       let stagedUpdater = '';
       try {
         if (!updaterLooksConfigured(fs.readFileSync(updaterPath))) {
-          try { fs.appendFileSync(path.join(Paths.tempDir(), 'fufumidi-restart.log'), new Date().toTimeString().slice(0, 8) + ' [main] installed updater lacks embedded config; fetching configured one\n'); } catch (_) {}
+          try { fs.appendFileSync(path.join(Paths.tempDir(), 'fufumidi-restart.log'), new Date().toTimeString().slice(0, 8) + ' [main] installed updater lacks embedded config; fetching configured one\n'); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
           const got = await downloadConfiguredUpdater(channel);
           if (!got.ok) {
             return { ok: false, error: '已安装的更新器未嵌入应用配置，自动获取新版更新器失败：' + (got.error || '未知错误') + '。请下载完整安装包覆盖安装。' };
@@ -518,12 +518,12 @@ L 'app started'
       // 真正替换完成后再也没人重启它，用户只看到一个停在完成态的更新器窗口。
       // 探测下载源要走 HEAD 请求（最多约 24s），所以这一步必须排在守护进程之前。
       // 主进程也往同一个日志里写几行：更新流程不生效时，看这一份就能知道卡在哪一步。
-      const _t = (m) => { try { fs.appendFileSync(_log, new Date().toTimeString().slice(0, 8) + ' [main] ' + m + '\n'); } catch (_) {} };
+      const _t = (m) => { try { fs.appendFileSync(_log, new Date().toTimeString().slice(0, 8) + ' [main] ' + m + '\n'); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } } };
       const ch = normChannel(channel);
       let source = sourceIdOf('github', ch);
       _t('channel=' + ch);
       _t('probing update source');
-      try { source = await pickUpdateSource(ch); } catch (_) {}
+      try { source = await pickUpdateSource(ch); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
       _t('source=' + source);
       try {
         const upd = spawn(updaterPath, ['-I', '-O', '--source', source], { cwd: updaterDir, detached: true, stdio: 'ignore' });
@@ -564,14 +564,14 @@ L 'app started'
       const t0 = Date.now();
       while (Date.now() - t0 < 10000) {
         let seen = false;
-        try { seen = fs.readFileSync(_log, 'utf8').indexOf('[guard]') >= 0; } catch (_) {}
+        try { seen = fs.readFileSync(_log, 'utf8').indexOf('[guard]') >= 0; } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
         if (seen) { _t('guard confirmed alive'); break; }
         await new Promise((r) => setTimeout(r, 200));
       }
       // 更新器要替换主程序 exe；若本进程仍运行，exe 被内存映射（user-mapped section）占用，
       // 更新器覆盖时会报 CREATE_TARGET_FILE_ERR / os error 1224。故先让应用自行退出，
       // 释放 exe 映射，再交给守护进程等待更新器完成后拉起新版本。
-      try { setTimeout(() => { try { app.exit(0); } catch (_) {} }, 400); } catch (_) {}
+      try { setTimeout(() => { try { app.exit(0); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } } }, 400); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
       return { ok: true, launching: true, updaterPath, source };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });

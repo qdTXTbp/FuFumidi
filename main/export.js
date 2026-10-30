@@ -79,7 +79,7 @@ function writeExport(o = {}) {
     fs.renameSync(mt, manifestPath);
     return { ok: true, path: target, manifestPath, manifest };
   } catch (e) {
-    try { fs.unlinkSync(tmp); } catch (_) {}
+    try { fs.unlinkSync(tmp); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
     return { ok: false, error: String((e && e.message) || e) };
   }
 }
@@ -124,7 +124,7 @@ function registerExportIpc({ ipcMain, dialog, app, path: nodePath, center } = {}
       if (res.ok && nodePath) {
         const want = nodePath.join(dir, nodePath.basename(target));
         if (res.path !== want) {
-          try { fs.renameSync(res.path, want); res.path = want; } catch (e) {}
+          try { fs.renameSync(res.path, want); res.path = want; } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
         }
       }
       if (task) {

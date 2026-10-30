@@ -4,7 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const ROOT = path.resolve(__dirname, '..');
-const BASELINE = Number(process.env.EMPTY_CATCH_BASELINE || 400);
+const BASELINE = Number(process.env.EMPTY_CATCH_BASELINE || 0);
 const files = [];
 function walk(d) {
   for (const e of fs.readdirSync(d, { withFileTypes: true })) {

@@ -42,7 +42,7 @@ function writeAutosave(root, docId, model, meta) {
     fs.renameSync(tmp, file);
     return { ok: true, path: file, ts: JSON.parse(payload).ts, bytes };
   } catch (e) {
-    try { fs.unlinkSync(tmp); } catch (_) {}
+    try { fs.unlinkSync(tmp); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
     return { ok: false, error: String((e && e.message) || e) };
   }
 }
@@ -65,7 +65,7 @@ async function writeAutosaveAsync(root, docId, model, meta) {
     await fs.promises.rename(tmp, file);
     return { ok: true, path: file, ts: JSON.parse(payload).ts, bytes };
   } catch (e) {
-    try { await fs.promises.unlink(tmp); } catch (_) {}
+    try { await fs.promises.unlink(tmp); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
     return { ok: false, error: String((e && e.message) || e) };
   }
 }

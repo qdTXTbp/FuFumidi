@@ -26,7 +26,7 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
       _workerIdle.set(slot, setTimeout(() => {
         _workerIdle.delete(slot);
         const child = _workers.get(slot);
-        if (child && !workerBusy(child)) { _workers.delete(slot); try { child.kill(); } catch (e) {} }
+        if (child && !workerBusy(child)) { _workers.delete(slot); try { child.kill(); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } }
       }, WORKER_IDLE_MS));
     }
   }
@@ -54,7 +54,7 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
       env: envOverride || engineEnv(),
     });
     activeChildren.add(child);
-    try { if (process.platform === 'win32') os.setPriority(child.pid, -1); } catch (e) {}
+    try { if (process.platform === 'win32') os.setPriority(child.pid, -1); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     let outBuf = '', errBuf = '';
     let result = null;
     let settled = false;
@@ -99,7 +99,7 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
       const dt = now - _last;
       _last = now;
       let paused = false;
-      try { paused = fs.existsSync(Paths.pauseFlagFile()); } catch (e) {}
+      try { paused = fs.existsSync(Paths.pauseFlagFile()); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       if (!paused) _left -= dt;
       // 暂停期间不算「无进展」：暂停本来就是零输出
       if (paused) _lastActivity = now;
@@ -116,11 +116,11 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
   function stopEngineWorker() {
     const olds = [..._workers.values()];
     _workers.clear();
-    for (const t of _workerIdle.values()) { try { clearTimeout(t); } catch (e) {} }
+    for (const t of _workerIdle.values()) { try { clearTimeout(t); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } }
     _workerIdle.clear();
-    for (const c of olds) { if (c && !c.killed) { try { c.kill(); } catch (e) {} } }
+    for (const c of olds) { if (c && !c.killed) { try { c.kill(); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } } }
     const err = new Error('engine worker restarted');
-    for (const p of _engineWorkerPending.values()) { try { p.reject(err); } catch (e) {} }
+    for (const p of _engineWorkerPending.values()) { try { p.reject(err); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } }
     _engineWorkerPending.clear();
     return new Promise((resolve) => {
       const alive = olds.filter(c => c && c.exitCode === null);
@@ -165,12 +165,12 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
                 } else if (/^\[(预处理|体检|模型|分段探测|推理|音频证据|节拍|收尾)/.test(String(_line).trim()) || String(_line).includes('使用 GPU')) {
                   ent.task.log(_line);
                 }
-              } catch (e) {}
+              } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
             }
             if (ent && ent.win && !ent.win.isDestroyed() && ent.logId) {
               ent.win.webContents.send('engine:log', { id: ent.logId, line: _line });
             }
-          } catch (e) {}
+          } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
           continue;
         }
         if (t.startsWith('###RESULT ')) {
@@ -182,7 +182,7 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
               _engineWorkerPending.delete(id);
               p.resolve(r);
             }
-          } catch (e) {}
+          } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
         }
       }
     });
@@ -194,7 +194,7 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
       const t = _workerIdle.get(slot);
       if (t) { clearTimeout(t); _workerIdle.delete(slot); }
       for (const [id, p] of [..._engineWorkerPending.entries()]) {
-        if (p.child === child) { _engineWorkerPending.delete(id); try { p.reject(err); } catch (e) {} }
+        if (p.child === child) { _engineWorkerPending.delete(id); try { p.reject(err); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } }
       }
     };
     child.on('error', e => failOne(new Error('engine worker error: ' + e)));
@@ -210,7 +210,7 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
     try {
       const env = engineEnv();
       if (env && env.FUFUMIDI_DISABLE_GPU !== '1') slots = Math.max(1, slots - 1); // GPU：自动降 1
-    } catch (e) {}
+    } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     const load = new Map();
     for (let s = 0; s < slots; s++) load.set(s, 0);
     for (const p of _engineWorkerPending.values()) {
@@ -301,7 +301,7 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
           let m = t.match(/^###RESULT\s+(\{.*\})\s*$/);
           if (m) {
             let r = null;
-            try { r = JSON.parse(m[1]); } catch (e) {}
+            try { r = JSON.parse(m[1]); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
             if (r && r.id != null && pending.has(r.id)) {
               const p = pending.get(r.id);
               pending.delete(r.id);
@@ -316,7 +316,7 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
               const pr = JSON.parse(m[1]);
               const w = (pr.id != null && pending.get(pr.id)) || null;
               if (w && w.onProgress) w.onProgress(pr);
-            } catch (e) {}
+            } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
             continue;
           }
           // 普通日志：常驻会话的输出按请求粒度投递，独立日志行丢弃
@@ -367,8 +367,8 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
       child = null;
       if (c) {
         // 先礼貌要退出（给引擎 flush 的机会），2s 后硬杀
-        try { c.stdin.write('{"cmd": "exit"}\n'); } catch (e) {}
-        setTimeout(() => { try { c.kill(); } catch (e) {} }, 2000);
+        try { c.stdin.write('{"cmd": "exit"}\n'); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
+        setTimeout(() => { try { c.kill(); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } }, 2000);
       }
     }
 
@@ -380,7 +380,7 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
       pending.delete(id);
       const err = new Error('canceled');
       err.canceled = true;
-      try { p.reject(err); } catch (e) {}
+      try { p.reject(err); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       return true;
     }
 
@@ -416,12 +416,12 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
       //   "被取消" 与 "worker 崩了" —— 否则取消会触发回落、另起一个进程重跑。
       const err = new Error('canceled');
       err.canceled = true;
-      try { p.reject(err); } catch (e) {}
+      try { p.reject(err); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       // 杀掉 worker 进程才算真停：python 那边一旦开始解码，只 reject Promise 不会让它停手
-      try { if (p.child && !p.child.killed && p.child.exitCode === null) p.child.kill(); } catch (e) {}
+      try { if (p.child && !p.child.killed && p.child.exitCode === null) p.child.kill(); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       hit = true;
     }
-    for (const s of _sessions) { try { if (s.cancel(id)) hit = true; } catch (e) {} }
+    for (const s of _sessions) { try { if (s.cancel(id)) hit = true; } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } }
     return hit;
   }
 

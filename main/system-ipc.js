@@ -183,7 +183,7 @@ function registerSystemIpc({ ipcMain, integrity, BrowserWindow, path, shell, app
           const sz = (() => { try { return fs.statSync(p).size; } catch (_) { return 0; } })();
           fs.rmSync(p, { recursive: true, force: true });
           freed += sz;
-        } catch (_) {}
+        } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
       }
       return { ok: true, freed, dir };
     } catch (e) { return { ok: false, error: String(e && e.message || e) }; }

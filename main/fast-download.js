@@ -151,15 +151,15 @@ module.exports = function createFastDownload({ net, fs, path, nodeFetch }) {
    */
   async function fetchOnce(transport, url, { headers, ctrl, connectMs }) {
     const srcCtrl = new AbortController();
-    const onUser = () => { try { srcCtrl.abort(); } catch (_) {} };
+    const onUser = () => { try { srcCtrl.abort(); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } } };
     if (ctrl) { if (ctrl.signal.aborted) onUser(); else ctrl.signal.addEventListener('abort', onUser); }
-    const timer = setTimeout(() => { try { srcCtrl.abort(); } catch (_) {} }, connectMs);
+    const timer = setTimeout(() => { try { srcCtrl.abort(); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } } }, connectMs);
     let r;
     try {
       r = await transport.fetch(url, { headers: headers || {}, signal: srcCtrl.signal });
     } finally {
       clearTimeout(timer);
-      try { if (ctrl) ctrl.signal.removeEventListener('abort', onUser); } catch (_) {}
+      try { if (ctrl) ctrl.signal.removeEventListener('abort', onUser); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
     }
     if (!r || !r.ok || !r.body) throw new Error('HTTP ' + (r && r.status));
     return { res: r, srcCtrl };
@@ -175,7 +175,7 @@ module.exports = function createFastDownload({ net, fs, path, nodeFetch }) {
         const raw = res.body.getReader();
         let lastData = Date.now();
         const watchdog = setInterval(() => {
-          if (Date.now() - lastData > stallMs) { try { srcCtrl.abort(); } catch (_) {} }
+          if (Date.now() - lastData > stallMs) { try { srcCtrl.abort(); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } } }
         }, 2000);
         // 包装 reader：每读到数据就刷新停滞计时。
         const reader = {
@@ -216,13 +216,13 @@ module.exports = function createFastDownload({ net, fs, path, nodeFetch }) {
           if (done) break;
           got += value.length;
           if (got >= PROBE_BYTES || Date.now() - t0 >= PROBE_MS) {
-            try { await gd.reader.cancel(); } catch (_) {}
+            try { await gd.reader.cancel(); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
             break;
           }
         }
         const ms = Math.max(1, Date.now() - t0);
         return { url: u, mbps: (got / ms) * 1000 / 1048576, total, ranged };
-      } finally { try { gd.cleanup(); } catch (_) {} }
+      } finally { try { gd.cleanup(); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } } }
     };
     const settled = await Promise.all(list.map(async (u) => {
       try { return await probe(u); } catch (_) { return { url: u, mbps: 0, total: 0, ranged: false }; }
@@ -238,7 +238,7 @@ module.exports = function createFastDownload({ net, fs, path, nodeFetch }) {
       headers: { 'user-agent': UA_DEFAULT, Range: 'bytes=0-0' }, ctrl, connectMs: 8000, stallMs: 8000,
     });
     try { return totalOfHeaders(gd.res.headers); }
-    finally { try { await gd.reader.cancel(); } catch (_) {} try { gd.cleanup(); } catch (_) {} }
+    finally { try { await gd.reader.cancel(); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } } try { gd.cleanup(); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } } }
   }
 
   /** 测速结果 → host 速度表，供同批其它文件直接复用（省掉每个文件一次测速） */
@@ -281,7 +281,7 @@ module.exports = function createFastDownload({ net, fs, path, nodeFetch }) {
     const base = path.basename(dest) + '.fs';
     for (const n of names) {
       if (!n.startsWith(base) || !n.endsWith('.tmp')) continue;
-      try { fs.rmSync(path.join(path.dirname(dest), n), { force: true }); } catch (_) {}
+      try { fs.rmSync(path.join(path.dirname(dest), n), { force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
     }
   }
 
@@ -289,7 +289,7 @@ module.exports = function createFastDownload({ net, fs, path, nodeFetch }) {
   function cleanSegments(dest) {
     cleanSegTmp(dest);
     for (let i = 0; i < SEG_MAX; i++) {
-      try { fs.rmSync(dest + '.fs' + i, { force: true }); } catch (_) {}
+      try { fs.rmSync(dest + '.fs' + i, { force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
     }
   }
 
@@ -306,15 +306,15 @@ module.exports = function createFastDownload({ net, fs, path, nodeFetch }) {
     } = opts || {};
     const abortObj = isUserAbort || {};
     const head = { 'user-agent': UA_DEFAULT, ...(headers || {}) };
-    const report = (p) => { try { onProgress && onProgress({ host: '', label, ...p }); } catch (_) {} };
+    const report = (p) => { try { onProgress && onProgress({ host: '', label, ...p }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } } };
 
     const candidates = [...new Set((urls || []).filter(Boolean))];
     if (!candidates.length) throw new Error('没有可用的下载源');
-    try { fs.mkdirSync(path.dirname(dest), { recursive: true }); } catch (_) {}
+    try { fs.mkdirSync(path.dirname(dest), { recursive: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
 
     // ---- 统一的取消信号 ----
     const ctrl = new AbortController();
-    const kill = () => { try { ctrl.abort(); } catch (_) {} };
+    const kill = () => { try { ctrl.abort(); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } } };
     if (outerCtrl) { if (outerCtrl.signal.aborted) kill(); else outerCtrl.signal.addEventListener('abort', kill); }
     const userAborted = () => !!(abortObj.aborted || abortObj.isUserAbort);
     const stopped = () => ctrl.signal.aborted || userAborted();
@@ -336,7 +336,7 @@ module.exports = function createFastDownload({ net, fs, path, nodeFetch }) {
 
     // ---- ② 定长度 + 定分段计划 ----
     let total = ranked[0].total || 0;
-    if (!total && ranked[0].ranged) { try { total = await remoteSize(order[0], ctrl); } catch (_) {} }
+    if (!total && ranked[0].ranged) { try { total = await remoteSize(order[0], ctrl); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } } }
     checkStop();
     let plan = { segCount: 1, concurrency: 1 };
     if (!singleStream && ranked[0].ranged && (total || expectSize)) {
@@ -369,16 +369,16 @@ module.exports = function createFastDownload({ net, fs, path, nodeFetch }) {
     const segBytes = (i) => Math.max(0, Math.min(total, (i + 1) * segSize) - i * segSize);
 
     let segCtrl = new AbortController();
-    const onOuterAbort = () => { try { segCtrl.abort(); } catch (_) {} };
+    const onOuterAbort = () => { try { segCtrl.abort(); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } } };
     if (ctrl.signal.aborted) onOuterAbort(); else ctrl.signal.addEventListener('abort', onOuterAbort);
-    const releaseOuter = () => { try { ctrl.signal.removeEventListener('abort', onOuterAbort); } catch (_) {} };
+    const releaseOuter = () => { try { ctrl.signal.removeEventListener('abort', onOuterAbort); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } } };
 
     // 续传：已完成且长度正确的分段直接跳过
     let downloaded = 0;
     const todo = [];
     for (let i = 0; i < segCount; i++) {
       let ok = false;
-      try { ok = fs.existsSync(segPath(i)) && fs.statSync(segPath(i)).size === segBytes(i); } catch (_) {}
+      try { ok = fs.existsSync(segPath(i)) && fs.statSync(segPath(i)).size === segBytes(i); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
       if (ok) downloaded += segBytes(i); else todo.push(i);
     }
 
@@ -418,7 +418,7 @@ module.exports = function createFastDownload({ net, fs, path, nodeFetch }) {
         for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
-          if (stopped()) { try { reader.cancel(); } catch (_) {} throw cancelledError(); }
+          if (stopped()) { try { reader.cancel(); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } } throw cancelledError(); }
           got += value.length;
           downloaded += value.length;
           lastHost = hostOf(url);
@@ -435,9 +435,9 @@ module.exports = function createFastDownload({ net, fs, path, nodeFetch }) {
         throw e;
       } finally {
         // 先关写入流再删文件：Windows 下文件被占用时删除会静默失败
-        if (ws) { try { ws.destroy(); } catch (_) {} await sleep(30); }
-        try { fs.rmSync(fn, { force: true }); } catch (_) {}
-        try { gd.cleanup(); } catch (_) {}
+        if (ws) { try { ws.destroy(); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } } await sleep(30); }
+        try { fs.rmSync(fn, { force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
+        try { gd.cleanup(); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
       }
     };
 
@@ -489,10 +489,10 @@ module.exports = function createFastDownload({ net, fs, path, nodeFetch }) {
       if (!errs.length) return null;
       return errs.find((e) => !/aborted/i.test(String((e && e.message) || e))) || errs[0];
     };
-    const stopRound = () => { try { segCtrl.abort(); } catch (_) {} };
+    const stopRound = () => { try { segCtrl.abort(); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } } };
     const startRound = () => {
       segCtrl = new AbortController();
-      if (ctrl.signal.aborted) { try { segCtrl.abort(); } catch (_) {} }
+      if (ctrl.signal.aborted) { try { segCtrl.abort(); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } } }
     };
 
     let fail = await runRound();
@@ -505,7 +505,7 @@ module.exports = function createFastDownload({ net, fs, path, nodeFetch }) {
       try {
         const reranked = await rankMirrors(sourceOrder, ctrl, { useCache: false });
         if (reranked.length) { sourceOrder.length = 0; sourceOrder.push(...reranked.map((r) => r.url)); }
-      } catch (_) {}
+      } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
       startRound();
       fail = await runRound();
     }
@@ -522,7 +522,7 @@ module.exports = function createFastDownload({ net, fs, path, nodeFetch }) {
 
     // ---- 合并分段 → .part → 目标 ----
     const part = dest + '.part';
-    try { fs.rmSync(part, { force: true }); } catch (_) {}
+    try { fs.rmSync(part, { force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
     await new Promise((res2, rej2) => {
       const ws = fs.createWriteStream(part, { flags: 'w' });
       ws.on('error', rej2);
@@ -538,11 +538,11 @@ module.exports = function createFastDownload({ net, fs, path, nodeFetch }) {
     });
     const size = fs.statSync(part).size;
     if (size !== total) {
-      try { fs.rmSync(part, { force: true }); } catch (_) {}
+      try { fs.rmSync(part, { force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
       throw new Error('合并后大小不符：' + size + '/' + total + '（可能被代理拦截）');
     }
     verifySize(size, { expectSize, total, minSize, label });
-    try { fs.rmSync(dest, { force: true }); } catch (_) {}
+    try { fs.rmSync(dest, { force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
     fs.renameSync(part, dest);
     cleanSegments(dest);
     return { size, total, host: hostOf(sourceOrder[0]), segments: segCount };
@@ -562,10 +562,10 @@ module.exports = function createFastDownload({ net, fs, path, nodeFetch }) {
       let ws = null;
       try {
         let have = 0;
-        try { have = fs.statSync(part).size; } catch (_) {}
+        try { have = fs.statSync(part).size; } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
         if (total && have >= total) {
           verifySize(have, { expectSize: expectSize || total, minSize, label });
-          try { fs.rmSync(dest, { force: true }); } catch (_) {}
+          try { fs.rmSync(dest, { force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
           fs.renameSync(part, dest);
           return { size: have, total, host: hostOf(url), segments: 1 };
         }
@@ -575,7 +575,7 @@ module.exports = function createFastDownload({ net, fs, path, nodeFetch }) {
         const gd = await fetchGuarded(url, { headers, ctrl, connectMs: 20000, stallMs: 25000 });
         try {
           const resumable = gd.res.status === 206 && have > 0;
-          if (!resumable && have > 0) { try { fs.rmSync(part, { force: true }); } catch (_) {} have = 0; }
+          if (!resumable && have > 0) { try { fs.rmSync(part, { force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } } have = 0; }
           const clen = parseInt(gd.res.headers.get('content-length') || '0', 10);
           const totalSize = clen ? have + clen : (total || expectSize || 0);
 
@@ -591,7 +591,7 @@ module.exports = function createFastDownload({ net, fs, path, nodeFetch }) {
           for (;;) {
             const { done, value } = await reader.read();
             if (done) break;
-            if (stopped()) { try { reader.cancel(); } catch (_) {} throw cancelledError(); }
+            if (stopped()) { try { reader.cancel(); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } } throw cancelledError(); }
             got += value.length;
             const received = have + got;
             report({ received, total: totalSize, speed: 0, host: hostOf(url), segmented: 1, label });
@@ -603,7 +603,7 @@ module.exports = function createFastDownload({ net, fs, path, nodeFetch }) {
               if (now - t0 > LOW_WARMUP_MS && order.length > 1 && bps > 0 && bps < LOW_BPS) {
                 if (!lowSince) lowSince = now;
                 else if (now - lowSince >= 6000) {
-                  try { reader.cancel('slow'); } catch (_) {}
+                  try { reader.cancel('slow'); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
                   throw new Error('当前源速度过低（' + Math.round(bps / 1024) + ' KB/s），换个源');
                 }
               } else { lowSince = 0; }
@@ -612,7 +612,7 @@ module.exports = function createFastDownload({ net, fs, path, nodeFetch }) {
           }
           await new Promise((res2, rej2) => ws.end((err) => (err ? rej2(err) : res2())));
           ws = null;
-        } finally { try { gd.cleanup(); } catch (_) {} }
+        } finally { try { gd.cleanup(); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } } }
 
         const st = fs.statSync(part);
         // 完整性优先级：期望长度（调用方给的权威值）> 远端声明长度 > 最小体积
@@ -621,15 +621,15 @@ module.exports = function createFastDownload({ net, fs, path, nodeFetch }) {
         } catch (e) {
           lastErr = e;
           // 比期望还大 = 残片已被污染（错误页/串流），必须丢弃；偏小则保留，下一轮用 Range 续传补齐
-          if (expectSize && st.size > expectSize) { try { fs.rmSync(part, { force: true }); } catch (_) {} }
+          if (expectSize && st.size > expectSize) { try { fs.rmSync(part, { force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } } }
           continue;
         }
-        try { fs.rmSync(dest, { force: true }); } catch (_) {}
+        try { fs.rmSync(dest, { force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
         fs.renameSync(part, dest);
         return { size: st.size, total: total || st.size, host: hostOf(url), segments: 1 };
       } catch (e) {
         lastErr = e;
-        try { if (ws) ws.destroy(); } catch (_) {}
+        try { if (ws) ws.destroy(); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
         ws = null;
         if (e && e.cancelled) throw e;
         if (stopped()) throw cancelledError();
@@ -670,7 +670,7 @@ module.exports = function createFastDownload({ net, fs, path, nodeFetch }) {
           overallPercent: totalBytes ? Math.min(99, Math.round((sum / totalBytes) * 100)) : 0,
           label: list[i].label || '', done: !!isDone, ...p,
         });
-      } catch (_) {}
+      } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
     };
     let cursor = 0, firstErr = null, stop = false;
     const worker = async () => {

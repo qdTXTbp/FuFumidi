@@ -81,7 +81,7 @@ function registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net, bun
     try {
       installed = fs.existsSync(exe);
       if (installed) size = fs.statSync(exe).size;
-    } catch (e) {}
+    } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     return { ok: true, installed, exe, version: VERSION, bytes: size, url: MSI_URL };
   };
 
@@ -104,22 +104,22 @@ function registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net, bun
           const st = fs.statSync(p);
           if (st.size < LANG_MIN_BYTES) continue;          // 半截文件不算装好
           installed.push({ code: f.slice(0, -'.traineddata'.length), bytes: st.size });
-        } catch (e) {}
+        } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       }
-    } catch (e) {}
+    } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     return { ok: true, dir, installed, catalog: LANG_CATALOG };
   };
   ipcMain.handle('omr:langStatus', () => langStatus());
 
   ipcMain.handle('omr:langInstall', async (evt, codes) => {
     const win = BrowserWindow.fromWebContents(evt.sender);
-    const send = (p) => { try { win && win.webContents.send('omr:progress', p); } catch (e) {} };
+    const send = (p) => { try { win && win.webContents.send('omr:progress', p); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } };
     const want = (Array.isArray(codes) ? codes : [codes])
       .map((c) => String(c || '').trim())
       .filter((c) => /^[a-z_]{2,12}$/.test(c) && LANG_CATALOG.some((x) => x.code === c));
     if (!want.length) return { ok: false, error: '没有可安装的语言代码' };
     const dir = tessDir();
-    try { fs.mkdirSync(dir, { recursive: true }); } catch (e) {}
+    try { fs.mkdirSync(dir, { recursive: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     const added = [];
     for (let i = 0; i < want.length; i++) {
       const code = want[i];
@@ -130,7 +130,7 @@ function registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net, bun
       const got = await downloadAny(LANG_URLS(code), dst, (pct) => {
         send({ phase: 'lang', percent: Math.min(99, base + Math.round(span * (pct / 100))), text: '下载语言包 ' + code });
       }, { minSize: LANG_MIN_BYTES, expectSize: 0 });
-      if (!got.ok) { try { fs.rmSync(dst, { force: true }); } catch (e) {} return { ok: false, error: code + '：' + got.error }; }
+      if (!got.ok) { try { fs.rmSync(dst, { force: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } return { ok: false, error: code + '：' + got.error }; }
       added.push(code);
     }
     send({ phase: 'done', percent: 100, text: '语言包就绪' });
@@ -140,7 +140,7 @@ function registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net, bun
   ipcMain.handle('omr:langRemove', (_e, code) => {
     const c = String(code || '').trim();
     if (!/^[a-z_]{2,12}$/.test(c)) return { ok: false, error: '语言代码非法' };
-    try { fs.rmSync(path.join(tessDir(), c + '.traineddata'), { force: true }); } catch (e) {}
+    try { fs.rmSync(path.join(tessDir(), c + '.traineddata'), { force: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     return langStatus();
   });
 
@@ -200,7 +200,7 @@ function registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net, bun
       ch.stderr.on('data', (d) => { buf += d.toString('utf8'); });
       ch.on('close', (code) => fin({ code, out: buf }));
       ch.on('error', (e) => fin({ code: -1, out: String((e && e.message) || e) }));
-      setTimeout(() => { try { ch.kill(); } catch (e) {} fin({ code: -2, out: 'probe timeout' }); }, 60000);
+      setTimeout(() => { try { ch.kill(); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } fin({ code: -2, out: 'probe timeout' }); }, 60000);
     }).then((r) => {
       const m = /OK (.*)/.exec(r.out || '');
       homrProbeCache = {
@@ -221,7 +221,7 @@ function registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net, bun
         const st = fs.statSync(path.join(homrSite(), w.dir, w.file));
         has = st.size > 1024 * 1024;      // 半截文件不算装好
         size = st.size;
-      } catch (e) {}
+      } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       weights.push({ file: w.file, installed: has, bytes: size });
       bytes += size;
     }
@@ -244,18 +244,18 @@ function registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net, bun
 
   ipcMain.handle('omr:homrInstall', async (evt) => {
     const win = BrowserWindow.fromWebContents(evt.sender);
-    const send = (p) => { try { win && win.webContents.send('omr:progress', p); } catch (e) {} };
+    const send = (p) => { try { win && win.webContents.send('omr:progress', p); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } };
     const basePy = typeof bundledPython === 'function' ? bundledPython() : '';
     if (!basePy) return { ok: false, error: '没有找到内置 Python 运行时，无法创建独立环境' };
     const venv = homrVenv();
     const vpy = path.join(venv, Platform.venvPythonRelative(process.platform));
-    try { fs.mkdirSync(homrDir(), { recursive: true }); } catch (e) {}
+    try { fs.mkdirSync(homrDir(), { recursive: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     const run = (exe, args, onOut, timeoutMs) => new Promise((resolve) => {
       let out = '', done = false;
       const ch = spawn(exe, args, { windowsHide: true, cwd: homrDir(),
         env: Object.assign({}, process.env, { PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' }) });
       const fin = (code) => { if (done) return; done = true; clearTimeout(timer); resolve({ code, out }); };
-      const timer = setTimeout(() => { try { ch.kill(); } catch (e) {} fin(-1); }, timeoutMs || 30 * 60 * 1000);
+      const timer = setTimeout(() => { try { ch.kill(); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } fin(-1); }, timeoutMs || 30 * 60 * 1000);
       const grab = (d) => { const s = String(d); out += s; if (onOut) onOut(s); };
       ch.stdout.on('data', grab);
       ch.stderr.on('data', grab);
@@ -271,10 +271,10 @@ function registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net, bun
       };
       const wantMinor = await pyMinor(basePy);
       let haveMinor = '';
-      try { haveMinor = ((fs.readFileSync(path.join(venv, 'pyvenv.cfg'), 'utf8').match(/version\s*=\s*(\d+\.\d+)/) || [])[1]) || ''; } catch (e) {}
+      try { haveMinor = ((fs.readFileSync(path.join(venv, 'pyvenv.cfg'), 'utf8').match(/version\s*=\s*(\d+\.\d+)/) || [])[1]) || ''; } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       if (fs.existsSync(vpy) && haveMinor && wantMinor && haveMinor !== wantMinor) {
         send({ phase: 'homr-venv', percent: 2, text: '内置运行时已升到 Python ' + wantMinor + '，正在重建识谱环境…' });
-        try { fs.rmSync(venv, { recursive: true, force: true }); } catch (e) {}
+        try { fs.rmSync(venv, { recursive: true, force: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       }
       // 1) 独立 venv（不继承 site-packages —— 这是 homr 能装进来的前提）
       if (!fs.existsSync(vpy)) {
@@ -302,11 +302,11 @@ function registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net, bun
       }
       // 3) 权重：先用统一下载器（镜像可回退、走看门狗），失败再退回 homr --init
       const tmp = path.join(Paths.tempDir(), 'homr-weights');
-      try { fs.mkdirSync(tmp, { recursive: true }); } catch (e) {}
+      try { fs.mkdirSync(tmp, { recursive: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       for (let i = 0; i < HOMR_WEIGHTS.length; i++) {
         const w = HOMR_WEIGHTS[i];
         const dstFile = path.join(homrSite(), w.dir, w.file);
-        try { if (fs.statSync(dstFile).size > 1024 * 1024) continue; } catch (e) {}
+        try { if (fs.statSync(dstFile).size > 1024 * 1024) continue; } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
         const base = 55 + Math.round((i / HOMR_WEIGHTS.length) * 35);
         const label = '下载 AI 权重 ' + (i + 1) + '/' + HOMR_WEIGHTS.length;
         send({ phase: 'homr-weights', percent: base, text: label });
@@ -321,14 +321,14 @@ function registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net, bun
             'Expand-Archive -Path "' + zipTmp + '" -DestinationPath "' + target + '" -Force'], { windowsHide: true });
           await new Promise((res) => { ps.on('close', () => res()); ps.on('error', () => res()); });
         }
-        try { fs.rmSync(zipTmp, { force: true }); } catch (e) {}
+        try { fs.rmSync(zipTmp, { force: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
         let have = false;
-        try { have = fs.statSync(dstFile).size > 1024 * 1024; } catch (e) {}
+        try { have = fs.statSync(dstFile).size > 1024 * 1024; } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
         if (!have) {
           // 退回 homr 自带的下载器（它知道该下什么、放哪里；就是慢）
           send({ phase: 'homr-weights', percent: base, text: '改用 homr 自带下载…' });
           const r = await run(homrExePath(), ['--init'], null, 60 * 60 * 1000);
-          try { have = fs.statSync(dstFile).size > 1024 * 1024; } catch (e) {}
+          try { have = fs.statSync(dstFile).size > 1024 * 1024; } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
           if (!have) return { ok: false, error: '下载权重失败：' + String((got && got.error) || '').slice(0, 160) + ' / ' + r.out.slice(-200) };
         }
       }
@@ -363,13 +363,13 @@ function registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net, bun
 
   function srStatus() {
     let exeBytes = 0;
-    try { exeBytes = fs.statSync(srExePath()).size; } catch (e) {}
+    try { exeBytes = fs.statSync(srExePath()).size; } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     const models = SR_MODELS.map((m) => {
       let bytes = 0;
       try {
         const dir = path.join(srDir(), m);
-        for (const f of fs.readdirSync(dir)) { try { bytes += fs.statSync(path.join(dir, f)).size; } catch (e) {} }
-      } catch (e) {}
+        for (const f of fs.readdirSync(dir)) { try { bytes += fs.statSync(path.join(dir, f)).size; } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } }
+      } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       return { name: m, installed: bytes > 1024 * 1024, bytes };
     });
     const bytes = exeBytes + models.reduce((s, m) => s + m.bytes, 0);
@@ -386,13 +386,13 @@ function registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net, bun
 
   ipcMain.handle('omr:srInstall', async (evt) => {
     const win = BrowserWindow.fromWebContents(evt.sender);
-    const send = (p) => { try { win && win.webContents.send('omr:progress', p); } catch (e) {} };
+    const send = (p) => { try { win && win.webContents.send('omr:progress', p); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } };
     try {
       fs.mkdirSync(srDir(), { recursive: true });
       const tmpZip = path.join(Paths.tempDir(), SR_ZIP);
       const tmpDst = path.join(Paths.tempDir(), 'waifu2x-unzip');
-      try { fs.rmSync(tmpDst, { recursive: true, force: true }); } catch (e) {}
-      try { fs.mkdirSync(tmpDst, { recursive: true }); } catch (e) {}
+      try { fs.rmSync(tmpDst, { recursive: true, force: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
+      try { fs.mkdirSync(tmpDst, { recursive: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       send({ phase: 'sr-download', percent: 2, text: '下载超分辨率组件（35 MB）' });
       const got = await downloadAny(SR_URLS, tmpZip, (pct) => {
         send({ phase: 'sr-download', percent: Math.min(90, 2 + Math.round(88 * pct / 100)), text: '下载超分辨率组件（35 MB）' });
@@ -406,8 +406,8 @@ function registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net, bun
         'Move-Item -Path (Join-Path $_.FullName "*") -Destination "' + srDir() + '" -Force }'],
       { windowsHide: true });
       await new Promise((res) => { ps.on('close', () => res()); ps.on('error', () => res()); });
-      try { fs.rmSync(tmpZip, { force: true }); } catch (e) {}
-      try { fs.rmSync(tmpDst, { recursive: true, force: true }); } catch (e) {}
+      try { fs.rmSync(tmpZip, { force: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
+      try { fs.rmSync(tmpDst, { recursive: true, force: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       const st = srStatus();
       if (!st.installed) return { ok: false, error: '解压后没找到 waifu2x-ncnn-vulkan.exe' };
       send({ phase: 'done', percent: 100, text: '超分辨率组件就绪' });
@@ -430,7 +430,7 @@ function registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net, bun
   // 下载 + 解包（进度通过 omr:progress 推给渲染层）
   ipcMain.handle('omr:install', async (evt) => {
     const win = BrowserWindow.fromWebContents(evt.sender);
-    const send = (p) => { try { win && win.webContents.send('omr:progress', p); } catch (e) {} };
+    const send = (p) => { try { win && win.webContents.send('omr:progress', p); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } };
     const tmp = path.join(Paths.tempDir(), 'audiveris-' + Date.now() + '.msi');
     try {
       fs.mkdirSync(path.dirname(tmp), { recursive: true });
@@ -443,17 +443,17 @@ function registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net, bun
       //   这与 VENDOR.md 对内置二进制逐个钉 SHA-256 是同一套纪律。
       send({ phase: 'verify', percent: 87, text: '校验识谱引擎…' });
       const v = verifyMsi(tmp);
-      if (!v.ok) { try { fs.unlinkSync(tmp); } catch (e) {} return { ok: false, error: v.error }; }
+      if (!v.ok) { try { fs.unlinkSync(tmp); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } return { ok: false, error: v.error }; }
       send({ phase: 'extract', percent: 88, text: '解包识谱引擎…' });
       const dir = engineDir();
       fs.mkdirSync(dir, { recursive: true });
       const ex = await extractMsi(tmp, dir);
-      try { fs.unlinkSync(tmp); } catch (e) {}
+      try { fs.unlinkSync(tmp); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       if (!ex.ok) return { ok: false, error: ex.error };
       send({ phase: 'done', percent: 100, text: '识谱引擎就绪' });
       return status();
     } catch (e) {
-      try { fs.unlinkSync(tmp); } catch (e2) {}
+      try { fs.unlinkSync(tmp); } catch (e2) { try { require('./log').write('WARN', 'optional failure', String((e2 && e2.stack) || e2)); } catch (_) { /* log failure ignored */ } }
       return { ok: false, error: String((e && e.message) || e) };
     }
   });
@@ -471,11 +471,11 @@ function registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net, bun
       let lastData = Date.now();
       const watchdog = setInterval(() => {
         // 卡住检测：15 秒没有任何新数据就放弃这条通道（实测某些网络下 Chromium 栈会被限到 1MB/4min）
-        if (Date.now() - lastData > 15000) { clearInterval(watchdog); try { req.abort(); } catch (e) {} done({ ok: false, error: '通道卡住（15s 无数据）' }); }
+        if (Date.now() - lastData > 15000) { clearInterval(watchdog); try { req.abort(); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } done({ ok: false, error: '通道卡住（15s 无数据）' }); }
       }, 5000);
       const done = (v) => { if (!settled) { settled = true; clearInterval(watchdog); resolve(v); } };
       req.on('response', (res) => {
-        if (res.statusCode !== 200) { try { res.resume(); } catch (e) {} return done({ ok: false, error: 'HTTP ' + res.statusCode }); }
+        if (res.statusCode !== 200) { try { res.resume(); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } return done({ ok: false, error: 'HTTP ' + res.statusCode }); }
         const total = Number(res.headers['content-length'] || 0);
         let got = 0, lastTick = 0;
         const out = fs.createWriteStream(dest);
@@ -508,13 +508,13 @@ function registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net, bun
         try {
           const st = fs.statSync(dest);
           onProgress && onProgress(Math.min(86, Math.round((st.size / (81 * 1024 * 1024)) * 86)));
-        } catch (e) {}
+        } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       }, 800);
       const fin = (v) => { clearInterval(timer); resolve(v); };
       child.on('error', (e) => fin({ ok: false, error: String((e && e.message) || e) }));
       child.on('close', (code) => {
         let size = 0;
-        try { size = fs.statSync(dest).size; } catch (e) {}
+        try { size = fs.statSync(dest).size; } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
         if (code === 0 && size > 1024 * 1024) return fin({ ok: true, bytes: size });
         fin({ ok: false, error: 'PowerShell 下载失败（退出码 ' + code + '，' + size + ' 字节）' });
       });
@@ -565,7 +565,7 @@ function registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net, bun
     for (const u of list) tries.push(['powershell', () => downloadPs(u, dest, onProgress)]);
     let last = { ok: false, error: '没有可用的下载通道' };
     for (const pair of tries) {
-      try { fs.rmSync(dest, { force: true }); } catch (e) {}
+      try { fs.rmSync(dest, { force: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       const r = await pair[1]();
       if (r.ok) return Object.assign({ via: pair[0] }, r);
       last = Object.assign({ via: pair[0] }, r);

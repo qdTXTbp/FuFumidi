@@ -89,7 +89,7 @@ function fileState(m) {
   for (const v of Object.values(m.files || {})) {
     if (!v) continue;
     const abs = path.isAbsolute(String(v)) ? String(v) : path.join(dir, String(v));
-    if (hasFile(abs)) { try { size += fs.statSync(abs).size; } catch (e) {} }
+    if (hasFile(abs)) { try { size += fs.statSync(abs).size; } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } }
     else missing.push(v);
   }
   return { size, missing };
@@ -243,13 +243,13 @@ function importZip(zipPath, opts) {
     const inner = readdir(dest).filter((f) => hasDir(path.join(dest, f)));
     if (inner.length === 1 && !detect(dest).engine) dir = path.join(dest, inner[0]);
     const r = importFolder(dir, { ...o, id, name: o.name || base });
-    if (!r.ok) { try { fs.rmSync(dest, { recursive: true, force: true }); } catch (_) {} return r; }
+    if (!r.ok) { try { fs.rmSync(dest, { recursive: true, force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } } return r; }
     // 解压出来的目录就是它的家 → 物理删除时删的是应用目录里这份，不动用户原文件
     const m = { ...r.model, source: 'zip' };
     saveModel(m);
     return { ok: true, model: m };
   } catch (e) {
-    try { fs.rmSync(dest, { recursive: true, force: true }); } catch (_) {}
+    try { fs.rmSync(dest, { recursive: true, force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
     return { ok: false, error: String((e && e.message) || e) };
   }
 }

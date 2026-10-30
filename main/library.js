@@ -161,7 +161,7 @@ function registerLibraryIpc({ ipcMain, path, fs, shell, rustInvoke }) {
         try {
           const st = fs.statSync(path.join(dir, name));
           if (st.isFile()) { count++; bytes += st.size; }
-        } catch (_) {}
+        } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
       }
       return { ok: true, dir, count, bytes };
     } catch (e) { return { ok: false, dir: midiRoot(), count: 0, bytes: 0, error: String((e && e.message) || e) }; }
@@ -221,7 +221,7 @@ function registerLibraryIpc({ ipcMain, path, fs, shell, rustInvoke }) {
             avgVel: f.avg_vel || 0,
           }));
         }
-      } catch (_) {}
+      } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
     }
     if (engine !== 'rust') files = fallbackScan(dir).map(f => ({ ...f, error: f.ok ? '' : '无法解析（Rust 核心不可用，仅做文件头校验）' }));
     // Rust 老版本 batch-stats 不返回 size 时补一次 stat，保证总字节数与曲库一致
@@ -247,12 +247,12 @@ function registerLibraryIpc({ ipcMain, path, fs, shell, rustInvoke }) {
       try {
         const r = await rustInvoke(['hash-batch', dir], 60000);
         if (r && r.ok && Array.isArray(r.files)) { engine = 'rust'; rows = r.files; }
-      } catch (_) {}
+      } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
     }
     if (engine !== 'rust') {
       rows = [];
       let names = [];
-      try { names = fs.readdirSync(dir); } catch (_) {}
+      try { names = fs.readdirSync(dir); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
       for (const n of names) {
         if (!/\.(mid|midi|sf2|sf3|wav|mp3|flac)$/i.test(n)) continue;   // 与 Rust 侧扫描范围保持一致
         const full = path.join(dir, n);
@@ -261,7 +261,7 @@ function registerLibraryIpc({ ipcMain, path, fs, shell, rustInvoke }) {
           // SHA-256 与 Rust 侧 hash-batch 保持一致：去重分组不受「Rust 是否可用」影响
           const digest = crypto.createHash('sha256').update(buf).digest('hex');
           rows.push({ file: full, hash: digest, size: buf.length });
-        } catch (_) {}
+        } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
       }
     }
     const groups = new Map();

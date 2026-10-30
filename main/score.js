@@ -13,7 +13,7 @@ function pruneOmrRuns() {
       .filter((d) => d.isDirectory() && /^run-/.test(d.name))
       .map((d) => ({ p: path.join(root, d.name), t: fs.statSync(path.join(root, d.name)).mtimeMs }))
       .sort((a, b) => b.t - a.t);
-    for (const d of dirs.slice(8)) { try { fs.rmSync(d.p, { recursive: true, force: true }); } catch (e) {} }
+    for (const d of dirs.slice(8)) { try { fs.rmSync(d.p, { recursive: true, force: true }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } }
   } catch (e) { /* 清理失败不影响转换 */ }
 }
 
@@ -71,7 +71,7 @@ function registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEn
         #abcScore svg * { fill: #000 !important; stroke: #000 !important; }
       }`;
       let cssKey = '';
-      try { cssKey = await win.webContents.insertCSS(printCss, { cssOrigin: 'user' }); } catch (e) {}
+      try { cssKey = await win.webContents.insertCSS(printCss, { cssOrigin: 'user' }); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       try {
         const data = await win.webContents.printToPDF({
           printBackground: true,
@@ -83,7 +83,7 @@ function registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEn
         await fs.promises.writeFile(r.filePath, data);
         return { ok: true, path: r.filePath };
       } finally {
-        if (cssKey) { try { await win.webContents.removeInsertedCSS(cssKey); } catch (e) {} }
+        if (cssKey) { try { await win.webContents.removeInsertedCSS(cssKey); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } }
       }
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
@@ -143,7 +143,7 @@ function registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEn
         '    imgs[0].save(r' + JSON.stringify(r.filePath) + ', "PDF", resolution=150, save_all=True, append_images=imgs[1:])\n' +
         '    print(json.dumps({"ok": True, "out": r' + JSON.stringify(r.filePath) + '}))';
       const rr = await runEngineInline(code);
-      try { for (const f of fs.readdirSync(tmpDir)) fs.unlinkSync(path.join(tmpDir, f)); } catch (e) {}
+      try { for (const f of fs.readdirSync(tmpDir)) fs.unlinkSync(path.join(tmpDir, f)); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       if (rr && rr.ok) return { ok: true, path: r.filePath };
       return { ok: false, error: String((rr && rr.out) || 'PDF 合成失败').slice(-400) };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
@@ -321,7 +321,7 @@ function registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEn
           timeoutMs: 10 * 60 * 1000,
           onProgress: (p) => {
             if (run.canceled) { finish({ ok: false, canceled: true }); return; }
-            try { win && win.webContents.send('score:progress', p); } catch (e) {}
+            try { win && win.webContents.send('score:progress', p); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
           },
           onDone: (code, rr) => {
             if (run.canceled) { finish({ ok: false, canceled: true }); return; }
@@ -341,7 +341,7 @@ function registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEn
       let overlays = [];
       try {
         overlays = (res.overlays || []).filter((p) => { try { return fs.existsSync(p); } catch (e) { return false; } });
-      } catch (e) {}
+      } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       // 多选相关的如实回报（界面按 code 翻译）
       if (multiOnlyFirst) { res.warnings = (res.warnings || []).concat([{ code: 'only-first', n: items.length }]); }
       if (truncated) { res.warnings = (res.warnings || []).concat([{ code: 'page-cap', n: MAXP }]); }

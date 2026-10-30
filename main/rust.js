@@ -21,7 +21,7 @@ function createRustService({ app, path, fs }) {
       path.join(__dirname, '..', 'resources', 'rust-core', EXE),
     ];
     for (const p of candidates) {
-      try { if (p && fs.existsSync(p)) return p; } catch (_) {}
+      try { if (p && fs.existsSync(p)) return p; } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
     }
     return null;
   }
