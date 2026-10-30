@@ -291,21 +291,21 @@ watch(() => store.tabs.length, () => nextTick(() => { updateArrows(); ensureActi
 
 /* tabs v2：更高命中区、可滚动条 + 左右箭头、全部标签菜单、固定/分组色 */
 .song-tabs { min-height: 38px; gap: 3px; padding: 2px 5px; }
-.st-scroll { gap: 4px; padding: 2px 0; scroll-behavior: smooth; }
+.st-scroll { gap: var(--sp-1); padding: 2px 0; scroll-behavior: smooth; }
 .song-tab { height: 28px; max-width: 230px; padding: 0 6px 0 9px; border-radius: var(--r-sm) var(--r-sm) 0 0; background: color-mix(in srgb, var(--surface) 58%, transparent); position: relative; }
 .song-tab:hover { background: var(--surface-soft); border-color: color-mix(in srgb, var(--accent-sky) 22%, var(--hairline)); }
 .song-tab.on { background: var(--surface); border-color: color-mix(in srgb, var(--accent-sky) 38%, var(--hairline)); border-bottom-color: var(--surface); box-shadow: 0 2px 0 var(--surface), inset 0 2px 0 var(--accent-sky); }
 .song-tab.pinned { border-left: 2px solid var(--accent-sky); }
-.song-tab::before { content: ''; position: absolute; left: 0; top: 5px; bottom: 5px; width: 2px; border-radius: 2px; background: var(--tab-group, transparent); }
+.song-tab::before { content: ''; position: absolute; left: 0; top: 5px; bottom: 5px; width: 2px; border-radius: var(--r-sm); background: var(--tab-group, transparent); }
 .st-pin { flex: none; color: var(--accent-sky); }
-.st-lock { flex: none; font-size: 9px; color: var(--text3); opacity: .7; }
-.st-group { max-width: 40px; padding: 0 3px; border: 1px solid; border-radius: var(--r-sm); font-size: 9px; line-height: 14px; background: transparent; }
+.st-lock { flex: none; font-size: var(--fs-xs); color: var(--text3); opacity: .7; }
+.st-group { max-width: 40px; padding: 0 3px; border: 1px solid; border-radius: var(--r-sm); font-size: var(--fs-xs); line-height: 14px; background: transparent; }
 .st-close { width: 24px; height: 24px; opacity: .55; }
 .st-close:hover { background: color-mix(in srgb, var(--accent-red) 18%, var(--surface-soft)); color: var(--text); }
 .st-arrow { width: 22px; height: 26px; border: 1px solid transparent; border-radius: var(--r-sm); background: transparent; color: var(--text3); display: grid; place-items: center; flex: none; cursor: pointer; }
 .st-arrow:hover:not(:disabled) { color: var(--accent-sky); border-color: var(--hairline); background: var(--surface-soft); }
 .st-arrow:disabled { opacity: .25; cursor: default; }
-.st-all { width: auto; padding: 0 6px; gap: 3px; font-size: 10px; font-family: var(--font-num); }
+.st-all { width: auto; padding: 0 6px; gap: 3px; font-size: var(--fs-xs); font-family: var(--font-num); }
 .st-menu { min-width: 220px; max-width: 300px; max-height: 420px; overflow: auto; }
 .st-all-menu { top: 40px; right: 8px; left: auto !important; }
 .st-menu-title { padding: 5px 8px 7px; color: var(--text3); font-size: var(--fs-xs); border-bottom: 1px solid var(--hairline); margin-bottom: 3px; }
@@ -313,6 +313,6 @@ watch(() => store.tabs.length, () => nextTick(() => { updateArrows(); ensureActi
 .st-menu-item.on { background: var(--surface-soft); box-shadow: inset 2px 0 0 var(--accent-sky); }
 .st-all-item { justify-content: flex-start; }
 .st-all-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.st-all-group { flex: none; max-width: 70px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; opacity: .8; }
+.st-all-group { flex: none; max-width: 70px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-xs); opacity: .8; }
 @media (max-width: 760px) { .song-tab { max-width: 150px; } .st-arrow { display: none; } }
 </style>

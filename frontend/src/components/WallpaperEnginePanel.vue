@@ -84,7 +84,7 @@ const TYPES = { scene: t('场景'), web: t('网页'), video: t('视频'), applic
 <style scoped>
 .we-panel { display: flex; flex-direction: column; gap: var(--sp-2); }
 .we-head { display: flex; align-items: center; gap: var(--sp-2); }
-.we-title { display: inline-flex; align-items: center; gap: 5px; color: var(--text); font-size: var(--fs-sm); font-weight: 600; }
+.we-title { display: inline-flex; align-items: center; gap: var(--sp-1); color: var(--text); font-size: var(--fs-sm); font-weight: 600; }
 .we-state { color: var(--text3); font-size: var(--fs-xs); }
 .we-state.on { color: var(--t-ok); }
 .we-grow { flex: 1; }
@@ -94,11 +94,11 @@ const TYPES = { scene: t('场景'), web: t('网页'), video: t('视频'), applic
 .we-kinds button { border: 1px solid var(--hairline); border-radius: var(--r-pill); background: var(--surface); color: var(--text3); padding: 2px 9px; font-size: var(--fs-xs); }
 .we-kinds button.on { color: var(--text); border-color: color-mix(in srgb, var(--accent-sky) 45%, var(--hairline)); }
 .we-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: var(--sp-2); max-height: 260px; overflow: auto; }
-.we-card { display: flex; flex-direction: column; gap: 4px; padding: 0; border: 1px solid var(--hairline); border-radius: var(--r-md); background: var(--surface); overflow: hidden; cursor: pointer; text-align: left; }
+.we-card { display: flex; flex-direction: column; gap: var(--sp-1); padding: 0; border: 1px solid var(--hairline); border-radius: var(--r-md); background: var(--surface); overflow: hidden; cursor: pointer; text-align: left; }
 .we-card.on { border-color: var(--accent-sky); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-sky) 35%, transparent); }
 .we-thumb { position: relative; display: flex; align-items: center; justify-content: center; aspect-ratio: 16 / 10; background: var(--surface-soft); color: var(--text3); }
 .we-thumb img { width: 100%; height: 100%; object-fit: cover; }
-.we-thumb b { position: absolute; right: 4px; bottom: 4px; padding: 1px 5px; border-radius: var(--r-sm); background: rgba(0,0,0,.55); color: #fff; font-size: 10px; font-weight: 500; }
+.we-thumb b { position: absolute; right: 4px; bottom: 4px; padding: 1px 5px; border-radius: var(--r-sm); background: rgba(0,0,0,.55); color: var(--on-accent); font-size: var(--fs-xs); font-weight: 500; }
 .we-name { padding: 0 7px 6px; color: var(--text2); font-size: var(--fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .we-empty, .we-hint { margin: 0; color: var(--text3); font-size: var(--fs-xs); }
 </style>

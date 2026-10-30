@@ -216,10 +216,10 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.ap-material-grid { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
-.ap-material { width: 46px; border: 1px solid var(--hairline); border-radius: var(--r-sm); background: var(--surface); color: var(--text3); padding: 3px 2px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 9px; }
+.ap-material-grid { display: flex; gap: var(--sp-2); flex-wrap: wrap; justify-content: flex-end; }
+.ap-material { width: 46px; border: 1px solid var(--hairline); border-radius: var(--r-sm); background: var(--surface); color: var(--text3); padding: 3px 2px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: var(--sp-1); font-size: var(--fs-xs); }
 .ap-material.on { border-color: var(--accent-sky); color: var(--text); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-sky) 30%, transparent); }
-.ap-material i { width: 28px; height: 12px; border-radius: 3px; border: 1px solid color-mix(in srgb, var(--text) 12%, transparent); }
+.ap-material i { width: 28px; height: 12px; border-radius: var(--r-sm); border: 1px solid color-mix(in srgb, var(--text) 12%, transparent); }
 .ap-material.mat-default i { background: var(--surface-soft); }
 .ap-material.mat-glass i { background: linear-gradient(135deg, rgba(255,255,255,.52), rgba(140,190,255,.15)); backdrop-filter: blur(5px); }
 .ap-material.mat-acrylic i { background: linear-gradient(120deg, rgba(255,255,255,.68), rgba(150,170,220,.28)); }

@@ -734,7 +734,7 @@ onBeforeUnmount(() => {
 .vc-head { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: 10px; font-size: var(--fs-md); font-weight: 600; color: var(--ink); flex-wrap: wrap; }
 .vc-head b { letter-spacing: -0.2px; }
 .vc-head .vc-zoom { font-size: var(--fs-xs); min-width: 44px; text-align: center; font-weight: 500; }
-.viz-empty { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; border:1px dashed var(--hairline); border-radius:var(--r-sm); background:color-mix(in srgb, var(--canvas) 82%, transparent); z-index:2; text-align:center; padding:20px; }
+.viz-empty { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:var(--sp-3); border:1px dashed var(--hairline); border-radius:var(--r-sm); background:color-mix(in srgb, var(--canvas) 82%, transparent); z-index:2; text-align:center; padding:20px; }
 .viz-empty b { font-size:var(--fs-md); color:var(--text); }
 .viz-empty span { font-size:var(--fs-sm); color:var(--text3); max-width:420px; }
 .vc-body canvas { width: 100%; height: 100%; display: block; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--canvas); }
