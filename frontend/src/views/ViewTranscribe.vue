@@ -9,6 +9,7 @@ import { clamp, esc, fmtTime } from '../core/util.js';
 import { t } from '../core/i18n.js';
 import { playDoneChime } from '../core/sfx.js';
 import NumSlider from '../components/NumSlider.vue';
+import { parseMidi, buildSong } from '../core/midi.js';
 
 const app = useAppStore();
 const playlist = usePlaylistStore();
@@ -1804,7 +1805,7 @@ async function runBatch() {
   progress.value = dN && !eN ? 100 : (dN ? Math.round(dN / Math.max(1, totals.total) * 100) : progress.value);
   if (dN && !eN) {
     const last = runItems.filter((i) => i.status === 'done').pop();
-    if (last) { lastOut.value = last.out; doneInfo.value = t('成功 ') + dN + t(' 首') + (last.note_count != null ? ' · ' + last.note_count + t(' 个音符') : ''); logLine(doneInfo.value); }
+    if (last) { lastOut.value = last.out; doneInfo.value = t('成功 ') + dN + t(' 首') + (last.note_count != null ? ' · ' + last.note_count + t(' 个音符') : ''); logLine(doneInfo.value); await analyzeQuality(last.out); }
     done.value = true;
     toast(chain ? t('顺序转录完成：成功 ') + dN + t(' 首（各队列产物已按各自歌单加入）') : t('批量转录完成：成功 ') + dN + t(' 首'), 'ok');
   } else if (dN) {
@@ -1816,6 +1817,33 @@ async function runBatch() {
   }
   if (cancelAll.value && !paused.value) logLine(t('已取消转录队列…'), true);
   if (!cancelAll.value && (dN || eN)) playDoneChime(eN > 0);
+}
+/** 转录结果结构体检：音符/轨道/长音/最大同时发声。MIDI 已落盘，不在主线程重跑模型。 */
+async function analyzeQuality(path) {
+  quality.value = null;
+  try {
+    const bytes = await bridge.readBinary(path);
+    if (!bytes) return;
+    const song = buildSong(parseMidi(bytes));
+    const notes = song.tracks.reduce((a, tr) => a.concat(tr.notes || []), []);
+    const longNotes = notes.filter((n) => song.baseSec(n.end) - song.baseSec(n.start) > 15).length;
+    let maxPoly = 0, active = 0;
+    const ev = [];
+    for (const n of notes) { ev.push([n.start, 1]); ev.push([n.end, -1]); }
+    ev.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    for (const [, d] of ev) { active += d; if (active > maxPoly) maxPoly = active; }
+    quality.value = { notes: notes.length, tracks: song.tracks.filter((tr) => (tr.notes || []).length).length, sec: song.totalSec, longNotes, maxPoly };
+  } catch (e) { quality.value = { error: String(e && e.message || e) }; }
+}
+async function openTranscribedForEdit() {
+  if (!lastOut.value) return;
+  try {
+    const bytes = await bridge.readBinary(lastOut.value);
+    if (!bytes) { toast(t('输出文件不存在或已被删除'), 'warn'); return; }
+    await importFiles([{ name: String(lastOut.value).replace(/^.*[\\/]/, ''), bytes }]);
+    setView('edit');
+    toast(t('已载入转录结果，可校对'), 'ok');
+  } catch (e) { toast(t('载入失败：') + (e.message || e), 'warn'); }
 }
 async function startTranscribe() {
   if (busy.value) return;
@@ -2746,6 +2774,10 @@ onBeforeUnmount(() => {
 .tr-progress span { position: relative; z-index: 1; padding: 0 12px; font-size: var(--fs-xs); color: var(--steel); }
 .tr-stage { margin-top: 4px; text-align: center; }
 .tr-done { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; margin-top: 8px; }
+.tr-quality { display:flex; align-items:center; gap:var(--sp-2); flex-wrap:wrap; margin-top:6px; padding:6px 8px; border:1px solid var(--hairline); border-radius:var(--r-sm); background:var(--surface-soft); font-size:var(--fs-xs); color:var(--text2); }
+.tq-title { font-weight:600; color:var(--text); }
+.tq-ok { color:var(--t-ok); }
+.tq-warn, .bad { color:var(--t-err); }
 .tr-log { border: 1px solid var(--hairline); border-radius: var(--r-md); background: var(--surface); margin-top: 10px; overflow: hidden; }
 .tr-log-head { display: flex; align-items: center; gap: var(--sp-2); padding: 6px 10px; font-size: var(--fs-xs); color: var(--slate); border-bottom: 1px solid var(--hairline-soft); }
 .log-count { color: var(--stone); }
