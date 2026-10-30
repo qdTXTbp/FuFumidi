@@ -29,6 +29,7 @@ const selected = ref('');
 const zoom = ref(0.12);      // 每 tick 像素
 const snap = ref(true);
 const arrCtx = ref(null);
+const refAudio = computed(() => (song.value && song.value.arrange && song.value.arrange.audio) || null);
 const HEADER_W = 160;
 const scrollX = ref(0);      // tick
 const rowH = 56;
@@ -200,6 +201,16 @@ function draw() {
         g.beginPath(); g.moveTo(bx, RULER_H); g.lineTo(bx, H); g.stroke();
       }
     }
+  }
+  // 参考音频条（只画时间范围与名字；不进入 MIDI 混音）
+  if (refAudio.value) {
+    const y = H - 22;
+    g.fillStyle = themeColor('--surface-soft', '#1b1e26'); g.fillRect(0, y, W, 22);
+    g.fillStyle = themeColor('--accent-sky', '#69c8f0');
+    g.font = '10px system-ui'; g.textAlign = 'left';
+    g.fillText(t('参考音频') + ' · ' + refAudio.value.name, HEADER_W + 6, y + 14);
+    const x2 = Math.min(W, HEADER_W + (refAudio.value.duration || 0) * zoom.value * 2);
+    g.fillRect(HEADER_W, y, Math.max(4, x2 - HEADER_W), 2);
   }
   // 轨道行 + clip
   state.value.tracks.forEach((tr, i) => {
@@ -477,6 +488,21 @@ function toggleMute() {
   state.value = setTrackFlags(state.value, tr.id, { mute: !tr.mute });
   draw();
 }
+/** 6.3.1：参考音频轨（只作对齐参考；不改变 MIDI 片段） */
+async function pickReferenceAudio() {
+  const b = window.fuBridge;
+  if (!b || !b.pickAudio) { app.toast(t('当前环境不支持选择音频'), 'warn'); return; }
+  try {
+    const path = await b.pickAudio();
+    if (!path) return;
+    let sec = 0;
+    try { sec = await b.audioDuration(path); } catch (e) {}
+    if (!song.value.arrange) song.value.arrange = {};
+    song.value.arrange.audio = { path, name: String(path).replace(/^.*[\\/]/, ''), duration: Number(sec) || 0 };
+    app.toast(t('参考音频已加入编排'), 'ok');
+    draw();
+  } catch (e) { app.toast(t('参考音频载入失败：') + (e.message || e), 'warn'); }
+}
 function addMarkerHere() {
   const tl = timeline.value;
   let bar = 1;
@@ -555,6 +581,7 @@ onBeforeUnmount(() => {
       <button class="btn sm" :disabled="!selected" @click="deleteSelected">{{ t('删除片段') }}</button>
       <button class="btn sm" data-guide="arrange-undo" :disabled="!histDepth.undo" @click="undoArrange">{{ t('撤销') }}</button>
       <button class="btn sm" data-guide="arrange-redo" :disabled="!histDepth.redo" @click="redoArrange">{{ t('重做') }}</button>
+      <button class="btn sm" @click="pickReferenceAudio">{{ t('参考音频') }}</button>
       <button class="btn sm" @click="addMarkerHere">{{ t('加标记') }}</button>
       <button class="btn sm" @click="addRegionHere">{{ t('加区间') }}</button>
     </div>
