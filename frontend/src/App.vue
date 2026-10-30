@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, onBeforeUnmount, watch } from 'vue';
+import { onMounted, onBeforeUnmount, watch, defineAsyncComponent } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { navHistory, readSession, writeSession, parseDeepLink } from './core/nav_history.js';
 import Icon from './components/Icon.vue';
@@ -8,14 +8,14 @@ import PrimaryRail from './components/PrimaryRail.vue';
 import TopBar from './components/TopBar.vue';
 import { useTabsStore } from './stores/tabs';
 import PlayerBar from './components/PlayerBar.vue';
-import SettingsPanel from './components/SettingsPanel.vue';
-import ThemeLibrary from './components/ThemeLibrary.vue';
-import WallpaperGallery from './components/WallpaperGallery.vue';
-import CommandPalette from './components/CommandPalette.vue';
-import GuideOverlay from './components/GuideOverlay.vue';
-import AppearancePanel from './components/AppearancePanel.vue';
-import ChangeLogOverlay from './components/ChangeLogOverlay.vue';
-import TaskCenter from './components/TaskCenter.vue';
+const SettingsPanel = defineAsyncComponent(() => import('./components/SettingsPanel.vue'));
+const ThemeLibrary = defineAsyncComponent(() => import('./components/ThemeLibrary.vue'));
+const WallpaperGallery = defineAsyncComponent(() => import('./components/WallpaperGallery.vue'));
+const CommandPalette = defineAsyncComponent(() => import('./components/CommandPalette.vue'));
+const GuideOverlay = defineAsyncComponent(() => import('./components/GuideOverlay.vue'));
+const AppearancePanel = defineAsyncComponent(() => import('./components/AppearancePanel.vue'));
+const ChangeLogOverlay = defineAsyncComponent(() => import('./components/ChangeLogOverlay.vue'));
+const TaskCenter = defineAsyncComponent(() => import('./components/TaskCenter.vue'));
 import { ref, computed, reactive } from 'vue';
 
 /* 全局 UI 缩放只走 core/display.js 的单一入口（Electron setZoomFactor / CSS zoom）。
