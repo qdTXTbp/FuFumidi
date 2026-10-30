@@ -59,6 +59,9 @@ jobs:
       - name: Run plugin sandbox tests
         run: npm run test:plugin
 
+      - name: Empty catch gate
+        run: npm run check:empty-catch
+
       - name: Pack full asar
         run: node build.js full
 

@@ -11,7 +11,7 @@ const ROOT = process.env.FUFUMIDI_PY || path.join(__dirname, '..', 'resources', 
 const SITE = path.join(ROOT, 'Lib', 'site-packages');
 const BACKUP = 'E:/Midi/_attic/python-site-backup';
 const DRY = process.argv.includes('--dry-run');
-const PACKAGES = ['matplotlib', 'pandas', 'sklearn', 'sympy', 'tensorboard', 'grpc', 'networkx', 'seaborn', 'narwhals'];
+const PACKAGES = ['matplotlib', 'pandas', 'sklearn', 'sympy', 'tensorboard', 'grpc', 'networkx', 'seaborn', 'narwhals', 'pygments'];
 if (!fs.existsSync(SITE)) { console.error('site-packages 不存在: ' + SITE); process.exit(1); }
 fs.mkdirSync(BACKUP, { recursive: true });
 let moved = 0, bytes = 0;

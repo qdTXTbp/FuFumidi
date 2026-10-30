@@ -55,6 +55,7 @@
     "perf:gate": "node scripts/perf-baseline.mjs",
     "check:version": "node scripts/check-version-consistency.mjs",
     "check:i18n": "node scripts/check-i18n-coverage.mjs",
+    "check:empty-catch": "node scripts/check-empty-catch.cjs",
     "check:licenses": "node scripts/gen-licenses.mjs",
     "licenses:write": "node scripts/gen-licenses.mjs --write",
     "test:feedback": "node --test scripts/test-feedback.mjs",
