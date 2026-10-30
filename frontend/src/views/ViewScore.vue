@@ -916,7 +916,7 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="score-scroll" ref="scrollEl">
-      <div ref="scoreEl" id="abcScore" v-show="isStaffLike" @click="onScoreClick"></div>
+      <div ref="scoreEl" id="abcScore" v-show="isStaffLike" @click="onScoreClick" @dblclick="openEditorAtTick"></div>
       <div v-if="mode === 'jianpu'">
         <div v-for="b in jianpuBlocks" :key="b.ti" class="score-block">
           <div class="score-block-name">{{ b.name }}</div>
