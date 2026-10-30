@@ -2039,6 +2039,11 @@ export const I18N_MAP = {
   '导出 DAWproject': 'Export DAWproject',
   'VST3 离线渲染（实验）': 'VST3 offline render (experimental)',
   '桌面版才支持 VST3 离线渲染': 'VST3 offline rendering is only available in the desktop app',
+  '已加入 VST3 渲染队列': 'Added to VST3 render queue',
+  '加入 VST3 队列失败：': 'Failed to add VST3 queue job: ',
+  '加入 VST3 队列': 'Add to VST3 queue',
+  '把插件/输入/输出加入队列，顺序渲染': 'Queue plugin/input/output and render sequentially',
+
   'VST3 渲染完成：': 'VST3 render complete: ',
   'VST3 渲染失败：': 'VST3 render failed: ',
   '可选能力：需自备 pedalboard 宿主与 .vst3 插件': 'Optional feature: bring your own pedalboard host and .vst3 plugins',
