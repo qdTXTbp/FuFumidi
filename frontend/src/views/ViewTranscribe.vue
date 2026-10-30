@@ -1875,6 +1875,13 @@ async function playSourceAudio() {
 function stopSourceAudio() {
   if (srcAudio) { try { srcAudio.pause(); } catch (e) {} srcAudio = null; }
 }
+/** 试听转录 MIDI：结果已自动入库，按输出路径找到对应曲目直接播放。 */
+function playMidiResult() {
+  if (!lastOut.value) return;
+  const hit = (app.songs || []).find((x) => x && x.meta && x.meta.path === lastOut.value);
+  if (!hit) { toast(t('转录结果尚未入库，请先载入校对'), 'warn'); return; }
+  app.playSongById(hit.id);
+}
 async function openTranscribedForEdit() {
   if (!lastOut.value) return;
   try {
