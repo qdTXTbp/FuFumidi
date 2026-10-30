@@ -111,6 +111,7 @@ export class Player {
         return byName >= 0 ? byName : -1;
       };
       for (const c of clipList) {
+        if (c.muted) continue;
         const flag = flags.get(String(c.trackId));
         if (flag && (flag.mute || (anySolo && !flag.solo))) continue;
         const srcIdx = trackIndexById(c.trackId);

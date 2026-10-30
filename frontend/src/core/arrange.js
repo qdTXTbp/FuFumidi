@@ -138,7 +138,7 @@ function _normClip(c) {
   return {
     id: String(c.id || _uid('clip')), trackId: String(c.trackId || ''),
     startTick, endTick, offsetTick: Math.max(0, _num(c.offsetTick, 0)),
-    name: String(c.name || ''), color: c.color || '',
+    name: String(c.name || ''), color: c.color || '', muted: !!c.muted,
   };
 }
 function _normMarker(m, i) { return { id: String(m.id || ('marker-' + (i + 1))), title: String(m.title || ''), tick: Math.max(0, _num(m.tick, 0)), color: m.color || '' }; }

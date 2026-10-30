@@ -1994,6 +1994,7 @@ export const I18N_MAP = {
   '区间': 'Regions',
   '全览': 'Fit all',
   '静音轨道': 'Mute track',
+  '静音片段': 'Mute clip',
   '删除片段': 'Delete clip',
   '加标记': 'Add marker',
   '加区间': 'Add region',

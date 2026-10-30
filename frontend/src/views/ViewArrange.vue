@@ -234,6 +234,7 @@ function draw() {
       const left = Math.max(HEADER_W, x0), right = Math.min(W, x1);
       if (right <= left) continue;
       const sel = selected.value === clip.id;
+      if (clip.muted) g.globalAlpha = 0.35;
       const r = 7;
       const trackColor = themeColor('--accent-sky', '#69c8f0');
       g.beginPath();
@@ -484,6 +485,15 @@ function deleteSelected() {
   selected.value = '';
   draw();
 }
+/** 6.3.1：片段级静音（comping 的最小子集：重叠 take 里只留想要的） */
+function toggleClipMute() {
+  const c = findClip(state.value, selected.value);
+  if (!c) return;
+  pushHistory();
+  const arr = state.value.clips.map((x) => x.id === c.id ? { ...x, muted: !x.muted } : x);
+  state.value = { ...state.value, clips: arr };
+  draw();
+}
 function toggleMute() {
   const tr = state.value.tracks.find((x) => x.id === (findClip(state.value, selected.value) || {}).trackId);
   if (!tr) return;
@@ -607,6 +617,7 @@ onBeforeUnmount(() => {
       <button class="btn sm" :disabled="!selected" @click="duplicateSelected">{{ t('复制片段') }}</button>
       <button class="btn sm" :disabled="!selected" @click="splitAtPlayhead">{{ t('在播放头切分') }}</button>
       <button class="btn sm" :disabled="!selected" @click="toggleMute">{{ t('静音轨道') }}</button>
+      <button class="btn sm" :disabled="!selected" @click="toggleClipMute">{{ t('静音片段') }}</button>
       <button class="btn sm" :disabled="!selected" @click="deleteSelected">{{ t('删除片段') }}</button>
       <button class="btn sm" data-guide="arrange-undo" :disabled="!histDepth.undo" @click="undoArrange">{{ t('撤销') }}</button>
       <button class="btn sm" data-guide="arrange-redo" :disabled="!histDepth.redo" @click="redoArrange">{{ t('重做') }}</button>
