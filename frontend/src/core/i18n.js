@@ -3042,6 +3042,11 @@ export const I18N_MAP = {
   '导出预览图失败': 'Preview export failed',
   '导出预览图失败：': 'Preview export failed: ',
   '导出预览图': 'Export preview image',
+  '当前壁纸不能设为桌面': 'This wallpaper cannot be set as desktop',
+  '已设为桌面壁纸': 'Set as desktop wallpaper',
+  '设为桌面壁纸失败：': 'Failed to set desktop wallpaper: ',
+  '设为桌面壁纸': 'Set as desktop wallpaper',
+
 
   '已导出分谱：': 'Part exported: ',
   '分谱导出失败': 'Part export failed',

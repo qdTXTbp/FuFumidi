@@ -39,7 +39,21 @@ async function fetchThumbDataCached(net, url, cachePath) {
   } catch (e) { return ''; }
 }
 
+const { execFile } = require('child_process');
+
 function registerWallpaperIpc({ ipcMain, app, fs: f, net, runEngineInline, parsePyJson }) {
+  // 6.4.1：把当前图片壁纸设为 Windows 桌面壁纸（静态 provider；视频/WE 仍走应用内渲染）
+  ipcMain.handle('wallpaper:setDesktop', async (_e, file) => {
+    try {
+      const p = String(file || '');
+      if (!p || !f.existsSync(p) || !f.statSync(p).isFile()) return { ok: false, error: '文件不存在' };
+      if (!/\.(jpe?g|png|bmp|webp)$/i.test(p)) return { ok: false, error: '只支持静态图片' };
+      const q = p.replace(/'/g, "''");
+      const ps = "Add-Type -TypeDefinition 'using System.Runtime.InteropServices; public class FuWall { [DllImport(\"user32.dll\", CharSet=CharSet.Unicode, SetLastError=true)] public static extern bool SystemParametersInfo(int a, int b, string c, int d); }'; [FuWall]::SystemParametersInfo(20, 0, '" + q + "', 3) | Out-Null";
+      await new Promise((resolve, reject) => execFile('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps], { windowsHide: true, timeout: 15000 }, (err) => err ? reject(err) : resolve()));
+      return { ok: true };
+    } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+  });
   // 统一高速下载器（规范入口，见 docs/DOWNLOADS.md）
   const FastDL = createFastDownload({ net, fs, path });
   // 动态壁纸：发现桌面上的视频文件（mp4/webm/mov），供渲染进程作为壁纸源

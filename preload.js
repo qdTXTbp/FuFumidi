@@ -357,6 +357,7 @@ contextBridge.exposeInMainWorld('fuBridge', {
     list: () => ipcRenderer.invoke('wallpaper:list'),
     download: (url, name) => ipcRenderer.invoke('wallpaper:download', url, name),
     addLocal: (path) => ipcRenderer.invoke('wallpaper:addLocal', path),
+    setDesktop: (path) => ipcRenderer.invoke('wallpaper:setDesktop', path),
     onAddLocalProgress: (cb) => {
       const listener = (_e, p) => cb(p);
       ipcRenderer.on('wallpaper:addLocalProgress', listener);

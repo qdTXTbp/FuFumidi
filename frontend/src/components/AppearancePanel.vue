@@ -38,6 +38,12 @@ const vizActive = computed(() => vbg.mode !== 'theme');
 
 const isImage = computed(() => cfg.value.wallpaper_kind === 'image' || /\.(jpg|jpeg|png|webp|avif|gif)$/i.test(String(cfg.value.custom_wallpaper || '')));
 const previewUrl = computed(() => fileUrl(cfg.value.custom_wallpaper));
+async function setDesktopWallpaper() {
+  const p = cfg.value.custom_wallpaper || '';
+  if (!p || !window.fuBridge || !window.fuBridge.wallpaper) { app.toast(t('当前壁纸不能设为桌面'), 'warn'); return; }
+  const r = await window.fuBridge.wallpaper.setDesktop(p);
+  app.toast(r && r.ok ? t('已设为桌面壁纸') : t('设为桌面壁纸失败：') + ((r && r.error) || ''), r && r.ok ? 'ok' : 'warn');
+}
 const wpName = computed(() => (cfg.value.custom_wallpaper || '').replace(/^.*[\\/]/, '') || t('未选择壁纸'));
 const dim = computed({ get: () => Number(cfg.value.wallpaper_dim ?? 18), set: (v) => saveWp({ wallpaper_dim: Number(v) }) });
 const blur = computed({ get: () => Number(cfg.value.wallpaper_blur ?? 0), set: (v) => saveWp({ wallpaper_blur: Number(v) }) });
@@ -162,6 +168,7 @@ onMounted(async () => {
               </div>
               <div class="ap-wp-actions">
                 <button class="btn sm" @click="pickImage">{{ t('导入图片') }}</button>
+                <button v-if="isImage && hasWallpaper" class="btn sm" @click="setDesktopWallpaper">{{ t('设为桌面壁纸') }}</button>
                 <button v-if="hasWallpaper" class="btn sm ghost" @click="toggleWallpaper">{{ t('关闭壁纸') }}</button>
                 <button v-else class="btn sm ghost" @click="toggleWallpaper">{{ t('启用壁纸') }}</button>
               </div>
