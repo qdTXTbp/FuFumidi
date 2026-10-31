@@ -3,6 +3,7 @@
 // ============================================================
 'use strict';
 const path = require('path');
+const AdmZip = require('adm-zip');
 
 /**
  * 解压前的条目校验。
@@ -30,6 +31,7 @@ function inspectEntries(zip, dest, opts) {
   const maxTotalBytes = (opts && opts.maxTotalBytes) || (8 * 1024 * 1024 * 1024); // 8 GiB
   let entries;
   try {
+    if (typeof zip === 'string') zip = new AdmZip(zip);
     entries = zip.getEntries();
   } catch (e) {
     return { ok: false, error: '读取压缩包条目失败：' + e, count: 0, bytes: 0 };
@@ -94,6 +96,7 @@ function inspectEntries(zip, dest, opts) {
  * @returns {{ok:boolean, error?:string, count?:number, bytes?:number}}
  */
 function safeExtractAllTo(zip, dest, opts) {
+  if (typeof zip === 'string') zip = new AdmZip(zip);
   const check = inspectEntries(zip, dest, opts);
   if (!check.ok) return check;
   try {
