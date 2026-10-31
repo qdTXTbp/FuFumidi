@@ -2390,7 +2390,7 @@ export const I18N_MAP = {
   '下落速度': 'Scroll speed',
   '视觉偏移(ms)': 'Visual offset (ms)',
   '左右手音区': 'Hand + register',
-  '跨块延音缝合': 'Cross-chunk sustain stitching',
+  '跨块延音（模型续接）': 'Cross-chunk sustain (model carry-over)',
   '解码后把 5 秒分块边界两侧同音高、同音色的延音缝回一个长音：延音不断，而模型不再被强制拖着走 —— 从根上消除僵尸长音。关掉＝不缝合，边界处延音可能断（默认开）': 'After decoding, notes of the same pitch and instrument on opposite sides of each 5-second chunk boundary are stitched back into one sustained note. Sustains stay continuous and the model is no longer forced to keep stale notes alive, which removes zombie long notes at the root. Off = no stitching; sustains may break at chunk boundaries (default on)',
   '跨块延音前置': 'Prelude forcing',
   '把上一块未结束的音符强制喂给下一块，分块边界最稳；关掉会降低边界延续质量（默认开）': 'Force-feed the unfinished notes of the previous chunk into the next; the steadiest chunk boundaries. Off lowers boundary continuity (on by default)',

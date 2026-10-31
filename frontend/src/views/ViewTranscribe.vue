@@ -78,7 +78,10 @@ const exportTempo = ref(0);              // 导出 BPM（0 = 用引擎默认 120
 const msTemp = ref(1.0);                 // 采样温度（1.0 = 不传）
 const msCfg = ref(1.0);                  // 引导系数（1.0 = 不传）
 const msBeam = ref(1);                   // 束搜索宽度（1 = 不传）
-const msPrelude = ref(true);             // 跨块延音缝合（默认开；关掉才传 false＝不缝合）
+// 跨块延音（模型侧续接，默认开）：它让模型在 5 秒块边界把没结束的音按原乐器续进下一块，
+// 是「音色统一 + 音符不丢」的关键机制（= 4.3.x 的稳定行为）。关掉＝模型逐块重判乐器，
+// 改由解码后缝合补连续性。
+const msPrelude = ref(true);
 // MuScriptor 乐器组：none=不限定（默认）；limit=手动硬约束
 // MuScriptor 乐器组：none=不限定（默认）；limit=手动硬约束；
 // probe_segments=按 6.2.1 的做法逐段探测乐器组并按段约束。
@@ -2527,7 +2530,7 @@ onBeforeUnmount(() => {
 
           </div>
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
-            <label><span><b>{{ t('跨块延音缝合') }}</b></span><input type="checkbox" v-model="msPrelude"></label>
+            <label><span><b>{{ t('跨块延音（模型续接）') }}</b></span><input type="checkbox" v-model="msPrelude"></label>
           </div>
           <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
             <label><span><b>{{ t('节拍网格检测') }}</b></span><input type="checkbox" v-model="beatGrid" @change="beatGridUserSet = true"></label>

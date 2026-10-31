@@ -820,7 +820,11 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
             _log(log_cb, "音频证据式收尾：已启用（按音高能量时间线收尾，不截断真实长音）"
                  "（构建 %.1fs）" % (_time_ev.perf_counter() - _t_ev))
         except Exception as _e:
-            _log(log_cb, "音频证据式收尾不可用，按上游行为：%s" % _e)
+            # ★ 这条不是可有可无的日志：装的是**未打补丁的 muscriptor 0.3.0** 时，
+            #   set_sustain_evidence 根本不存在 → 跨块延音开着的僵尸长音没有任何兜底。
+            #   用户看到「一直响」时，这一行就是排查起点（修复版 wheel 见 engine/deps.py）。
+            _log(log_cb, "音频证据式收尾不可用（%s）—— 当前 muscriptor 不是修复版："
+                          "跨块延音开着时，模型漏收尾的长音不会被自动收尾" % _e)
 
     # ★ 2026-10-21：静音分段（按"完全空白静音"切段逐段推理）已整体移除 ——
     #   它与「识别片段长度」是同一种分块转录，实测块与块之间质量参差不齐
@@ -1318,23 +1322,36 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                     _gen_kw[_k] = _cast(_v)
                 except (TypeError, ValueError):
                     pass
-        # ★ 2026-10-18b：「跨块延音前置」不再交给模型做 teacher-forcing —— 那个机制就是
-        #   僵尸长音的产地（模型漏收尾 → 被迫延续一整片音墙）。改成本地实现：
-        #   解码时 prelude_forcing=False（块边界必然收尾，物理上不可能再有僵尸音），
-        #   解码完成后用 _stitch_chunk_boundaries() 按「同轨同音高 + 边界两侧恰好在
-        #   一起」的证据把真实延音缝回一个长音（连续性不丢，也不靠模型猜乐器）。
-        #   想复现旧行为的调试路径：FUFUMIDI_LEGACY_PRELUDE=1（保留给回放对照）。
-        _legacy_prelude = bool(os.environ.get("FUFUMIDI_LEGACY_PRELUDE"))
-        _want_continuity = (
-            bool(params["prelude_forcing"]) if params.get("prelude_forcing") is not None else True
-        )
-        _stitch = False
-        if _legacy_prelude:
-            if params.get("prelude_forcing") is not None:
-                _gen_kw["prelude_forcing"] = bool(params["prelude_forcing"])
-        else:
-            _gen_kw["prelude_forcing"] = False
-            _stitch = _want_continuity
+        # ★ 2026-10-31：prelude_forcing **恢复为默认开**（回退 2026-10-18b 的「一律关掉」）。
+        #
+        # prelude_forcing 的语义（上游）：块边界把「上一块还没结束的音」按**原来的乐器/音高**
+        # 塞进下一块的 tie 段，模型因此知道"这些音还在响，别改判乐器也别重新起音"。
+        #   · 它开着 → 跨块连续、音色一致、音符密度正常（= 4.3.x 的行为，用户认定的稳定版）；
+        #   · 它关着 → 每 5 秒的块边界把延音**重新判定一次乐器**。这不是猜测，5.0.0-beta.4
+        #     实测过同一首歌：相邻分块换乐器组 **1 → 16 次**、**音符少 22%**、非鼓轨 5 → 9 条。
+        # 10-18b 为了杀僵尸长音把它一律关掉，等于把那次的回归又做了一遍；用户随即报障
+        # 「音色不统一 + 音符丢失，4.3.x 没这问题」。
+        #
+        # 僵尸长音现在由**音频证据式收尾**负责（_make_pitch_evidence → muscriptor 的
+        # set_sustain_evidence 钩子），而那套钩子本来就是为「prelude 开」设计的：
+        # 块边界先按音频把已经停响的音从 open 集合里摘掉，模型就不会被逼着声明它还在响。
+        #
+        # 只有用户在界面上**显式取消**跨块延音（prelude_forcing=False）时，才回到
+        # 「模型自己猜 tie + 解码后 _stitch_chunk_boundaries 补连续性」那条老路。
+        _prelude_on = True
+        _pf = params.get("prelude_forcing")
+        if _pf is not None:
+            # 字符串 "false" 在 bool() 下是 True（预设/CLI 传字符串时踩过这种坑），显式判一下
+            if isinstance(_pf, str):
+                _v = _pf.strip().lower()
+                _prelude_on = True if _v == "" else (_v not in ("0", "false", "no", "off"))
+            else:
+                _prelude_on = bool(_pf)
+        _gen_kw["prelude_forcing"] = _prelude_on
+        _stitch = not _prelude_on
+        if not _prelude_on:
+            _log(log_cb, "跨块延音：模型侧关闭（prelude_forcing=False），改由解码后缝合补连续性"
+                          "——注意块边界可能换音色")
         # beam_size > 1 时不要再开采样：束搜索要求确定性地逐 token 打分，
         # 两者同时给上游会互相打架。
         if _gen_kw.get("beam_size", 1) <= 1 and (

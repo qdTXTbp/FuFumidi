@@ -1,18 +1,22 @@
 # -*- coding: utf-8 -*-
-"""「跨块延音缝合」回归测试（engine_muscriptor._stitch_chunk_boundaries）。
+"""「跨块延音」两条路径的回归测试（engine_muscriptor）。
 
 背景（2026-10-18 用户）：「长音问题复发，一直响」。实测那首 154s 的歌：
   · prelude_forcing 开（模型强制 tie）→ 7115 个音符、时长中位数 20ms、最长 82.9s；
   · prelude_forcing 关（模型自己猜 tie）→ 788 个音符、中位数 0.54s、最长 12s，
-    但块边界上的延音可能被切断/换乐器。
-所以现在：**解码一律关掉强制 tie（不可能再有僵尸长音）+ 解码后缝合真实延音**。
+    但块边界上的延音会被切断/换乐器。
+2026-10-18b 当时选了「一律关掉 + 解码后缝合」，2026-10-31 又回退（用户报障
+「音色不统一 + 音符丢失，4.3.x 没这问题」；5.0.0-beta.4 实测过关掉 prelude 会让
+相邻分块换乐器组 1 → 16 次、音符少 22%）。现在：
+  **默认 prelude_forcing=True 交给模型**（僵尸音由音频证据收尾兜底），
+  只有用户显式关掉时才 prelude_forcing=False + 解码后缝合。
 
 这里锁死四件事：
   1) 边界两侧同轨同音高的延音必须缝成一个长音（连续性不丢）；
   2) 不同音高 / 间隔过大 / 不同轨（不同乐器）一律不缝（不许改音色、不许乱连）；
   3) 缝合后 MIDI 仍可正常解析，轨道名/音色等非音符事件不丢；
-  4) 引擎路径：传 prelude_forcing=True 时**交给模型的是 False**，并打缝合日志；
-     只有显式 FUFUMIDI_LEGACY_PRELUDE=1 才保留旧行为（调试对照用）。
+  4) 引擎路径：默认（或显式 True）→ **模型收到 True 且不缝合**；
+     显式 False → 模型收到 False 且缝合。
 """
 import io
 import os
@@ -189,7 +193,7 @@ def run_transcribe(monkeypatch, tmp_path):
     import muscriptor
     import audio_io
 
-    def _run(monkeypatch_env=None):
+    def _run(overrides=None):
         monkeypatch.setattr(muscriptor, "TranscriptionModel", _FakeModel)
         monkeypatch.setattr(M, "_require_package", lambda: None)
         monkeypatch.setattr(M, "_find_local_model", lambda size: str(tmp_path / "model.safetensors"))
@@ -200,24 +204,30 @@ def run_transcribe(monkeypatch, tmp_path):
         monkeypatch.setattr(audio_io, "remove_temp", lambda p: None)
         logs = []
         out = str(tmp_path / "out.mid")
-        M.transcribe_muscriptor(str(wav), out, params={"model_size": "medium", "prelude_forcing": True},
-                                log_cb=logs.append)
+        params = {"model_size": "medium"}
+        params.update(overrides or {})
+        M.transcribe_muscriptor(str(wav), out, params=params, log_cb=logs.append)
         with open(out, "rb") as fh:
             return fh.read(), logs, _FakeModel.captured_kw
 
     return _run
 
 
-def test_engine_disables_model_prelude_and_stitches(run_transcribe):
+def test_engine_keeps_model_prelude_and_skips_stitch(run_transcribe):
+    """默认（= 4.3.x 行为）：prelude_forcing 交给模型开着，块边界连续性由模型保证，
+    不再靠解码后缝合来补 —— 缝合只在用户显式关掉 prelude 时才用。"""
     data, logs, kw = run_transcribe()
-    assert kw.get("prelude_forcing") is False, "模型层不许再开强制 tie：%r" % (kw,)
+    assert kw.get("prelude_forcing") is True, "默认必须让模型自己续接跨块延音：%r" % (kw,)
+    assert not any("跨块延音缝合：接合" in s for s in logs), logs
+    _mid, notes = _notes_of(data)
+    assert len(notes) == 2, notes            # 模型给的两颗（0-5s / 5-7s）原样保留
+
+
+def test_engine_stitches_when_prelude_explicitly_off(run_transcribe):
+    """用户显式取消跨块延音 → 模型侧关闭 prelude，改由解码后缝合补连续性。"""
+    data, logs, kw = run_transcribe({"prelude_forcing": False})
+    assert kw.get("prelude_forcing") is False, "显式关闭时不应该再交给模型开：%r" % (kw,)
     assert any("跨块延音缝合：接合 1 处" in s for s in logs), logs
     mid, notes = _notes_of(data)
     assert len(notes) == 1, notes
     assert abs(_sec_of(mid, notes[0][2]) - 7.0) < 0.02, notes
-
-
-def test_legacy_env_restores_old_model_behavior(run_transcribe, monkeypatch):
-    monkeypatch.setenv("FUFUMIDI_LEGACY_PRELUDE", "1")
-    _data, _logs, kw = run_transcribe()
-    assert kw.get("prelude_forcing") is True, "LEGACY 环境变量应恢复旧行为（调试对照用）"
