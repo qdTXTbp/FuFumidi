@@ -29,7 +29,8 @@ if (!fs.existsSync(config)) {
 fs.mkdirSync(outDir, { recursive: true });
 
 const args = ['pack', '-c', config, '-o', out, '--icon', path.join(root, 'build', 'icon.ico')];
-if (fs.existsSync(leftImg)) { args.push('-t', leftImg); }
+// Issue #36：不传左侧大图；180x400 竖图会挤压更新器窗口的「启动」按钮。
+// if (fs.existsSync(leftImg)) { args.push('-t', leftImg); }
 
 console.log('[build-updater] generating FuFumidi.update.exe ...');
 const r = spawnSync(builder, args, { stdio: 'inherit', cwd: root });

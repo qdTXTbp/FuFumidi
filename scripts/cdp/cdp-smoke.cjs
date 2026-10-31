@@ -35,7 +35,9 @@ async function waitForPage(deadline) {
   while (Date.now() < deadline) {
     try {
       const ts = await getJson('/json');
-      const page = ts.find((t) => t.type === 'page' && !/devtools/i.test(t.url || ''));
+      // 冷启动 splash 也是 page（data:text/html），不能取第一个，否则会探测到没有 preload 的 splash。
+      const pages = ts.filter((t) => t.type === 'page' && !/devtools/i.test(t.url || ''));
+      const page = pages.find((t) => /renderer[\\/]dist[\\/]index\.html/i.test(t.url || '')) || pages.find((t) => !/^data:text\/html/i.test(t.url || ''));
       if (page && page.webSocketDebuggerUrl) return page;
     } catch (e) { /* 还没起来 */ }
     await sleep(500);
