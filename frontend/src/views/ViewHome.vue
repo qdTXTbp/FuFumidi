@@ -318,7 +318,7 @@ async function openProject() {
 .home-recent-head h3 { margin: 0; font-size: var(--fs-md); }
 .home-recent-head .btn { margin-left: auto; }
 .home-recent-list { display: flex; flex-direction: column; }
-.home-recent-row { display: flex; align-items: center; gap: var(--sp-3); padding: 11px 18px; border-bottom: 1px solid var(--hairline); text-align: left; background: transparent; color: var(--text2); }
+.home-recent-row { display: flex; align-items: center; gap: var(--sp-3); padding: 11px 18px; border: 0; border-bottom: 1px solid var(--hairline); text-align: left; background: transparent; color: var(--text2); }
 .home-recent-row:last-child { border-bottom: 0; }
 .home-recent-row:hover, .home-recent-row.active { background: color-mix(in srgb, var(--accent-sapphire) 5%, var(--surface)); }
 .home-recent-thumb { width: 30px; height: 30px; border-radius: var(--r-sm); background: var(--surface-soft); color: var(--accent-sky); display: grid; place-items: center; flex: none; }

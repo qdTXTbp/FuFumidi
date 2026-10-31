@@ -192,7 +192,12 @@
 
 * { box-sizing: border-box; }
 button, input, select, textarea { font-family: inherit; }
-button { -webkit-tap-highlight-color: transparent; }
+button { -webkit-tap-highlight-color: transparent; border: 0; }
+/* ★ 2026-10-24：上面这行 border: 0 是全局去掉浏览器默认的深灰按钮边框。
+   没有它，任何只写了 border-bottom（或只写某一两条边）的按钮式列表行
+   都会在另外三边露出浏览器默认边框 —— 实测首页「最近曲目」每行一圈黑边
+   （该行是 <button>，却只声明了 border-bottom）。
+   想要边框的按钮都显式声明：.btn / .card 自带完整 border，不受影响。 */
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 html, body, #app { height: 100%; margin: 0; }
 body {
