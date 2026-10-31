@@ -44,7 +44,7 @@ if ($LASTEXITCODE -ge 8) { throw "robocopy failed, code $LASTEXITCODE" }
 
 Write-Host "[2/4] Generating updater FuFumidi.update.exe ..."
 $packArgs = @('pack', '-c', $config, '-o', (Join-Path $staging 'FuFumidi.update.exe'), '--icon', (Join-Path $root 'build\icon.ico'))
-if (Test-Path $leftImg) { $packArgs += '-t'; $packArgs += $leftImg }
+# Issue #36：不传左侧大图，避免 180x400 竖图把「启动」按钮挤到窗口下方
 & $builder @packArgs
 if ($LASTEXITCODE -ne 0) { throw "pack updater failed" }
 
@@ -77,7 +77,7 @@ Copy-Item (Join-Path $staging 'FuFumidi.update.exe') (Join-Path $winUnpacked 'Fu
 
 Write-Host "[4/4] pack: generating offline package FuFumidi.Install.$Version.exe ..."
 $offArgs = @('pack', '-c', $config, '-m', (Join-Path $outDir "metadata-$Version.json"), '-d', $metaOut, '-o', (Join-Path $outDir "FuFumidi.Install.$Version.exe"), '--icon', (Join-Path $root 'build\icon.ico'))
-if (Test-Path $leftImg) { $offArgs += '-t'; $offArgs += $leftImg }
+# Issue #36：离线包同样不传左侧大图
 & $builder @offArgs
 if ($LASTEXITCODE -ne 0) { throw "pack offline failed" }
 

@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><style>
+:root{color-scheme:dark}*{box-sizing:border-box}html,body{height:100%;margin:0}
+body{display:grid;place-items:center;background:radial-gradient(120% 130% at 50% 0%,#1b2a4a 0%,#0a0f18 58%,#06080d 100%);overflow:hidden;font-family:"Segoe UI","Microsoft YaHei",sans-serif;color:#eaf2ff}
+.stage{display:flex;align-items:center;gap:22px;padding:0 30px}
+.mark{position:relative;width:86px;height:86px;flex:none;display:grid;place-items:center}
+.ring{position:absolute;inset:0;border-radius:26px;border:1px solid rgba(120,190,255,.28);box-shadow:0 0 28px rgba(80,160,255,.18),inset 0 0 22px rgba(80,160,255,.10);animation:breathe 2.2s ease-in-out infinite}
+.ring:before,.ring:after{content:"";position:absolute;border-radius:24px;border:1px solid rgba(110,200,255,.22)}
+.ring:before{inset:8px}.ring:after{inset:16px}
+.core{font-weight:800;font-size:26px;letter-spacing:-1px;background:linear-gradient(135deg,#fff,#8fd4ff 55%,#5c8dff);-webkit-background-clip:text;background-clip:text;color:transparent;animation:float 2.2s ease-in-out infinite}
+.title{font-size:24px;font-weight:750;letter-spacing:-.4px}.title b{color:#8fd4ff;font-weight:750}
+.sub{margin-top:6px;font-size:12px;letter-spacing:.14em;color:#8aa3c4;text-transform:uppercase}
+.bar{margin-top:18px;width:250px;height:3px;border-radius:999px;background:rgba(130,180,255,.14);overflow:hidden;position:relative}
+.bar i{display:block;height:100%;width:38%;border-radius:999px;background:linear-gradient(90deg,transparent,#6fc7ff,#a78bfa,transparent);animation:slide 1.5s cubic-bezier(.4,0,.2,1) infinite}
+.hint{margin-top:12px;font-size:11px;color:#637b9b}
+@keyframes breathe{0%,100%{transform:scale(.96);opacity:.65}50%{transform:scale(1);opacity:1}}
+@keyframes float{0%,100%{transform:translateY(1px)}50%{transform:translateY(-2px)}}
+@keyframes slide{0%{transform:translateX(-120%)}100%{transform:translateX(310%)}}
+</style></head><body><div class="stage"><div class="mark"><div class="ring"></div><div class="core">F</div></div><div><div class="title">FuFumidi <b>6.4.2</b></div><div class="sub">OFFLINE MIDI WORKSTATION</div><div class="bar"><i></i></div><div class="hint">正在加载本地引擎与工作台…</div></div></div></body></html>

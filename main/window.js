@@ -42,7 +42,24 @@ function createWindow({ BrowserWindow, shell, pluginHost, rootDir }) {
     },
   });
 
-  win.once('ready-to-show', () => win.show());
+  // 冷启动加载动画：先显示品牌 splash，等渲染层真正 ready-to-show 再切主窗口，
+  // 避免用户看到深色空窗或以为程序卡死。
+  let splash = null;
+  try {
+    splash = new BrowserWindow({
+      width: 460, height: 230, frame: false, resizable: false, movable: false,
+      minimizable: false, maximizable: false, alwaysOnTop: true, skipTaskbar: true,
+      show: false, backgroundColor: '#0a0f18', hasShadow: true,
+      webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: false, devTools: false },
+    });
+    const splashHtml = fs.readFileSync(path.join(rootDir, 'main', 'splash.html'), 'utf8');
+    splash.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(splashHtml));
+    splash.once('ready-to-show', () => { try { splash.show(); } catch (_) {} });
+  } catch (_) { splash = null; }
+  const closeSplash = () => { try { if (splash && !splash.isDestroyed()) splash.destroy(); } catch (_) {} splash = null; };
+  win.once('ready-to-show', () => { closeSplash(); win.show(); });
+  win.webContents.once('did-fail-load', closeSplash);
+  setTimeout(closeSplash, 15000);
   // 渲染器就绪后补发插件渲染脚本（registerPluginsIpc 在窗口创建前已 loadAll，
   // 首次广播会落在渲染器监听之前而丢失，这里重播兜底）
   win.webContents.on('did-finish-load', () => {
