@@ -5574,6 +5574,7 @@ export const I18N_JA = {
   '当前环境不支持音域分析（请使用桌面版）': 'この環境では音域分析に対応していません（デスクトップ版を使用してください）',
   '当前环境不支持转拼音': 'この環境ではピンイン変換に対応していません',
   '当前没有可用的 CUDA（需 NVIDIA 显卡 + 已安装的 CUDA 加速包）。Aria-AMT 会报「CUDA device not found」——改用 piano-transcription 或 Transkun 可以正常转录。': '利用可能な CUDA がありません（NVIDIA GPU と CUDA 高速化パッケージが必要）。Aria-AMT は「CUDA device not found」を出します。piano-transcription か Transkun なら通常どおり文字起こしできます。',
+  '检测到低内存设备（约 8GB）。Aria-AMT 使用 CUDA 时若同时运行其它程序，可能触发蓝屏（Issue #35）；建议关闭其它应用，或改用 CPU 可跑的 piano-transcription / Transkun。': '低メモリ端末（約 8GB）を検出しました。他のアプリと同時に Aria-AMT を CUDA で動かすとブルースクリーン（Issue #35）になる可能性があります。他のアプリを閉じるか、CPU で動く piano-transcription / Transkun を使用してください。',
   '当前没有设定音阶（「更多 → 音阶」里选一个调），这条工具不会改变任何音符。': '音階が設定されていません（「その他 → 音階」で調を選択）。このツールは音符を変更しません。',
   '当前曲目没有音符': '現在の曲に音符がありません',
   '当前已开启': '現在オン',

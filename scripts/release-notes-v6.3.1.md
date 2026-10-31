@@ -15,6 +15,8 @@
 - VST3 渲染队列。
 - WE 录屏导出 5 秒 WebM；静态壁纸可设为 Windows 桌面。
 - 启动提速：重浮层按需加载，Electron 37.10.3。
+- 修复 MIROS / YourMT3+ 运行时包解压失败（zip-safe 路径处理）。
+- Issue #35：低内存设备转录前拦截、运行中低内存自动中止，避免 DPC_WATCHDOG 蓝屏。
 
 ## 门禁
 

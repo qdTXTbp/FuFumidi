@@ -129,6 +129,7 @@ const lastSource = ref('');
 let srcAudio = null;
 const doneInfo = ref('');
 const gpuInfo = ref('');
+const lowMemoryDevice = !!(typeof navigator !== 'undefined' && navigator.deviceMemory && navigator.deviceMemory <= 8);
 const gpuDetail = ref('');          // 驱动版本 / 共享显存回退支持（P2 驱动检测）
 const umBusy = ref(false);
 const umResult = ref('');          // CUDA 统一内存实验输出（P2 实验，不改变转录）
@@ -2260,6 +2261,7 @@ onBeforeUnmount(() => {
         </div>
         <div class="tr-perf-hint" v-if="pmodel !== 'piano_pt'">{{ t('Aria-AMT / Transkun / hFT 需先到资源中心安装对应模型') }}</div>
         <div class="tr-perf-hint tr-warn" v-if="pmodel === 'aria' && !cudaReady">{{ t('当前没有可用的 CUDA（需 NVIDIA 显卡 + 已安装的 CUDA 加速包）。Aria-AMT 会报「CUDA device not found」——改用 piano-transcription 或 Transkun 可以正常转录。') }}</div>
+        <div class="tr-perf-hint tr-warn" v-if="pmodel === 'aria' && lowMemoryDevice">{{ t('检测到低内存设备（约 8GB）。Aria-AMT 使用 CUDA 时若同时运行其它程序，可能触发蓝屏（Issue #35）；建议关闭其它应用，或改用 CPU 可跑的 piano-transcription / Transkun。') }}</div>
       </div>
 
       <!-- 音频处理：当前模型 + 选择模型（与「通用模型 / 钢琴模型」同一种 pill 行） -->

@@ -203,10 +203,30 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
     return child;
   }
 
+  // Issue #35：低内存机器 + CUDA 钢琴模型会把系统推到 BSOD（DPC_WATCHDOG_VIOLATION）。
+  // 主进程在提交任务前和运行中做两道内存闸；宁可明确拒绝，也不让内核/驱动进入换页风暴。
+  const MiB = 1024 * 1024, GiB = 1024 * MiB;
+  function _memInfo() { return { total: os.totalmem(), free: os.freemem() }; }
+  function _preflightTranscribe(cfg) {
+    const info = _memInfo();
+    const totalGB = info.total / GiB, freeGB = info.free / GiB;
+    const model = String(cfg.model || '');
+    const pianoCuda = String(cfg.mode || 'universal') === 'piano' && model === 'aria';
+    if (totalGB <= 8.6 && freeGB < 1.35) {
+      return '系统可用内存仅 ' + freeGB.toFixed(2) + ' GB（共 ' + totalGB.toFixed(1) + ' GB）。请先关闭浏览器/游戏/其它转录任务，至少留 1.5 GB 再开始；低内存下启动转录可能导致蓝屏（Issue #35）。';
+    }
+    if (pianoCuda && totalGB <= 8.6 && freeGB < 3.0) {
+      return '检测到低内存设备（' + totalGB.toFixed(1) + ' GB）且选择 Aria-AMT（CUDA 钢琴模型）。该组合在内存紧张时可能触发 DPC_WATCHDOG_VIOLATION 蓝屏。请关闭其它程序，或改用 piano-transcription / Transkun（CPU 可跑）。';
+    }
+    return '';
+  }
   function engineWorkerConvert(cfg) {
+    const _pre = _preflightTranscribe(cfg);
+    if (_pre) return Promise.reject(new Error(_pre));
     // 并行槽位配额：__slots 为渲染端并行路数（1-4）。GPU 环境显存有限，自动降 1 路；
     // CPU 环境用满配额。在配额内挑选在途请求最少的 worker 槽位，尽量并行不串队。
     let slots = Math.max(1, Math.min(4, parseInt(cfg.__slots, 10) || 1));
+    if (os.totalmem() <= 8.6 * 1024 * 1024 * 1024) slots = 1; // 低内存设备禁止并行解码
     try {
       const env = engineEnv();
       if (env && env.FUFUMIDI_DISABLE_GPU !== '1') slots = Math.max(1, slots - 1); // GPU：自动降 1
@@ -242,6 +262,21 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
     for (const [k, rk] of Object.entries(map)) if (cfg[k] != null) req[rk] = cfg[k];
     for (const k of ['denoise','normalize','auto_bpm','no_merge','no_velnorm','with_drums','export_stems','no_pedal','no_melodia','multiple_pitch_bends','timbre_stabilize']) if (cfg[k]) req[k] = true;
     const p = new Promise((resolve, reject) => { _engineWorkerPending.set(id, { resolve, reject, win: cfg.__win, logId: cfg.__logId || cfg.id, task: cfg.__task || null, child }); });
+    // 运行中内存闸：低于 700MB 立即中止该任务，避免内核把页面换到磁盘时整机卡死/蓝屏。
+    const _memTimer = setInterval(() => {
+      const free = os.freemem();
+      if (free < 700 * MiB) {
+        clearInterval(_memTimer);
+        const ent = _engineWorkerPending.get(id);
+        if (ent) {
+          _engineWorkerPending.delete(id);
+          try { ent.task && ent.task.log && ent.task.log('系统内存低于 700MB，已自动中止转录（Issue #35 保护）。'); } catch (_) {}
+          try { child.kill(); } catch (_) {}
+          try { ent.reject(new Error('系统内存不足（<700MB），已自动中止转录。请关闭其它程序后重试。')); } catch (_) {}
+        }
+      }
+    }, 1500);
+    p.then(() => clearInterval(_memTimer), () => clearInterval(_memTimer));
     child.stdin.write(JSON.stringify(req) + '\n');
     return p;
   }
