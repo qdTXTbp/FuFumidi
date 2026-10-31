@@ -83,11 +83,13 @@ def transcribe_miros(audio_path, output_midi, params=None, log_cb=None, num_thre
     threads = TR.limit_threads(num_threads)
     TR.install_pause(log_cb)
     TR.patch_torchaudio_soundfile()
-    TR.stub_wandb()
 
     repo = os.path.join(rt, "repo")
     site = os.path.join(rt, "site")
     TR.prepare_paths(rt, extra_dirs=[repo])
+    # MIROS 运行时自带 wandb（含 sdk）；先让真实包被找到，避免桩包导致
+    # “No module named 'wandb.sdk'; 'wandb' is not a package”。
+    TR.stub_wandb(allow_real=True)
     # HF 端点与 wandb 由上游 import 链读取；离线包不该去连 HF
     os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
     os.environ["WANDB_MODE"] = "disabled"

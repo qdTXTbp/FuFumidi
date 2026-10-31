@@ -134,7 +134,7 @@ def prepare_paths(rt, extra_dirs=()):
     return dirs
 
 
-def stub_wandb():
+def stub_wandb(allow_real=False):
     """给 wandb 打一个只含 Table 的轻量桩。
 
     YourMT3 系（含 MIROS）只在训练日志里用 wandb.Table，推理根本不需要它；
@@ -142,6 +142,13 @@ def stub_wandb():
     """
     if "wandb" in sys.modules:
         return
+    if allow_real:
+        try:
+            import importlib.util
+            if importlib.util.find_spec("wandb") is not None:
+                return  # MIROS 运行时自带完整 wandb；用真的，别让桩缺 sdk
+        except Exception:
+            pass
     import types
     w = types.ModuleType("wandb")
 
