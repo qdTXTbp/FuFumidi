@@ -71,7 +71,8 @@
   "dependencies": {
     "adm-zip": "^0.6.0",
     "sql.js": "^1.14.2",
-    "webwallgl": "^3.0.0"
+    "webwallgl": "^3.0.0",
+    "yauzl": "^2.10.0"
   },
   "devDependencies": {
     "electron": "^37.10.3",

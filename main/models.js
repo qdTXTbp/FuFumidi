@@ -6,7 +6,7 @@
 const { spawn } = require('child_process');
 const AdmZip = require('adm-zip');
 const Paths = require('./paths');
-const { safeExtractAllTo } = require('./zip-safe');
+const { safeExtractAllTo, safeExtractAllToLarge } = require('./zip-safe');
 const MSST_CATALOG = require('./models-msst-catalog');
 const SepCommon = require('./separate-common');
 const DS = require('./download-source');
@@ -1158,7 +1158,9 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
         }
       }
       send({ received: spec.size || 0, total: spec.size || 0, percent: 99, done: false, text: label + ' 解压…' });
-      const zsafe = safeExtractAllTo(archive, destDir);
+      // MIROS 的 5.36GB 运行时段包超过 Node fs.readFileSync 的 2GiB 上限，
+      // 必须走流式 ZIP64；小包也兼容。
+      const zsafe = await safeExtractAllToLarge(archive, destDir, { maxTotalBytes: 16 * 1024 * 1024 * 1024 });
       if (!zsafe.ok) throw new Error('压缩包安全校验未通过：' + zsafe.error);
       // ★ marker 验收（分片分支以前漏了这一步：包结构不对也报"安装成功"）
       if (marker && !fs.existsSync(marker)) {

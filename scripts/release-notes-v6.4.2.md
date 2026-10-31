@@ -4,7 +4,7 @@
 
 - Issue #36：更新器/离线包移除 180x400 左侧大图，避免「启动」按钮被挤出窗口、只能 Tab 操作。
 - Issue #35：低内存设备转录前拦截；运行中系统可用内存低于 700MB 自动中止；低内存下 Aria-AMT CUDA 组合禁止启动并给出替代建议。
-- MIROS / YourMT3+：修复运行时包安全校验把压缩包路径当 AdmZip 实例导致的 zip.getEntries is not a function，现在可以正常解压安装。
+- MIROS / YourMT3+：修复运行时包解析；MIROS 5.36GB 包改为流式 ZIP64 解压，不再触发 “File size is greater than 2 GiB”。
 
 ## 包含
 

@@ -3,7 +3,9 @@
 // ============================================================
 'use strict';
 const path = require('path');
+const fs = require('fs');
 const AdmZip = require('adm-zip');
+const yauzl = require('yauzl');
 
 /**
  * 解压前的条目校验。
@@ -107,4 +109,76 @@ function safeExtractAllTo(zip, dest, opts) {
   return { ok: true, count: check.count, bytes: check.bytes };
 }
 
-module.exports = { inspectEntries, safeExtractAllTo };
+/**
+ * 大压缩包（>2 GiB）的流式安全解压：Node 的 fs.readFileSync 有 2 GiB 上限，
+ * adm-zip 会把整包读进内存，MIROS 的 5.36 GB 运行时包会直接报
+ * ERR_FS_FILE_TOO_LARGE: File size ... is greater than 2 GiB。
+ *
+ * yauzl 只读中央目录、逐条目流式解压，支持 ZIP64；这里复用与 inspectsEntries
+ * 相同的 zip-slip / 重名 / 解压炸弹规则。
+ */
+function safeExtractAllToLarge(archive, dest, opts) {
+  const maxEntries = (opts && opts.maxEntries) || 20000;
+  const maxTotalBytes = (opts && opts.maxTotalBytes) || (16 * 1024 * 1024 * 1024);
+  return new Promise((resolve) => {
+    yauzl.open(archive, { lazyEntries: true, autoClose: true }, (err, zip) => {
+      if (err || !zip) return resolve({ ok: false, error: '读取压缩包失败：' + (err && err.message || err), count: 0, bytes: 0 });
+      const base = path.resolve(dest);
+      const seen = new Set();
+      let count = 0, total = 0, done = false, ended = false, pendingWrites = 0;
+      const finish = () => {
+        if (!ended || pendingWrites !== 0 || done) return; done = true;
+        resolve({ ok: true, count, bytes: total });
+      };
+      const fail = (msg) => {
+        if (done) return; done = true;
+        try { zip.close(); } catch (_) {}
+        resolve({ ok: false, error: msg, count: 0, bytes: 0 });
+      };
+      try { fs.mkdirSync(base, { recursive: true }); } catch (e) { return fail('创建解压目录失败：' + e.message); }
+      zip.on('error', (e) => fail('读取压缩包条目失败：' + e.message));
+      zip.on('end', () => { ended = true; finish(); });
+      zip.on('entry', (entry) => {
+        if (done) return;
+        const raw = entry.fileName || '';
+        if (!raw) return fail('压缩包含无名条目');
+        if (raw.indexOf('\0') >= 0) return fail('压缩包条目名含 NUL 字节');
+        const name = raw.replace(/\\/g, '/');
+        if (name.charAt(0) === '/' || /^[A-Za-z]:/.test(name) || name.startsWith('//')) return fail('压缩包含绝对路径条目：' + raw);
+        if (name.split('/').some((seg) => seg === '..')) return fail('压缩包含越界条目（..）：' + raw);
+        // 拒绝 Unix symlink（外部属性高 16 位为 S_IFLNK）
+        const mode = (entry.externalFileAttributes >>> 16) & 0o170000;
+        if (mode === 0o120000) return fail('压缩包含符号链接：' + raw);
+        const key = name.toLowerCase();
+        if (seen.has(key)) return fail('压缩包含重名条目：' + raw);
+        seen.add(key);
+        count += 1;
+        if (count > maxEntries) return fail('压缩包条目过多（' + count + ' > ' + maxEntries + '）');
+        const size = Number(entry.uncompressedSize) || 0;
+        total += size;
+        if (total > maxTotalBytes) return fail('压缩包解压后体积超限（' + (total / 1073741824).toFixed(2) + ' GiB）');
+        const resolved = path.resolve(base, name);
+        if (resolved !== base && !resolved.startsWith(base + path.sep)) return fail('压缩包条目解析后越界：' + raw);
+        if (/\/$/.test(name)) {
+          try { fs.mkdirSync(resolved, { recursive: true }); } catch (e) { return fail('创建目录失败：' + e.message); }
+          return zip.readEntry();
+        }
+        let stream;
+        try { stream = fs.createWriteStream(resolved); } catch (e) { return fail('创建文件失败：' + e.message); }
+        // 父目录可能尚未出现（zip 里不保证目录条目在前）
+        try { fs.mkdirSync(path.dirname(resolved), { recursive: true }); } catch (e) { /* 写流会给出更具体错误 */ }
+        zip.openReadStream(entry, (e2, rs) => {
+          if (e2) return fail('读取条目失败：' + e2.message);
+          rs.on('error', (e3) => fail('解压条目失败：' + e3.message));
+          stream.on('error', (e3) => fail('写入文件失败：' + e3.message));
+          pendingWrites += 1;
+          stream.on('close', () => { pendingWrites -= 1; if (!done) zip.readEntry(); finish(); });
+          rs.pipe(stream);
+        });
+      });
+      zip.readEntry();
+    });
+  });
+}
+
+module.exports = { inspectEntries, safeExtractAllTo, safeExtractAllToLarge };
