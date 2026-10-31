@@ -48,7 +48,11 @@ def available():
 
 
 def _install_paths(rt):
-    TR.prepare_paths(rt, extra_dirs=[os.path.join("amt", "src")])
+    # ★ 2026-10-31（GitHub PR #37）：运行时的 site 里躺着 CPU 版 torch，
+    #   以前它插在 sys.path[0] 会盖住 PYTHONPATH 里 GPU 增强包的 cu128 torch。
+    #   默认让增强包优先；FUFUMIDI_RUNTIME_BUNDLED_TORCH=1 可退回旧行为（排障对照）。
+    keep_env = not bool(os.environ.get("FUFUMIDI_RUNTIME_BUNDLED_TORCH"))
+    TR.prepare_paths(rt, extra_dirs=[os.path.join("amt", "src")], keep_env_packages=keep_env)
     TR.stub_wandb()
 
 
@@ -112,6 +116,12 @@ def transcribe_yourmt3(audio_path, output_midi, params=None, log_cb=None, num_th
     if log_cb:
         log_cb("YourMT3+（YPTF+Single）：独立运行时，%s 推理%s"
                % ("GPU" if device == "cuda" else "CPU", "，线程 %d" % threads if threads else ""))
+        info = TR.torch_info()
+        log_cb(TR.describe_torch(info, _RUNTIME))
+        for msg in (TR.cpu_fallback_hint(_RUNTIME, info),
+                    TR.torch_compat_warning(_RUNTIME, os.path.join(rt, "site"))):
+            if msg:
+                log_cb(msg)
     t_all = time.perf_counter()
     tmp = None
     try:

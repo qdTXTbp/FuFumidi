@@ -87,7 +87,20 @@ def transcribe_miros(audio_path, output_midi, params=None, log_cb=None, num_thre
 
     repo = os.path.join(rt, "repo")
     site = os.path.join(rt, "site")
-    TR.prepare_paths(rt, extra_dirs=[repo])
+    # ★ 2026-10-31（GitHub PR #37）：MIROS 自带的 site/torch 是 CPU 版，
+    #   以前 prepare_paths 把它插在 sys.path[0]，正好盖住 PYTHONPATH 里 GPU 增强包
+    #   的 cu128 torch —— 有显卡也报 GPU available: False，整首走 CPU。
+    #   现在默认让增强包优先；要排障对照可设 FUFUMIDI_RUNTIME_BUNDLED_TORCH=1。
+    bundled_torch = bool(os.environ.get("FUFUMIDI_RUNTIME_BUNDLED_TORCH"))
+    TR.prepare_paths(rt, extra_dirs=[repo], keep_env_packages=not bundled_torch)
+    info = TR.torch_info()
+    if log_cb:
+        # 把真正加载的 torch / 设备 / 目录写进日志：慢的时候一眼能看出走的是 CPU 还是 GPU
+        log_cb(TR.describe_torch(info, _RUNTIME))
+        for msg in (TR.cpu_fallback_hint(_RUNTIME, info),
+                    TR.torch_compat_warning(_RUNTIME, site)):
+            if msg:
+                log_cb(msg)
     # HF 端点与 wandb 由上游 import 链读取；离线包不该去连 HF
     os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
     os.environ["WANDB_MODE"] = "disabled"

@@ -114,10 +114,70 @@ def glob_first(rt, pattern, depth=6):
     return None
 
 
-def prepare_paths(rt, extra_dirs=()):
+def _pack_dirs():
+    """GPU 增强包在 PYTHONPATH 里的目录（主进程 engineEnv 注入，只放增强包）。
+
+    ★ 2026-10-31：这不是"随便一个环境变量"。`main.js:engineEnv` 把与当前解释器
+    ABI 匹配的 GPU 增强包 site 目录写进 PYTHONPATH，里面是 cu128 的 torch；
+    而运行时的 `site/torch` 是 CPU 版（MIROS 实测 2.14.1+cpu）。谁在 sys.path
+    前面，谁就赢 —— 所以这个列表必须能被 prepare_paths 看见。
+    """
+    out = []
+    for p in (os.environ.get("PYTHONPATH") or "").split(os.pathsep):
+        p = p.strip().strip('"')
+        if p and os.path.isdir(p) and p not in out:
+            out.append(p)
+    return out
+
+
+def _ver_tuple(v):
+    """'2.14.1+cpu' → (2, 14, 1)；解析不动就返回 ()。"""
+    try:
+        core = str(v).split('+')[0]
+        return tuple(int(x) for x in core.split('.')[:3])
+    except (TypeError, ValueError):
+        return ()
+
+
+def torch_compat_warning(runtime, site):
+    """增强包的 torch 与运行时自带版本不一致时给一句提醒（只提醒，不拦截）。
+
+    PR #37 第二条建议：先校验再决定用谁。多数情况下 torch 次版本差一个能跑，
+    但**运行时自己 pin 了 API 时**会以 `AttributeError / ImportError` 的形式炸在
+    加载权重那一刻，那时用户根本想不到是 torch 版本问题 —— 所以这里提前说清，
+    并给出退回自带 torch 的开关。
+    """
+    info = torch_info()
+    if info.get("error"):
+        return None
+    bundled = dist_versions(site, ("torch",)).get("torch")
+    if not bundled or not info.get("torch"):
+        return None
+    used = str(info["torch"]).split("+")[0]
+    have = str(bundled).split("+")[0]
+    if have == used:
+        return None
+    label = RUNTIME_LABELS.get(runtime, runtime or "运行时")
+    older = _ver_tuple(used) < _ver_tuple(have)
+    tip = ("增强包版本更低" if older else "增强包版本更高")
+    return ("%s：正在用 torch %s（GPU 增强包），运行时自带的是 %s（%s）。"
+            "若加载权重时报缺某个 API，设环境变量 FUFUMIDI_RUNTIME_BUNDLED_TORCH=1 "
+            "退回自带 torch（会走 CPU，但调用面完全对得上）。" % (label, used, have, tip))
+
+
+def prepare_paths(rt, extra_dirs=(), keep_env_packages=True):
     """把运行时的 site / 源码目录塞进 sys.path（幂等）。
 
-    顺序：site 最前（运行时的依赖要压过 App 运行时），随后是各源码目录。
+    顺序：**GPU 增强包目录 → 运行时 site → 各源码目录 → 运行时根**。
+
+    ★ 2026-10-31 修（GitHub PR #37）：原来 site 无脑插到 sys.path[0]，把
+    PYTHONPATH 里 GPU 增强包的 cu128 torch 盖住了 —— 运行时自带的是 CPU 版
+    torch，于是「有 CUDA 的机器上 GPU available: False」、整首走 CPU 慢十倍，
+    而且日志里看不出来是谁遮的。现在 site 插在增强包目录**之后**：
+    运行时的依赖照样压过 App 自带运行时，但压不过用户显式装的 GPU 包。
+
+    keep_env_packages=False 时退回旧行为（site 最前），留给排障对照用
+    （环境变量 FUFUMIDI_RUNTIME_BUNDLED_TORCH=1 会走到这里）。
     """
     dirs = []
     site = os.path.join(rt, "site")
@@ -128,10 +188,91 @@ def prepare_paths(rt, extra_dirs=()):
         if os.path.isdir(p):
             dirs.append(p)
     dirs.append(rt)
+
+    env_dirs = set(_pack_dirs()) if keep_env_packages else set()
+    base = 0
+    if env_dirs:
+        for i, p in enumerate(sys.path):
+            if p in env_dirs:
+                base = i + 1
     for p in reversed(dirs):        # insert(0) 会把后面的顶前面，反着插才保持顺序
-        if p not in sys.path:
-            sys.path.insert(0, p)
+        if p in sys.path:
+            continue
+        sys.path.insert(base, p)
     return dirs
+
+
+def dist_versions(site_dir, names=("torch", "torchaudio")):
+    """从 site 目录的 *.dist-info 读包版本（**不 import**，避免把两套 torch 撞在一起）。"""
+    out = {}
+    try:
+        entries = os.listdir(site_dir)
+    except OSError:
+        return out
+    for name in names:
+        pref = name + "-"
+        for e in sorted(entries):
+            if e.lower().startswith(pref) and e.endswith(".dist-info"):
+                out[name] = e[len(pref):-len(".dist-info")]
+                break
+    return out
+
+
+def torch_info():
+    """实际用到的 torch 是谁、有没有 CUDA、从哪个目录加载的。
+
+    PR #37 的第三条建议：别再让用户从"转得很慢"去反推设备路径。
+    """
+    info = {"torch": None, "cuda": None, "cuda_available": False,
+            "file": None, "torchaudio": None, "error": None}
+    try:
+        import torch
+        info["torch"] = str(getattr(torch, "__version__", "?"))
+        info["cuda"] = getattr(getattr(torch, "version", None), "cuda", None)
+        try:
+            info["cuda_available"] = bool(torch.cuda.is_available())
+        except Exception:
+            info["cuda_available"] = False
+        info["file"] = getattr(torch, "__file__", None)
+    except Exception as e:      # 没装 / ABI 不匹配 / 依赖缺失
+        info["error"] = "%s: %s" % (type(e).__name__, e)
+    try:
+        import torchaudio
+        info["torchaudio"] = str(getattr(torchaudio, "__version__", "?"))
+    except Exception:
+        pass
+    return info
+
+
+def describe_torch(info, runtime=None):
+    """把 torch_info() 写成一行能读懂的话（引擎日志直接用）。"""
+    label = RUNTIME_LABELS.get(runtime, runtime or "运行时")
+    if info.get("error"):
+        return "%s：torch 不可用（%s）" % (label, info["error"])
+    cuda = info.get("cuda") or "cpu"
+    dev = "CUDA 可用" if info.get("cuda_available") else "仅 CPU"
+    ta = ("／torchaudio %s" % info["torchaudio"]) if info.get("torchaudio") else ""
+    where = os.path.dirname(info.get("file") or "") or "?"
+    return "%s：torch %s（cuda=%s）%s · %s · %s" % (label, info["torch"], cuda, ta, dev, where)
+
+
+def cpu_fallback_hint(runtime, info, pack_dirs=None, site=None):
+    """走 CPU 时说清「为什么」和「怎么修」，不要只留一句慢。
+
+    返回 None 表示不需要提示（已经在 GPU 上）。
+    """
+    if info.get("cuda_available"):
+        return None
+    label = RUNTIME_LABELS.get(runtime, runtime or "运行时")
+    packs = _pack_dirs() if pack_dirs is None else pack_dirs
+    if not packs:
+        return ("%s：未检测到 GPU 增强包，本次走 CPU（fp32）。"
+                "要提速请到「设置 → GPU 增强包」安装与当前 Python 版本匹配的 CUDA 包。" % label)
+    if info.get("error"):
+        return "%s：GPU 增强包已挂载但 torch 加载失败，本次走 CPU。原因：%s" % (label, info["error"])
+    return ("%s：GPU 增强包已挂载（%s），但 torch 报告 CUDA 不可用，本次走 CPU。"
+            "常见原因：显卡驱动过旧、包与解释器 ABI 不匹配、或运行时自带的 CPU torch 又把包遮住了。"
+            % (label, info.get("torch")))
 
 
 def stub_wandb():
