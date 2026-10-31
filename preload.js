@@ -229,6 +229,7 @@ contextBridge.exposeInMainWorld('fuBridge', {
   listMidiFiles: (dir) => ipcRenderer.invoke('dir:listMidiFiles', dir),
   // 读取本地文件（转录结果回载）
   readBinary: (p) => ipcRenderer.invoke('file:readBinary', p),
+  rendererReady: () => ipcRenderer.send('app:renderer-ready'),
   // 保存二进制（WAV / MIDI 导出）：原生保存对话框 → fs 写盘
   saveBinary: (opts) => ipcRenderer.invoke('file:saveBinary', opts),
   writeBinary: (p, data) => ipcRenderer.invoke('file:writeBinary', p, data),

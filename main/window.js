@@ -14,7 +14,7 @@ function createWindow({ BrowserWindow, shell, pluginHost, rootDir }) {
     minHeight: 640,
     backgroundColor: '#0a0f18',
     autoHideMenuBar: true,
-    show: true,
+    show: false,
     title: 'FuFumidi',
     // ★ 图标必须解析到**真实磁盘文件**：打包后 rootDir 在 app.asar 内，而 build/ 不进包，
     //   `rootDir/build/icon.png` 解析不到 → Electron 用空图标覆盖 exe 自带图标 →
@@ -47,7 +47,7 @@ function createWindow({ BrowserWindow, shell, pluginHost, rootDir }) {
   let splash = null;
   try {
     splash = new BrowserWindow({
-      width: 460, height: 230, frame: false, resizable: false, movable: false,
+      width: 520, height: 286, frame: false, resizable: false, movable: false,
       minimizable: false, maximizable: false, alwaysOnTop: true, skipTaskbar: true,
       show: false, backgroundColor: '#0a0f18', hasShadow: true,
       webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: false, devTools: false },
@@ -57,9 +57,21 @@ function createWindow({ BrowserWindow, shell, pluginHost, rootDir }) {
     splash.once('ready-to-show', () => { try { splash.show(); } catch (_) {} });
   } catch (_) { splash = null; }
   const closeSplash = () => { try { if (splash && !splash.isDestroyed()) splash.destroy(); } catch (_) {} splash = null; };
-  win.once('ready-to-show', () => { closeSplash(); win.show(); });
-  win.webContents.once('did-fail-load', closeSplash);
-  setTimeout(closeSplash, 15000);
+  // 不在 ready-to-show 就切主窗口：此时 Vue 可能还没恢复曲库/设置。
+  // 等渲染层发 app:renderer-ready（App.vue 在曲库恢复后发）再切；15s 兜底。
+  let mainShown = false;
+  const showMain = () => {
+    if (mainShown) return;
+    mainShown = true;
+    try { if (!win.isDestroyed()) win.show(); } catch (_) {}
+    closeSplash();
+  };
+  const onRendererReady = () => { console.log('[splash] renderer-ready'); showMain(); };
+  try { ipcMain.on('app:renderer-ready', onRendererReady); } catch (_) {}
+  win.once('closed', () => { try { ipcMain.removeListener('app:renderer-ready', onRendererReady); } catch (_) {} });
+  win.once('ready-to-show', () => { if (!splash) showMain(); });
+  win.webContents.once('did-fail-load', () => { showMain(); });
+  setTimeout(showMain, 15000);
   // 渲染器就绪后补发插件渲染脚本（registerPluginsIpc 在窗口创建前已 loadAll，
   // 首次广播会落在渲染器监听之前而丢失，这里重播兜底）
   win.webContents.on('did-finish-load', () => {

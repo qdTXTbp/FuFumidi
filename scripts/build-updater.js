@@ -28,7 +28,11 @@ if (!fs.existsSync(config)) {
 }
 fs.mkdirSync(outDir, { recursive: true });
 
-const args = ['pack', '-c', config, '-o', out, '--icon', path.join(root, 'build', 'icon.ico')];
+// 新 Logo 只在更新器上使用：更新器 exe 的标题栏/任务栏图标走 updater-icon.ico；
+// 安装器、应用本体仍是原来的 FuFumidi 图标。
+const updaterIcon = path.join(root, 'build', 'updater-icon.ico');
+const iconPath = fs.existsSync(updaterIcon) ? updaterIcon : path.join(root, 'build', 'icon.ico');
+const args = ['pack', '-c', config, '-o', out, '--icon', iconPath];
 // Issue #36：不传左侧大图；180x400 竖图会挤压更新器窗口的「启动」按钮。
 // if (fs.existsSync(leftImg)) { args.push('-t', leftImg); }
 

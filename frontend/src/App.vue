@@ -735,6 +735,10 @@ function dlHuman(n) { if (!n) return '—'; if (n >= 1e9) return (n / 1e9).toFix
 function dlSpeed(bps) { if (!bps) return ''; return bps >= 1e6 ? (bps / 1e6).toFixed(1) + ' MB/s' : (bps / 1e3).toFixed(0) + ' KB/s'; }
 
 onMounted(() => {
+  // 冷启动 splash 的结束信号：等曲库/设置/会话恢复完成再让主窗口接管。
+  const notifyRendererReady = () => { try { if (bridge && bridge.rendererReady) bridge.rendererReady(); } catch (e) {} };
+  // 兜底：即使 restoreSongs 挂住/失败，挂载 1s 后也放行主窗口（splash 不会无限挡住应用）。
+  setTimeout(notifyRendererReady, 1000);
   startTickLoop();
   // 曲终自动切歌（播放模式：顺序/随机/单曲循环/列表循环）
   window.__fufumidiAutoNext = () => { try { state.handleTrackEnd(); } catch (e) {} };
@@ -742,12 +746,13 @@ onMounted(() => {
   // 会读该引用选择音色库，曾因晚于音频初始化导致重启后回退内置音色（另有 localStorage 兜底）
   loadWallpaper();
   Promise.resolve(restoreSongs()).finally(() => {
+    setTimeout(notifyRendererReady, 120);
     try {
       tabsStore.hydrate((state.songs || []).map((s) => s.id));
       if (state.currentId) tabsStore.open(state.currentId, (state.songs.find((s) => s.id === state.currentId) || {}).name || state.currentId);
     } catch (e) {}
   });
-  setTimeout(restoreSessionView, 350);   // 等首屏路由/曲库恢复稳定后再套用会话
+  setTimeout(() => { restoreSessionView(); }, 500);   // 等首屏路由/曲库恢复稳定后再套用会话
   playlistStore.hydrateFromDb();
   initGlobal();
   if (bridge && bridge.onGpuProgress) offGpuProg = bridge.onGpuProgress(onGpuProgressGlobal);

@@ -43,7 +43,10 @@ robocopy $winUnpacked $staging /E /NFL /NDL /NJH /NJS /NP `
 if ($LASTEXITCODE -ge 8) { throw "robocopy failed, code $LASTEXITCODE" }
 
 Write-Host "[2/4] Generating updater FuFumidi.update.exe ..."
-$packArgs = @('pack', '-c', $config, '-o', (Join-Path $staging 'FuFumidi.update.exe'), '--icon', (Join-Path $root 'build\icon.ico'))
+$updaterIcon = Join-Path $root 'build\updater-icon.ico'
+$updIconArg = if (Test-Path $updaterIcon) { $updaterIcon } else { Join-Path $root 'build\icon.ico' }
+$packArgs = @('pack', '-c', $config, '-o', (Join-Path $staging 'FuFumidi.update.exe'), '--icon', $updIconArg)
+# 新 Logo 仅用于更新器；下面离线安装包继续用 build\icon.ico。
 # Issue #36：不传左侧大图，避免 180x400 竖图把「启动」按钮挤到窗口下方
 & $builder @packArgs
 if ($LASTEXITCODE -ne 0) { throw "pack updater failed" }
