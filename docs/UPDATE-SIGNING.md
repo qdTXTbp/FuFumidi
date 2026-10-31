@@ -51,3 +51,69 @@ node scripts/fast-upload.mjs --channel gh ... --asset "release/update-manifest.j
 - 公钥：`main/update_sign.js` 里的 `UPDATE_PUBKEY`（SPKI DER base64）。
 - 轮换：生成新密钥对 → 更新内嵌公钥 → 发版一次（老版本只认老公钥，所以旧版用户升级到新版后才会用新公钥）。
 - 测试：`npm run test:update-sign`（临时密钥对全路径：正常/篡改/错 key/坏清单）。
+
+---
+
+# 附：Windows 代码签名（Authenticode）
+
+> 这是**两层签名**里的另一层，别和上面的 Ed25519 混了：
+> Ed25519 是「应用自己验更新包」的防篡改；Authenticode 是「Windows / SmartScreen 认发布者」。
+
+## 需要什么
+
+- 一张代码签名证书（`.pfx` + 密码，或云签名 / 硬件 token 的签名命令）。
+- `signtool.exe`（Windows SDK 自带；electron-builder 的缓存里也有一份）。
+
+## 两条路
+
+**A. 交给 electron-builder 签（不推荐）**
+
+```bash
+CSC_LINK=/path/cert.pfx CSC_KEY_PASSWORD=*** npx electron-builder --win nsis --x64
+```
+
+它会给包里**每一个 exe** 调一次 signtool —— 本项目的 `resources/python` 里有 100+ 个 exe，
+本机实测是**小时级**（这也是 `electron-builder.local-dir.yml` 当年把 python 挪出打包流程的原因）。
+
+**B. 只签关键文件（推荐，几秒钟）**
+
+```bat
+:: 1) 先出目录（不压缩、不签名）
+npx electron-builder --win --dir -c.directories.output=release-6.4.3 -c.electronDist=D:/FuFuMIDI/_electron-dist
+
+:: 2) 签主程序 + 增量更新器（这两处才是用户双击 / 信任的对象）
+signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f cert.pfx /p *** ^
+  "release-6.4.3\win-unpacked\FuFumidi.exe" "release-6.4.3\win-unpacked\FuFumidi.update.exe"
+
+:: 3) 用**已签名**的目录打安装包（--prepackaged 复用该目录，不再重新拷贝 / 覆盖）
+npx electron-builder --win nsis --x64 --prepackaged "release-6.4.3\win-unpacked" -c.directories.output=release-6.4.3
+
+:: 4) 签安装包本身
+signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f cert.pfx /p *** ^
+  "release-6.4.3\FuFumidi Setup 6.4.3.exe"
+```
+
+要点：
+
+- **第 2 步必须在第 3 步之前**：安装包是从 `win-unpacked` 里取的，先打后签会得到
+  「安装包里装着未签名主程序」。
+- 第 4 步之后**不要再改任何字节**：`update-manifest.json` 的 Ed25519 签名对象包含安装包的
+  sha256，所以顺序是「签 Authenticode → 再 `node scripts/sign-update.mjs` → 上传」。
+- 时间戳（`/tr`）务必带：证书过期后旧安装包仍能验证。
+
+## 校验
+
+```bat
+:: Status 期望 Valid；signtool verify 退出码 0
+powershell -NoProfile -Command "Get-AuthenticodeSignature 'release-6.4.3\FuFumidi Setup 6.4.3.exe' | Format-List Status,SignerCertificate"
+signtool verify /pa /v "release-6.4.3\FuFumidi Setup 6.4.3.exe"
+```
+
+## 与打包流程的两个已知坑（2026-10-31 实测）
+
+- 语言包裁剪会被环境守卫拦：electron-builder 要一次删掉 51 个 `locales/*.pak`，触发
+  「单轮 ≥50 项删除需确认」。用 `node scripts/prepare-electron-dist.mjs --out <dir>` 生成一份
+  **只保留 4 种语言**的 dist，再 `-c.electronDist=<dir>` 指过去（复制时跳过，不删任何文件）。
+- `electron-builder.yml` 的 `electronVersion` 必须跟 `package.json` 的 devDependency 同步。
+  6.4 升级到 37 时只改了 `package.json` 与 lock，忘了 yml，结果打出来的是 33 的二进制。
+

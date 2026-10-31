@@ -1,5 +1,5 @@
 appId: com.fufumidi.app
-electronVersion: 33.4.11
+electronVersion: 37.10.3
 # ★ 用本地 node_modules 里已装的 Electron（2026-10-18：本机直连 github.com 不可达，
 #   electron-builder 默认会去 GitHub 下载 electron-v33.4.11-win32-x64.zip 而超时失败）。
 electronDist: node_modules/electron/dist
@@ -86,6 +86,11 @@ files:
   - "!**/__pycache__/**"
   - "!**/*.pyc"
   - "!**/.pytest_cache/**"  # 必须带 **/ 前缀：pytest 缓存实际在 engine/ 下，写成 !.pytest_cache/** 只匹配根目录，等于没排
+  # ★ 2026-10-31：ACL 被锁死的 pytest 残留目录要**排除目录本身** —— 只写上面那条
+  #   `!**/.pytest_cache/**` 只排内容，打包器仍会 scandir 进目录并 EPERM 失败。
+  - "!engine/._pt_*"
+  - "!engine/._pt_*/**"
+  - "!engine/.pytest_cache"
   # 开发模式的数据根目录。发布版的数据根目录就是「安装目录旁的 FuFumidiData」，
   # 打进包会被原样铺到用户机器上 —— 实测带进去了开发机曲库里的 MIDI、
   # basic_pitch 权重与 matplotlib 缓存，等于把本机私有曲目随安装包分发出去。
