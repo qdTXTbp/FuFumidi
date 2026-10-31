@@ -31,7 +31,7 @@
     "audit:ui-tokens": "node scripts/check-ui-tokens.mjs",
     "test:ui": "node --test \"frontend/tests/*.test.js\"",
     "test:e2e": "npm run build:ui && node scripts/e2e/run.mjs",
-    "test": "npm run test:rust && npm run test:ui && npm run test:plugin && npm run test:separate && npm run test:download && npm run test:autosave && npm run test:export && npm run test:taskcenter && npm run test:quality && npm run test:storage && npm run test:update-sign && npm run test:update-util && npm run test:platform && npm run test:dataroot && npm run test:plugin-host && npm run test:dawproject && npm run check:version && npm run test:usermeta && npm run test:speedtest && npm run test:feedback && npm run test:netlify && npm run test:worker",
+    "test": "npm run test:rust && npm run test:ui && npm run test:plugin && npm run test:separate && npm run test:download && npm run test:autosave && npm run test:export && npm run test:taskcenter && npm run test:quality && npm run test:storage && npm run test:update-sign && npm run test:update-util && npm run test:platform && npm run test:dataroot && npm run test:zip && npm run test:plugin-host && npm run test:dawproject && npm run check:version && npm run test:usermeta && npm run test:speedtest && npm run test:feedback && npm run test:netlify && npm run test:worker",
     "test:worker": "npm --prefix cloud-sync/worker run test:worker",
     "test:plugin": "node --test scripts/test-plugin-sandbox.mjs",
     "test:download": "node --test scripts/test-fast-download.mjs",
@@ -64,7 +64,8 @@
     "test:usermeta": "node --test scripts/test-usermeta.mjs",
     "test:speedtest": "node --test scripts/test-update-speedtest.mjs",
     "test:cancel": "node --test scripts/test-cancel-worker.mjs",
-    "push:api": "node scripts/api-push.mjs"
+    "push:api": "node scripts/api-push.mjs",
+    "test:zip": "node --test scripts/test-zip-safe.mjs"
   },
   "dependencies": {
     "adm-zip": "^0.6.0",

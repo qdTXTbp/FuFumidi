@@ -6,7 +6,7 @@
 const { spawn } = require('child_process');
 const AdmZip = require('adm-zip');
 const Paths = require('./paths');
-const { safeExtractAllTo } = require('./zip-safe');
+const { safeExtractAllTo, safeExtractFile } = require('./zip-safe');
 const MSST_CATALOG = require('./models-msst-catalog');
 const SepCommon = require('./separate-common');
 const DS = require('./download-source');
@@ -1075,8 +1075,27 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     fs.mkdirSync(destDir, { recursive: true });
     const archive = destDir + '.oudep';   // 解包后删掉，不留双份
     const partsDir = destDir + '.parts';
+    // 解包**失败**时保留压缩包：包已通过体积/SHA256 校验，问题在解包这一侧（磁盘满、被杀进程…），
+    // 重试时直接复用，不必再下几 GB（MIROS 一次 5 GB，此前失败即删，用户白下一次）。
+    let keepArchive = false;
     try {
-      if (spec.parts && spec.parts.length) {
+      // ---- 来源①：上次下好但没解开的包（体积对得上就直接复用）----
+      const expectArchiveBytes = spec.parts && spec.parts.length
+        ? (spec.partSizes || []).reduce((a, b) => a + (Number(b) || 0), 0)
+        : (Number(spec.size) || Number(spec.minSize) || 0);
+      let fromCache = false;
+      if (fs.existsSync(archive)) {
+        const have = (() => { try { return fs.statSync(archive).size; } catch (_) { return 0; } })();
+        fromCache = have > 0 && (!expectArchiveBytes || have === expectArchiveBytes);
+        // 体积对不上（下了一半 / 分片没拼完）→ 丢掉重来
+        if (!fromCache) {
+          try { fs.rmSync(archive, { force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
+        }
+      }
+
+      if (fromCache) {
+        send({ received: expectArchiveBytes, total: expectArchiveBytes, percent: 99, done: false, text: label + ' 复用已下载的压缩包…' });
+      } else if (spec.parts && spec.parts.length) {
         // ---- 分片包：逐片下载 → 按序拼接 → 校验 → 解包 ----
         fs.mkdirSync(partsDir, { recursive: true });
         const partPaths = [];
@@ -1121,12 +1140,6 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
           });
         }
         await new Promise((res, rej) => outStream.end(err => err ? rej(err) : res()));
-        if (spec.sha256) {
-          const hash = await sha256File(archive);
-          if (String(hash).toLowerCase() !== String(spec.sha256).toLowerCase()) {
-            throw new Error('SHA256 校验失败：' + String(hash).slice(0, 16) + '…（期望 ' + String(spec.sha256).slice(0, 16) + '…）。文件已丢弃，请重试或换下载源。');
-          }
-        }
       } else {
         // ---- 单文件：mirrorUrls 叠加镜像，FastDL 负责测速/分段/续传/看门狗 ----
         const urls = mirrorUrls(spec);
@@ -1150,16 +1163,36 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
             });
           },
         });
-        if (spec.sha256) {
-          const hash = await sha256File(archive);
-          if (hash !== spec.sha256) {
-            throw new Error('SHA256 校验失败：' + hash + '（文件已丢弃，请重试或换源）');
-          }
+      }
+      // SHA256 统一在这里校验：三个来源（分片拼接 / 单文件下载 / 复用上次的包）
+      // 都必须过同一道闸，失败即丢文件重来。
+      if (spec.sha256) {
+        const hash = await sha256File(archive);
+        if (String(hash).toLowerCase() !== String(spec.sha256).toLowerCase()) {
+          throw new Error('SHA256 校验失败：' + String(hash).slice(0, 16) + '…（期望 ' + String(spec.sha256).slice(0, 16) + '…）。文件已丢弃，请重试或换下载源。');
         }
       }
       send({ received: spec.size || 0, total: spec.size || 0, percent: 99, done: false, text: label + ' 解压…' });
-      const zsafe = safeExtractAllTo(archive, destDir);
-      if (!zsafe.ok) throw new Error('压缩包安全校验未通过：' + zsafe.error);
+      // ★ 必须走 safeExtractFile（按路径）：safeExtractAllTo 要的是 AdmZip 实例，
+      //   传路径会直接 TypeError；而 5 GB 的包也**不能** new AdmZip（它整包 readFileSync
+      //   进内存 → 主进程卡死几分钟 / 低内存机器 OOM）。safeExtractFile 只读中央目录，
+      //   大包走流式解压，小包仍交给 adm-zip。
+      const zsafe = await safeExtractFile(archive, destDir, {
+        maxEntries: 80000,                        // python 运行时 site-packages 条目多，默认 2 万会误拒
+        maxTotalBytes: 16 * 1024 * 1024 * 1024,
+        onProgress: (done2, total2) => {
+          if (!win || win.isDestroyed() || !total2) return;
+          send({
+            received: spec.size || 0, total: spec.size || 0, percent: 99, done: false,
+            text: label + ' 解压… ' + Math.min(99, Math.round(done2 / total2 * 100)) + '%',
+          });
+        },
+      });
+      if (!zsafe.ok) {
+        // 校验不通过 = 包本身有问题 → 丢掉；解压失败 = 包是好的（SHA256 已过）→ 留着，重试不用再下
+        keepArchive = zsafe.stage === 'extract';
+        throw new Error(zsafe.stage === 'extract' ? zsafe.error : '压缩包安全校验未通过：' + zsafe.error);
+      }
       // ★ marker 验收（分片分支以前漏了这一步：包结构不对也报"安装成功"）
       if (marker && !fs.existsSync(marker)) {
         throw new Error('解包后没找到 ' + spec.unpackMarker + '（包结构不对，请重试或换源）');
@@ -1171,8 +1204,11 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
       send({ received: finalSize, total: finalSize, percent: 100, done: true, speed: 0, text: label + ' 就绪' });
       return { ok: true, path: destDir, size: finalSize, unpacked: true };
     } finally {
-      // 成功与失败都清临时产物：压缩包不留双份，分片目录不留几个 GB
-      try { fs.rmSync(archive, { force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
+      // 成功与失败都清临时产物：压缩包不留双份，分片目录不留几个 GB。
+      // 唯一例外：解包失败时保留压缩包（keepArchive），重试直接复用。
+      if (!keepArchive) {
+        try { fs.rmSync(archive, { force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
+      }
       try { fs.rmSync(partsDir, { recursive: true, force: true }); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
       try { FastDL.cleanSegments(archive); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
     }
