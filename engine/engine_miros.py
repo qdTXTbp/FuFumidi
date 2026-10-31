@@ -98,13 +98,28 @@ def transcribe_miros(audio_path, output_midi, params=None, log_cb=None, num_thre
         log_cb("MIROS：加载 MusicFM + MIROS checkpoint（首次较慢，%s）"
                % ("线程 %d" % threads if threads else "CPU"))
     t_all = time.perf_counter()
+    # ★ 先按内容解码成标准 WAV：用户库里有扩展名是 .flac、实际却是 WMA/ASF 的文件，
+    #   上游 torchaudio/soundfile 只认扩展名会直接报 Format not recognised；
+    #   audio_io 的 soundfile 快路失败后会自动走内置 ffmpeg，按内容识别。
+    import audio_io
+    tmp_wav = None
+    try:
+        tmp_wav = audio_io.decode_to_wav(audio_path, 16000)
+    except Exception as e:
+        if log_cb:
+            log_cb('MIROS：音频预解码失败（' + str(e) + '）')
+        raise
     cwd = os.getcwd()
     os.chdir(repo)                      # 上游用相对路径读 config，必须切过去
     try:
         import transcribe as miros_transcribe
-        miros_transcribe.transcribe(audio_path, output_midi)
+        miros_transcribe.transcribe(tmp_wav, output_midi)
     finally:
         os.chdir(cwd)                   # ★ 一定要还原：否则后续队列的临时文件全落错地方
+        try:
+            audio_io.remove_temp(tmp_wav)
+        except Exception:
+            pass
         TR.release_gpu()
         TR.log_timing(log_cb, "MIROS 总计", t_all)
 

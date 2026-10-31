@@ -9,6 +9,8 @@ const CHANGELOG = {
     '修复更新器/离线包左侧大图挤出「启动」按钮（Issue #36）：更新器改为无大图紧凑布局。',
     'Issue #35：低内存/低可用内存时转录前拦截，运行中低于 700MB 自动中止；低内存 + Aria CUDA 组合禁止启动并提示。',
     '修复 MIROS / YourMT3+ 运行时包解压失败（zip-safe 接受路径；MIROS 5.36GB 改为流式 ZIP64 解压，不再触发 2GiB 上限）。',
+    '修复 MIROS 对“扩展名是 .flac、实际内容是 WMA”的文件报 Format not recognised：转录前按内容预解码为 WAV。',
+    '修复 MIROS 误用 wandb 桩导致 No module named wandb.sdk。',
     '包含 6.3.1：Electron 37.10.3、启动按需加载、编辑器/转录/乐谱/WE/VST3 队列等改动。',
   ],
   // 6.3.1：编辑器专业工作流第一批（选区工具条 / 大工程 LOD）。
