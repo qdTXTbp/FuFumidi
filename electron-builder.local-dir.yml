@@ -14,11 +14,11 @@
 #
 # ★ 仅本地打包用；正式出包（npm run dist:win）走 electron-builder.yml。
 appId: com.fufumidi.app
-electronVersion: 33.4.11
+electronVersion: 37.10.3
 productName: FuFumidi
 npmRebuild: false
 directories:
-  output: release-unpacked7
+  output: release-unpacked14
 asarUnpack:
   - "engine/**"
   - "**/*.node"
@@ -57,6 +57,13 @@ files:
   - "!**/__pycache__/**"
   - "!**/*.pyc"
   - "!**/.pytest_cache/**"
+  # pytest 残留目录（engine/._pt_* / .pytest_cache）是早期调试垃圾，且 ACL 被锁死
+  # （读都不许，scandir 直接 EPERM）。必须**排除目录本身**才不会被遍历：
+  # 只写 `!**/.pytest_cache/**` 只排内容不排目录，实测仍会 scandir 失败。
+  - "!engine/._pt_*"
+  - "!engine/._pt_*/**"
+  - "!engine/.pytest_cache"
+  - "!engine/.pytest_cache/**"
   - "!FuFumidiData/**"
   - "!resources/**"         # resources/** 由 extraResources 单独分发
   - "!models/**"
