@@ -334,35 +334,29 @@ onBeforeUnmount(() => {
   <div ref="host" class="p3d">
     <canvas ref="cv" class="p3d-canvas"></canvas>
     <div class="p3d-top">
-      <div class="p3d-row">
-        <b>{{ t('3D 钢琴') }}</b>
-        <span class="p3d-sub">{{ t('外接 MIDI / 电脑键盘') }}</span>
-        <span class="p3d-grow"></span>
-        <select v-model="demoId" class="select-input" style="width:120px" @change="selectDemo">
-          <option value="">{{ t('当前导入曲目') }}</option>
-          <option v-for="d in DEMO_SONGS" :key="d.id" :value="d.id">{{ d.name }}</option>
-        </select>
-        <button class="chip-btn" :disabled="!hasSong" @click="toggleDemo">{{ demoPlaying || localPlaying ? t('暂停') : t('播放') }}</button>
-        <span v-if="rating" class="p3d-rating">{{ t('难度') }} <b>{{ rating.level }}</b>/10 · {{ rating.label }}</span>
-      </div>
-      <div class="p3d-row">
-        <select v-model.number="program" class="select-input" style="width:88px">
-          <option v-for="pg in PROGRAMS" :key="pg.id" :value="pg.id">{{ t(pg.label) }}</option>
-        </select>
-        <select v-model="gameMode" class="select-input" style="width:88px">
-          <option value="free">{{ t('自由演奏') }}</option>
-          <option value="game">{{ t('音游模式') }}</option>
-        </select>
-        <button class="chip-btn" @click="openKeymapPage">{{ t('键位设置') }}</button>
-        <button class="chip-btn" :class="{ active: recording }" @click="recording ? stopRec() : startRec()">{{ recording ? t('停止录音') : t('录音') }}</button>
-        <button v-if="lastTake" class="chip-btn" @click="saveRec">{{ t('保存 MIDI') }}</button>
-        <span class="p3d-grow"></span>
-        <select v-model="deviceId" class="select-input" style="width:150px" @change="chooseDevice">
-          <option value="">{{ t('选择 MIDI 键盘') }}</option>
-          <option v-for="d in devices" :key="d.id" :value="d.id">{{ d.name }}</option>
-        </select>
-        <button class="chip-btn" @click="refreshDevices">{{ t('刷新') }}</button>
-      </div>
+      <b>3D 钢琴</b>
+      <select v-model="demoId" class="select-input p3d-sel" style="width:116px" @change="selectDemo">
+        <option value="">{{ t('当前导入曲目') }}</option>
+        <option v-for="d in DEMO_SONGS" :key="d.id" :value="d.id">{{ d.name }}</option>
+      </select>
+      <button class="chip-btn" :disabled="!hasSong" @click="toggleDemo">{{ demoPlaying || localPlaying ? t('暂停') : t('播放') }}</button>
+      <span v-if="rating" class="p3d-rating">{{ rating.level }}/10 · {{ rating.label }}</span>
+      <span class="p3d-grow"></span>
+      <select v-model.number="program" class="select-input p3d-sel" style="width:82px">
+        <option v-for="pg in PROGRAMS" :key="pg.id" :value="pg.id">{{ t(pg.label) }}</option>
+      </select>
+      <select v-model="gameMode" class="select-input p3d-sel" style="width:86px">
+        <option value="free">{{ t('自由演奏') }}</option>
+        <option value="game">{{ t('音游模式') }}</option>
+      </select>
+      <button class="chip-btn" @click="openKeymapPage">{{ t('键位设置') }}</button>
+      <button class="chip-btn" :class="{ active: recording }" @click="recording ? stopRec() : startRec()">{{ recording ? t('停止') : t('录音') }}</button>
+      <button v-if="lastTake" class="chip-btn" @click="saveRec">{{ t('保存') }}</button>
+      <select v-model="deviceId" class="select-input p3d-sel" style="width:118px" @change="chooseDevice">
+        <option value="">{{ t('MIDI 键盘') }}</option>
+        <option v-for="d in devices" :key="d.id" :value="d.id">{{ d.name }}</option>
+      </select>
+      <button class="chip-btn" @click="refreshDevices">{{ t('刷新') }}</button>
     </div>
     <div v-if="keymapPage" class="p3d-page">
       <div class="p3d-page-head">
@@ -399,9 +393,9 @@ onBeforeUnmount(() => {
 <style scoped>
 .p3d { position:relative; width:100%; height:100%; min-height:560px; display:flex; flex-direction:column; gap:8px; overflow:hidden; border-radius:var(--r-sm); background:transparent; color:var(--text); }
 .p3d-canvas { position:relative; order:2; flex:1 1 auto; width:100%; min-height:420px; display:block; border-radius:var(--r-sm); background:var(--canvas); border:1px solid var(--hairline); }
-.p3d-top { position:relative; order:1; z-index:5; display:flex; flex-direction:column; gap:6px; padding:8px 10px; border-radius:var(--r-sm); background:color-mix(in srgb, var(--panel) 86%, transparent); border:1px solid var(--hairline); box-shadow: var(--shadow-sm, 0 4px 18px rgba(0,0,0,.18)); backdrop-filter:blur(14px); color:var(--text); }
-.p3d-row { display:flex; align-items:center; flex-wrap:wrap; gap:6px; min-height:26px; }
-.p3d-top b { font-size:var(--fs-md,13px); color:var(--text); } .p3d-sub { color:var(--text3); font-size:var(--fs-xs,11px); } .p3d-grow { flex:1; min-width:6px; }
+.p3d-top { position:relative; order:1; z-index:5; display:flex; align-items:center; gap:6px; overflow-x:auto; white-space:nowrap; padding:8px 10px; border-radius:var(--r-sm); background:color-mix(in srgb, var(--panel) 86%, transparent); border:1px solid var(--hairline); box-shadow: var(--shadow-sm, 0 4px 18px rgba(0,0,0,.18)); backdrop-filter:blur(14px); color:var(--text); }
+.p3d-sel { flex:0 0 auto; min-width:0; }
+.p3d-top b { flex:0 0 auto; font-size:var(--fs-md,13px); color:var(--text); } .p3d-sub { color:var(--text3); font-size:var(--fs-xs,11px); } .p3d-grow { flex:1 0 8px; }
 .p3d-rating { font-size:var(--fs-xs,11px); color:var(--text2); } .p3d-rating b { color:var(--accent-sky, #6cc7ff); font-size:var(--fs-md,15px); }
 .p3d-page { position:absolute; inset:8px; z-index:20; border-radius:var(--r-lg); border:1px solid var(--hairline); box-shadow:var(--shadow-lg, 0 20px 60px rgba(0,0,0,.35)); display:flex; flex-direction:column; background:color-mix(in srgb, var(--panel) 96%, transparent); backdrop-filter:blur(18px); padding:18px 22px; }
 .p3d-page-head { display:flex; align-items:center; gap:var(--sp-2,10px); padding-bottom:12px; border-bottom:1px solid var(--hairline); color:var(--text); }
