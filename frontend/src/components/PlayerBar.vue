@@ -2,6 +2,7 @@
 import { computed, ref, reactive } from 'vue';
 import Icon from './Icon.vue';
 import { useAppStore } from '../stores/app';
+import { usePlaylistStore } from '../stores/playlist';
 import { getPlayer, getCtx, getSynth } from '../audio.js';
 import { t } from '../core/i18n.js';
 import { playbackPrefs } from '../core/playback_prefs.js';
@@ -278,6 +279,12 @@ function toggleCrossfade() {
       <div class="pb-title">
         <b>{{ currentSong?.name || t('未选择曲目') }}</b>
         <small>{{ currentSong ? (currentSong.song ? currentSong.song.tracks.length + t(' 轨 · ') : '') + curStr + ' / ' + totalStr : t('导入 MIDI 开始播放') }}</small>
+      </div>
+      <div v-if="currentSong" class="pb-song-actions">
+        <button class="tp-btn" :class="{ on: isFavSong }" :title="isFavSong ? t('取消收藏') : t('收藏')" :aria-label="t('收藏')" @click="songAction('fav')"><Icon :name="isFavSong ? 'heart' : 'heart-o'" :size="15" /></button>
+        <button class="tp-btn" :title="t('添加到歌单')" :aria-label="t('添加到歌单')" @click="songAction('add')"><Icon name="plus" :size="15" /></button>
+        <button class="tp-btn" :title="t('编辑信息')" :aria-label="t('编辑信息')" @click="songAction('edit')"><Icon name="pencil" :size="14" /></button>
+        <button class="tp-btn" :title="t('移除 / 删除')" :aria-label="t('移除')" @click="songAction('delete')"><Icon name="trash" :size="15" /></button>
       </div>
     </div>
 
@@ -571,4 +578,5 @@ function toggleCrossfade() {
 .playerbar.compact .pb-progress { max-width: 180px; }
 .playerbar.compact .bpm-wrap { display: none; }
 .playerbar.compact .pb-right .vol-wrap { width: 90px; }
+.pb-song-actions { display:flex; align-items:center; gap:1px; margin-left:var(--sp-2); flex:0 0 auto; }
 </style>

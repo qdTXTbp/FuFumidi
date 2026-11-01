@@ -807,7 +807,17 @@ function onDrop(e) {
   });
 }
 
+function onSongAction(e) {
+  const d = (e && e.detail) || {};
+  const id = d.id; const s = state.songs.find(x => x.id === id);
+  if (!s) return;
+  if (d.action === 'fav') toggleFav(id);
+  else if (d.action === 'add') openAddToPl(id);
+  else if (d.action === 'edit') openInfo(s);
+  else if (d.action === 'delete') { if (isFavView.value) toggleFav(id); else if (isVirtualView.value) songDelete(s); else songRemove(s); }
+}
 onMounted(() => {
+  window.addEventListener('fufumidi-song-action', onSongAction);
   playlist.hydrateFavorites();
   cloud.init();
   document.addEventListener('pointerdown', onDocDown, true);
@@ -816,6 +826,7 @@ onMounted(() => {
   window.addEventListener('scroll', positionFilterPop, true);
 });
 onBeforeUnmount(() => {
+  window.removeEventListener('fufumidi-song-action', onSongAction);
   document.removeEventListener('pointerdown', onDocDown, true);
   document.removeEventListener('keydown', onDocKey, true);
   window.removeEventListener('resize', positionFilterPop);
@@ -981,20 +992,6 @@ const showAuth = ref(false);
         <div class="si-name">
           <b :title="s.name">{{ s.name }}</b>
           <small>{{ rowSub(s) ? rowSub(s) + ' · ' : '' }}{{ s.song ? s.song.tracks.length : (s.meta.tracks || '—') }} {{ t(' 轨 · ') }} {{ (s.meta.size / 1024).toFixed(0) }} KB<span v-if="fmtDur(s)"> · {{ fmtDur(s) }}</span></small>
-        </div>
-        <div class="si-tools" v-if="!playlist.batchOn">
-          <button class="icon-btn heart" :class="{ on: isFav(s.id) }" style="width:28px;height:28px;font-size:var(--fs-md)" :title="t('收藏')" :aria-label="t('收藏')" @click.stop="toggleFav(s.id)">
-            <Icon :name="isFav(s.id) ? 'heart' : 'heart-o'" :size="14" />
-          </button>
-          <button class="icon-btn" style="width:28px;height:28px;font-size:var(--fs-md)" :title="t('添加到歌单')" :aria-label="t('添加到歌单')" @click.stop="openAddToPl(s.id)">
-            <Icon name="plus" :size="14" />
-          </button>
-          <button class="icon-btn" style="width:28px;height:28px;font-size:var(--fs-md)" :title="t('编辑信息（重命名 / 艺术家 / 专辑 / 流派 / 标签）')" :aria-label="t('编辑信息')" @click.stop="openInfo(s)">
-            <Icon name="pencil" :size="13" />
-          </button>
-          <button class="icon-btn" style="width:28px;height:28px;font-size:var(--fs-md)" :title="isFavView ? t('取消收藏') : (isVirtualView ? t('删除（含本地文件）') : t('从歌单移除'))" :aria-label="t('移除')" @click.stop="isFavView ? toggleFav(s.id) : (isVirtualView ? songDelete(s) : songRemove(s))">
-            <Icon name="trash" :size="14" />
-          </button>
         </div>
         </div>
       </div>
