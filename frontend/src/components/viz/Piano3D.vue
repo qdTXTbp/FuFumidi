@@ -35,6 +35,8 @@ const recordedNotes = ref(0);
 const lastTake = ref(null);
 const mappingMode = ref(false);
 const bindTarget = ref(48);
+const keymapPage = ref(false);
+const pendingBind = ref(null);
 const program = ref(0);
 const PROGRAMS = [
   { id: 0, label: '钢琴' }, { id: 4, label: '电钢琴' }, { id: 24, label: '吉他' },
@@ -138,20 +140,46 @@ function pressNote(n) {
 function releaseNote(n) {
   activeInput.value = activeInput.value.filter(x => x !== n);
   if (recording.value && recorder) { try { recorder.noteOff(n, performance.now()); } catch (e) {} } }
-function keyDown(e) {
-  if (!e || e.repeat) return;
+function noteName(midi) {
+  const nn = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+  return nn[midi % 12] + (Math.floor(midi / 12) - 1);
+}
+function openKeymapPage() { keymapPage.value = true; mappingMode.value = false; pendingBind.value = null; stopDemo(); }
+function closeKeymapPage() { keymapPage.value = false; pendingBind.value = null; }
+function beginBind(midi) { pendingBind.value = midi; app.toast(t('请按一个电脑键') , 'ok'); }
+function bindPending(code) {
+  if (pendingBind.value == null) return;
+  for (const [c, m] of Object.entries(keyMap)) if (m === pendingBind.value) delete keyMap[c];
+  keyMap[code] = pendingBind.value; saveKeyMap(); refreshSong();
+  app.toast(t('键位已绑定') + '：' + code.replace(/^Key/, '').replace(/^Digit/, ''), 'ok');
+  pendingBind.value = null;
+}
+function resetKeymap() {
+  for (const k of Object.keys(keyMap)) delete keyMap[k];
+  Object.assign(keyMap, DEFAULT_KEYMAP); saveKeyMap(); refreshSong(); pendingBind.value = null;
+  app.toast(t('已恢复默认键位'), 'ok');
+}
+// 3D 页面独占键盘：先于全局快捷键捕获，只让本页的钢琴键与键位设置生效。
+function onGlobalKeyDown(e) {
   const tag = (e.target && e.target.tagName || '').toLowerCase();
   if (['input','select','textarea'].includes(tag) || (e.target && e.target.isContentEditable)) return;
-  if (mappingMode.value) {
-    e.preventDefault();
-    for (const [code, m] of Object.entries(keyMap)) if (m === bindTarget.value) delete keyMap[code];
-    keyMap[e.code] = bindTarget.value; saveKeyMap(); refreshSong(); mappingMode.value = false;
-    app.toast(t('键位已绑定'), 'ok'); return;
+  e.preventDefault(); e.stopImmediatePropagation();
+  if (keymapPage.value) {
+    if (e.code === 'Escape') { closeKeymapPage(); return; }
+    if (pendingBind.value != null) bindPending(e.code);
+    return;
   }
-  const n = keyMap[e.code]; if (n == null) return;
-  e.preventDefault(); pressNote(n);
+  if (e.code === 'Escape') return;
+  const n = keyMap[e.code];
+  if (n != null) pressNote(n);
+  // 其它全局快捷键在 3D 钢琴里一律不生效（用户要求），只保留本页弹奏。
 }
-function keyUp(e) { const n = keyMap[e.code]; if (n != null) releaseNote(n); }
+function onGlobalKeyUp(e) {
+  const tag = (e.target && e.target.tagName || '').toLowerCase();
+  if (['input','select','textarea'].includes(tag) || (e.target && e.target.isContentEditable)) return;
+  e.stopImmediatePropagation();
+  const n = keyMap[e.code]; if (n != null) releaseNote(n);
+}
 function startDemo() {
   stopDemo();
   const demo = DEMO_SONGS.find(d => d.id === demoId.value); if (!demo) return;
@@ -277,7 +305,7 @@ function onPointerUp() { if (mouseNote != null) { releaseNote(mouseNote); mouseN
 function resize() { rendererCtx = null; }
 onMounted(async () => {
   refreshSong(); window.addEventListener('resize', resize);
-  window.addEventListener('keydown', keyDown); window.addEventListener('keyup', keyUp);
+  window.addEventListener('keydown', onGlobalKeyDown, true); window.addEventListener('keyup', onGlobalKeyUp, true);
   cv.value.addEventListener('pointerdown', onPointerDown);
   cv.value.addEventListener('pointermove', onPointerMove);
   cv.value.addEventListener('pointerup', onPointerUp);
@@ -290,7 +318,7 @@ watch(() => props.song, () => { if (!demoId.value) { stopDemo(); refreshSong(); 
 watch(() => demoId, () => refreshSong());
 onBeforeUnmount(() => {
   cancelAnimationFrame(raf); stopDemo(); clearLocalTimers(); localPlaying.value = false; window.removeEventListener('resize', resize);
-  window.removeEventListener('keydown', keyDown); window.removeEventListener('keyup', keyUp);
+  window.removeEventListener('keydown', onGlobalKeyDown, true); window.removeEventListener('keyup', onGlobalKeyUp, true);
   try { cv.value.removeEventListener('pointerdown', onPointerDown); cv.value.removeEventListener('pointermove', onPointerMove); cv.value.removeEventListener('pointerup', onPointerUp); cv.value.removeEventListener('pointercancel', onPointerUp); } catch (e) {}
   try { selectMidiInput('', {}); } catch (e) {}
 });
@@ -319,7 +347,7 @@ onBeforeUnmount(() => {
           <option value="free">{{ t('自由演奏') }}</option>
           <option value="game">{{ t('音游模式') }}</option>
         </select>
-        <button class="chip-btn" :class="{ active: mappingMode }" @click="mappingMode = !mappingMode">{{ mappingMode ? t('退出键位') : t('自定义键位') }}</button>
+        <button class="chip-btn" @click="openKeymapPage">{{ t('键位设置') }}</button>
         <button class="chip-btn" :class="{ active: recording }" @click="recording ? stopRec() : startRec()">{{ recording ? t('停止录音') : t('录音') }}</button>
         <button v-if="lastTake" class="chip-btn" @click="saveRec">{{ t('保存 MIDI') }}</button>
         <span class="p3d-grow"></span>
@@ -330,12 +358,23 @@ onBeforeUnmount(() => {
         <button class="chip-btn" @click="refreshDevices">{{ t('刷新') }}</button>
       </div>
     </div>
-    <div v-if="mappingMode" class="p3d-bindbar">
-      <span>{{ t('选择要绑定的音') }}</span>
-      <select v-model.number="bindTarget" class="select-input">
-        <option v-for="l in keyLabels" :key="l.midi" :value="l.midi">{{ l.code }}</option>
-      </select>
-      <span class="muted">{{ t('然后按一个电脑键') }}</span>
+    <div v-if="keymapPage" class="p3d-page">
+      <div class="p3d-page-head">
+        <b>{{ t('键位设置') }}</b>
+        <span class="muted">{{ t('点击「重新绑定」后按电脑键；Esc 关闭') }}</span>
+        <span class="p3d-grow"></span>
+        <button class="chip-btn" @click="resetKeymap">{{ t('恢复默认') }}</button>
+        <button class="chip-btn" @click="closeKeymapPage">{{ t('关闭') }}</button>
+      </div>
+      <div class="p3d-page-body">
+        <div class="p3d-bind-grid">
+          <div v-for="l in keyLabels" :key="l.midi" class="p3d-bind-row" :class="{ waiting: pendingBind === l.midi }">
+            <span class="p3d-bind-key">{{ l.code }}</span>
+            <span class="p3d-bind-note">{{ noteName(l.midi) }}</span>
+            <button class="chip-btn" @click="beginBind(l.midi)">{{ pendingBind === l.midi ? t('请按键…') : t('重新绑定') }}</button>
+          </div>
+        </div>
+      </div>
     </div>
     <div v-if="!hasSong" class="p3d-empty">{{ t('载入一首 MIDI 或选择内置曲目') }}</div>
     <div v-if="gameMode === 'game' && hasSong" class="p3d-score">
@@ -358,7 +397,15 @@ onBeforeUnmount(() => {
 .p3d-row { display:flex; align-items:center; flex-wrap:wrap; gap:6px; min-height:26px; }
 .p3d-top b { font-size:13px; } .p3d-sub { color:#7eabc9; font-size:11px; } .p3d-grow { flex:1; min-width:6px; }
 .p3d-rating { font-size:11px; color:#b9d8eb; } .p3d-rating b { color:#ffd166; font-size:15px; }
-.p3d-bindbar { position:absolute; top:62px; left:12px; z-index:6; display:flex; align-items:center; gap:8px; padding:6px 10px; border-radius:9px; background:rgba(5,12,24,.82); border:1px solid rgba(255,209,102,.4); color:#dff1ff; font-size:12px; }
+.p3d-page { position:absolute; inset:0; z-index:20; display:flex; flex-direction:column; background:linear-gradient(180deg, rgba(5,11,22,.98), rgba(4,8,16,.99)); backdrop-filter:blur(16px); padding:18px 22px; }
+.p3d-page-head { display:flex; align-items:center; gap:10px; padding-bottom:12px; border-bottom:1px solid rgba(105,180,255,.2); color:#e4f6ff; }
+.p3d-page-head b { font-size:17px; }
+.p3d-page-body { flex:1; overflow:auto; padding-top:14px; }
+.p3d-bind-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:8px; }
+.p3d-bind-row { display:flex; align-items:center; gap:10px; padding:8px 10px; border:1px solid rgba(105,180,255,.16); border-radius:9px; background:rgba(16,32,52,.55); color:#dff1ff; }
+.p3d-bind-row.waiting { border-color:#ffd166; box-shadow:0 0 14px rgba(255,209,102,.35); }
+.p3d-bind-key { min-width:34px; text-align:center; padding:2px 6px; border-radius:5px; border:1px solid rgba(105,180,255,.4); font:700 11px Consolas, monospace; color:#8fe1ff; }
+.p3d-bind-note { flex:1; color:#b9d8eb; font-size:12px; }
 .p3d-empty { position:absolute; inset:0; display:grid; place-items:center; color:#89b6d1; z-index:2; pointer-events:none; }
 .p3d-score { position:absolute; right:14px; bottom:48px; z-index:4; display:flex; align-items:center; gap:9px; padding:7px 11px; border-radius:10px; background:rgba(4,10,18,.76); border:1px solid rgba(120,210,255,.2); color:#dff1ff; font-size:11px; }
 .p3d-score b { font-size:19px; color:#8fd6ff; } .p3d-grade { font-weight:800; color:#ffd166; min-width:50px; } .p3d-grade.miss { color:#ff7b7b; }
