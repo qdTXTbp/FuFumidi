@@ -149,6 +149,8 @@ const isAllView = computed(() => playlist.activePlaylistId === 'all');
 const isFavView = computed(() => playlist.activePlaylistId === 'favorites');
 /** 虚拟智能视图（全部曲目/收藏/最近播放/最常播放）：没有真实的歌单归属，不能「移除」 */
 const isVirtualView = computed(() => ['all', 'favorites', 'recent', 'most'].includes(String(playlist.activePlaylistId)));
+const currentSongObj = computed(() => state.songs.find(s => s.id === state.currentId) || null);
+const currentIsFav = computed(() => !!state.currentId && playlist.isFavorite(state.currentId));
 const activePlaylist = computed(() => playlist.activePlaylist);
 
 const visibleSongs = computed(() => {
@@ -998,6 +1000,13 @@ const showAuth = ref(false);
       </div>
     </div>
 
+    <div v-if="currentSongObj" class="sidebar-current-actions">
+      <span class="sca-label">{{ t('当前曲目') }}</span>
+      <button class="icon-btn heart" :class="{ on: currentIsFav }" :title="currentIsFav ? t('取消收藏') : t('收藏')" :aria-label="t('收藏')" @click="toggleFav(currentSongObj.id)"><Icon :name="currentIsFav ? 'heart' : 'heart-o'" :size="14" /></button>
+      <button class="icon-btn" :title="t('添加到歌单')" :aria-label="t('添加到歌单')" @click="openAddToPl(currentSongObj.id)"><Icon name="plus" :size="14" /></button>
+      <button class="icon-btn" :title="t('编辑信息')" :aria-label="t('编辑信息')" @click="openInfo(currentSongObj)"><Icon name="pencil" :size="13" /></button>
+      <button class="icon-btn" :title="t('移除 / 删除')" :aria-label="t('移除')" @click="onSongAction({ detail: { action: 'delete', id: currentSongObj.id } })"><Icon name="trash" :size="14" /></button>
+    </div>
     <div style="padding:var(--sp-3) var(--sp-4);border-top:1px solid var(--border)" class="small muted row">
       <!-- 版本号不折行：窄侧栏下「v5.0.0-beta.2」曾被折成两行（UX 复核第 6 条） -->
       <span class="tag ver-tag">{{ appVersion }}</span>
@@ -1488,4 +1497,7 @@ body.resize-col .sidebar-resizer::after {
   white-space: nowrap !important;
   border: 0 !important;
 }
+.sidebar-current-actions { display:flex; align-items:center; gap:4px; padding:8px var(--sp-4); border-top:1px solid var(--border); flex:0 0 auto; }
+.sca-label { flex:1; font-size:var(--fs-xs); color:var(--text3); }
+.sidebar-current-actions .icon-btn { width:28px; height:28px; }
 </style>

@@ -60,7 +60,7 @@ try { const saved = JSON.parse(localStorage.getItem('fufumidi_piano3d_keymap') |
 const keyLabels = ref([]);
 const gameResult = ref(null);
 
-let raf = 0, game = null, recorder = null, demoTimers = [], demoStart = 0, lastHud = 0, localTimers = [];
+let raf = 0, game = null, recorder = null, demoTimers = [], demoStart = 0, lastHud = 0, localTimers = [], endTimer = 0;
 let rendererCtx = null, mouseNote = null;
 const renderState = {};
 const activeInput = ref([]);
@@ -212,12 +212,21 @@ function startDemo() {
   const demo = DEMO_SONGS.find(d => d.id === demoId.value); if (!demo) return;
   demoPlaying.value = true; localPlaying.value = true; playStart.value = performance.now(); refreshSong();
   const song = buildDemoSong(demo);
+  clearTimeout(endTimer);
+  const endSec = demo.notes.reduce((m, n) => Math.max(m, song.baseSec(n.end)), 0);
+  if (endSec > 0.2) endTimer = setTimeout(() => { if (gameMode.value === 'game') finishGame(); }, (endSec + .35) * 1000);
   for (const n of demo.notes) {
     const dur = Math.max(.08, song.baseSec(n.end) - song.baseSec(n.start));
     demoTimers.push(setTimeout(() => { holdVisual(n.pitch, dur); playSound(n.pitch, dur); }, song.baseSec(n.start) * 1000));
   }
 }
-function stopDemo() { demoTimers.forEach(clearTimeout); demoTimers = []; clearLocalTimers(); clearVisual(); demoPlaying.value = false; localPlaying.value = false; }
+function scheduleEnd() {
+  clearTimeout(endTimer);
+  const dur = songEndSec();
+  if (dur <= 0.2) return;
+  endTimer = setTimeout(() => { if (gameMode.value === 'game') finishGame(); }, (dur + .35) * 1000);
+}
+function stopDemo() { clearTimeout(endTimer); endTimer = 0; demoTimers.forEach(clearTimeout); demoTimers = []; clearLocalTimers(); clearVisual(); demoPlaying.value = false; localPlaying.value = false; }
 function clearLocalTimers() { localTimers.forEach(clearTimeout); localTimers = []; }
 function scheduleSong(song, fromSec) {
   clearLocalTimers();
@@ -237,7 +246,7 @@ function startLocal() {
   if (!hasSong.value) return;
   stopDemo();
   const song = activeSong();
-  localPlaying.value = true; playStart.value = performance.now(); refreshSong();
+  localPlaying.value = true; playStart.value = performance.now(); refreshSong(); scheduleEnd();
   scheduleSong(song, 0);
 }
 function stopLocal() { localPlaying.value = false; clearLocalTimers(); }
@@ -272,6 +281,7 @@ async function refreshDevices() { devices.value = await listMidiInputs(); if (!d
 async function chooseDevice() { const ok = await selectMidiInput(deviceId.value, { onNoteOn: (n) => pressNote(n), onNoteOff: (n) => releaseNote(n) }); midiStatus.value = ok ? t('已连接') : t('连接失败'); }
 
 function draw() {
+  try { window.__p3dDebug = () => ({ sec: currentSec(), end: songEndSec(), local: localPlaying.value, demo: demoPlaying.value, mode: gameMode.value, has: hasSong.value, result: !!gameResult.value }); } catch (e) {}
   raf = requestAnimationFrame(draw);
   const el = cv.value; if (!el) return;
   const dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -287,7 +297,7 @@ function draw() {
   const tick = typeof song.secToTick === 'function' ? song.secToTick(sec) : sec * (song.tpb || 480) * (song.initialBpm || 120) / 60;
   try {
     drawVizWaterfallPost(ctx, w, h, song, tick, {
-      state: renderState, zoom: 1, showLyrics: false, lyricAt: '', activeNotes: activeNoteList(), energy: 0,
+      state: renderState, zoom: 1, showLyrics: false, lyricAt: '', activeNotes: activeNoteList(), energy: Math.min(1, activeInput.value.length / 4),
       fx: { ...vizBg.fxOpts(), keys3d: true, persp: Math.max(0.35, Number(vizBg.fxOpts().persp) || 0.68) },
       wallClock: true,
       theme: vizBg.vizTheme(), bg: vizBg.drawOpts(),
@@ -345,7 +355,7 @@ onMounted(async () => {
 watch(() => props.song, () => { if (!demoId.value) { stopDemo(); refreshSong(); } });
 watch(() => demoId, () => refreshSong());
 onBeforeUnmount(() => {
-  cancelAnimationFrame(raf); stopDemo(); clearLocalTimers(); localPlaying.value = false; window.removeEventListener('resize', resize);
+  cancelAnimationFrame(raf); stopDemo(); clearTimeout(endTimer); clearLocalTimers(); localPlaying.value = false; window.removeEventListener('resize', resize);
   window.removeEventListener('keydown', onGlobalKeyDown, true); window.removeEventListener('keyup', onGlobalKeyUp, true);
   try { cv.value.removeEventListener('pointerdown', onPointerDown); cv.value.removeEventListener('pointermove', onPointerMove); cv.value.removeEventListener('pointerup', onPointerUp); cv.value.removeEventListener('pointercancel', onPointerUp); } catch (e) {}
   try { selectMidiInput('', {}); } catch (e) {}
