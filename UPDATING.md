@@ -374,6 +374,7 @@ curl -sSI  https://cnb.cool/FuFuCloud-mirror/FuFuMIDI/-/releases/latest/download
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | `Error: Invalid remote index` | URI 含 `${version}` 占位符未被替换（404） | 改用 `releases/latest/download` 固定地址 |
+| `Error: Invalid remote index`（URI 正确时） | 更新通道的 `FuFumidi.Install.exe` 不是 kachina `pack` 产物，或 release 缺 `metadata-<版本>.json`（更新器算增量要拉它） | 用 `scripts/build-kachina.ps1 -Version <ver>` 或手动 `kachina-builder gen`+`pack -m metadata` 重新出包，连同 metadata 一起上传 |
 | 更新器提示「更新器不存在」 | 正式包未随包分发更新器 | 确认 `electron-builder.yml` 的 `extraFiles` 生效，更新器与 exe 同级 |
 | 更新完成后程序未自动打开 | 守护进程没起来 | 看 `<数据目录>\temp\fufumidi-restart.log`：缺 `[guard] start` = 守护进程没跑（注意 detached 的 PowerShell 不执行脚本，必须用 WMI 拉起，见 `main/update.js`）；有 `[guard]` 但停在 `updater appeared=False` = 更新器没起来 |
 | 下载卡在 0% | 主程序侧旧逻辑预下载离线包 | 已废弃：改为更新器内下载并显示进度 |

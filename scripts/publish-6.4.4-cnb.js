@@ -67,7 +67,8 @@ async function uploadAsset(releaseId, name, localFile) {
 }
 
 (async () => {
-  const files = [
+  const filter = process.argv.slice(2);
+  const files = (filter.length ? filter : [
     'latest.yml',
     'update-manifest.json',
     'FuFumidi-6.4.4-release-notes.md',
@@ -75,7 +76,7 @@ async function uploadAsset(releaseId, name, localFile) {
     'FuFumidi-Setup-6.4.4.exe.blockmap',
     'FuFumidi.Install.exe',
     'FuFumidi-Setup-6.4.4.exe',
-  ];
+  ]);
 
   let rel = findRelease();
   if (rel && rel.id) {
