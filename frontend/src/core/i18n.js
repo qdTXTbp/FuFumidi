@@ -6824,6 +6824,10 @@ export const I18N_MAP = {
   '小号': 'Trumpet',
   '长笛': 'Flute',
   '合成器': 'Synth',
+  '电脑键盘：Z–M / Q–I 弹奏 · 点击琴键试听': 'Computer keyboard: Z–M / Q–I to play · click keys to preview',
+  '难度': 'Difficulty',
+  '外接 MIDI / 电脑键盘': 'External MIDI / Computer keyboard',
+  '载入一首 MIDI 或选择内置曲目': 'Load a MIDI or choose a built-in song',
 };
 
 /* 语言状态（响应式：切语言后 t() 返回值变化，Vue 模板自动重渲染） */

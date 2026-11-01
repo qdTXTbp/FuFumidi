@@ -766,7 +766,7 @@ onBeforeUnmount(() => {
 .viz-page.immersive { position: fixed; inset: 0; z-index: 30; padding: 0; max-width: none; background: var(--canvas); }
 .viz-page.piano3d .viz-hero { flex:1 1 auto; min-height:0; background:var(--panel); overflow:hidden; }
 .viz-page.piano3d .vc-head { position:relative; z-index:10; background:var(--panel); }
-.viz-page.piano3d .vc-body { flex:1 1 auto; height:calc(100vh - 250px); min-height:520px; }
+.viz-page.piano3d .vc-body { flex:1 1 auto; height:calc(100vh - 250px); min-height:560px; padding:0; border-radius:18px; overflow:hidden; }
 .viz-page.immersive .viz-hero {
   border: 0; border-radius: 0; background: transparent; box-shadow: none; padding: 0;
 }
