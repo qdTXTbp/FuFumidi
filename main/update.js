@@ -134,18 +134,76 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, 
     throw lastErr || new Error('无法访问 GitHub');
   }
 
-  // 决定该给用户报哪个版本：测试通道优先取最新测试版，没有测试版时回退正式版
-  //（这样测试通道用户不会被卡在旧测试版上，正式版发布后能正常升上去）
+  // 语义化版本比较（与 frontend/src/core/version.js 同规则；主进程不能 import 前端代码）
+  // 支持 x.y.z[-pre]，预发布小于同号正式版；比较失败视为相等（让调用方走"多源取最大"兜底）
+  function cmpSemver(a, b) {
+    const parse = (v) => {
+      const s = String(v || '').replace(/^v/i, '').trim();
+      const m = s.match(/^(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:-([0-9A-Za-z.-]+))?/);
+      if (!m) return null;
+      return {
+        nums: [parseInt(m[1], 10) || 0, parseInt(m[2], 10) || 0, parseInt(m[3], 10) || 0],
+        pre: m[4] ? m[4].split('.') : [],
+      };
+    };
+    const A = parse(a), B = parse(b);
+    if (!A || !B) return 0;
+    for (let i = 0; i < 3; i++) {
+      if (A.nums[i] !== B.nums[i]) return A.nums[i] < B.nums[i] ? -1 : 1;
+    }
+    if (!A.pre.length && !B.pre.length) return 0;
+    if (!A.pre.length) return 1;
+    if (!B.pre.length) return -1;
+    const n = Math.max(A.pre.length, B.pre.length);
+    for (let i = 0; i < n; i++) {
+      const x = A.pre[i], y = B.pre[i];
+      if (x === undefined) return -1;
+      if (y === undefined) return 1;
+      const xn = /^\d+$/.test(x), yn = /^\d+$/.test(y);
+      if (xn && yn) { const d = Number(x) - Number(y); if (d) return d < 0 ? -1 : 1; }
+      else if (xn !== yn) return xn ? -1 : 1;
+      else if (x !== y) return x < y ? -1 : 1;
+    }
+    return 0;
+  }
+
+  // 决定该给用户报哪个版本。
+  // ★ 2026-11-01（用户报障「检测到新版本却显示已是最新」）：原来"先到先得"——
+  //   正式通道只读 CNB 的 latest.yml，失败才落到 GitHub。两个源**任何一个没同步**
+  //   （发布只推了一边、CDN 缓存、锚点没切），启动检查和手动检查就可能给出不同答案，
+  //   表现为"一会儿说有新版，一会儿说已是最新"。改成：CNB 与 GitHub **都查**，
+  //   取版本更高的那个；两边同版时优先 GitHub（带 release 说明 body）。
+  //   一个源挂了不影响结果 —— 和下载链的多源回退是同一个思路。
   async function resolveRelease(channel) {
     const ch = normChannel(channel);
-    // 正式版 + 国内优先：先读 CNB 的 latest.yml（公开地址、免认证）拿版本号
-    if (ch === 'stable' && DS.preferCnb(pref())) {
-      try { return { release: await fetchCnbRelease('stable'), channel: 'stable' }; } catch (e) { /* 回退 GitHub */ }
+    const attempts = [];
+    // CNB：公开地址、免认证；beta 通道读 beta 锚点里的 latest.yml
+    attempts.push(
+      fetchCnbRelease(ch).then(
+        (release) => ({ release, channel: ch, via: 'cnb' }),
+        (e) => { try { require('./log').write('WARN', 'optional failure', 'CNB 版本查询失败：' + String((e && e.message) || e)); } catch (_) { /* log failure ignored */ } return null; }
+      )
+    );
+    // GitHub：beta 通道挑 prerelease，正式通道取 latest；失败再用正式通道兜一次
+    attempts.push(
+      (ch === 'beta'
+        ? fetchChannelRelease('beta').catch(() => fetchChannelRelease('stable'))
+        : fetchChannelRelease('stable')
+      ).then(
+        (release) => ({ release, channel: release && release.prerelease ? 'beta' : 'stable', via: 'github' }),
+        (e) => { try { require('./log').write('WARN', 'optional failure', 'GitHub 版本查询失败：' + String((e && e.message) || e)); } catch (_) { /* log failure ignored */ } return null; }
+      )
+    );
+    const settled = await Promise.all(attempts);
+    const hits = settled.filter(Boolean);
+    if (!hits.length) throw new Error('所有更新源都不可达（CNB 与 GitHub 均失败）');
+    // 取版本更高的源；同版优先 GitHub（有 body 说明）
+    let best = hits[0];
+    for (const h of hits.slice(1)) {
+      const c = cmpSemver(h.release.tag_name, best.release.tag_name);
+      if (c > 0 || (c === 0 && best.via === 'cnb' && h.via === 'github')) best = h;
     }
-    if (ch === 'beta') {
-      try { const r = await fetchChannelRelease('beta'); if (r) return { release: r, channel: 'beta' }; } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
-    }
-    return { release: await fetchChannelRelease('stable'), channel: 'stable' };
+    return { release: best.release, channel: best.channel };
   }
 
   function assetForPlatform(release) {

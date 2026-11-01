@@ -285,7 +285,10 @@ async function updLaunch() {
     const cur = String(r.current || '');
     const latest = String(r.latest || '');
     if (cmpVersion(latest, cur) <= 0) {
-      upd.status = t('已是最新版本（') + cur + t('）');
+      // 远端比本地还旧：多半是发布只推了一边 / 锚点没切。照实说，别让用户以为坏了。
+      upd.status = cmpVersion(latest, cur) < 0 && latest
+        ? t('已是最新版本（') + cur + t('）') + ' · ' + t('远端最新 ') + latest
+        : t('已是最新版本（') + cur + t('）');
       return;
     }
     if (!bridge.update || !bridge.update.launchUpdater) { upd.status = t('当前环境不支持增量更新器'); upd.failed = true; return; }

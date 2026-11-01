@@ -2192,6 +2192,8 @@ export const I18N_MAP = {
   '当前版本': 'Current version',
   '检查更新': 'Check for updates',
   '已是最新版本（': 'Already up to date (',
+  '已是最新版本（': 'Already up to date (',
+  '远端最新 ': 'Remote latest ',
   '发现新版本 ': 'New version ',
   '发现新版本': 'New version',
   '，当前 ': ' detected, current ',
