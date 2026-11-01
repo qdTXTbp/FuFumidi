@@ -29,6 +29,8 @@ const recording = ref(false);
 const localPlaying = ref(false);
 const playStart = ref(0);
 const flashNotes = new Map();
+const visualHeld = new Map();
+let visualTimers = [];
 const recordedNotes = ref(0);
 const lastTake = ref(null);
 const mappingMode = ref(false);
@@ -63,13 +65,42 @@ function currentSec() {
 }
 function noteActive(midi) {
   if (activeInput.value.includes(midi)) return true;
+  if (visualHeld.has(midi)) return true;
   return (flashNotes.get(midi) || 0) > performance.now();
 }
 function activeNoteList() {
   const now = performance.now();
   const set = new Set(activeInput.value);
+  for (const m of visualHeld.keys()) set.add(m);
   for (const [m, until] of flashNotes) if (until > now) set.add(m);
   return [...set].map(midi => ({ midi }));
+}
+function holdVisual(midi, dur) {
+  if (midi == null) return;
+  visualHeld.set(midi, (visualHeld.get(midi) || 0) + 1);
+  const tm = setTimeout(() => {
+    const n = (visualHeld.get(midi) || 1) - 1;
+    if (n <= 0) visualHeld.delete(midi); else visualHeld.set(midi, n);
+  }, Math.max(80, dur * 1000));
+  visualTimers.push(tm);
+}
+function clearVisual() { visualTimers.forEach(clearTimeout); visualTimers = []; visualHeld.clear(); }
+function prepareVisualSong(song) {
+  if (!song || !song.tracks) return song;
+  const clone = { ...song, tracks: song.tracks.map(tr => ({ ...tr, notes: (tr.notes || []).map(n => ({ ...n })) })) };
+  for (const tr of clone.tracks) {
+    const byPitch = new Map();
+    for (const n of tr.notes) { const p = n.pitch != null ? n.pitch : n.midi; if (!byPitch.has(p)) byPitch.set(p, []); byPitch.get(p).push(n); }
+    for (const arr of byPitch.values()) {
+      arr.sort((a, b) => (a.start || 0) - (b.start || 0));
+      for (let i = 0; i < arr.length - 1; i++) {
+        const cur = arr[i], next = arr[i + 1];
+        const gap = Math.max(1, Math.round((clone.tpb || 480) * 0.025));
+        if ((next.start || 0) < (cur.end || 0)) cur.end = Math.max((cur.start || 0) + 1, (next.start || 0) - gap);
+      }
+    }
+  }
+  return clone;
 }
 function refreshSong() {
   const s = activeSong();
@@ -121,9 +152,12 @@ function startDemo() {
   const demo = DEMO_SONGS.find(d => d.id === demoId.value); if (!demo) return;
   demoPlaying.value = true; localPlaying.value = true; playStart.value = performance.now(); refreshSong();
   const song = buildDemoSong(demo);
-  for (const n of demo.notes) demoTimers.push(setTimeout(() => playSound(n.pitch, Math.max(.08, song.baseSec(n.end) - song.baseSec(n.start))), song.baseSec(n.start) * 1000));
+  for (const n of demo.notes) {
+    const dur = Math.max(.08, song.baseSec(n.end) - song.baseSec(n.start));
+    demoTimers.push(setTimeout(() => { holdVisual(n.pitch, dur); playSound(n.pitch, dur); }, song.baseSec(n.start) * 1000));
+  }
 }
-function stopDemo() { demoTimers.forEach(clearTimeout); demoTimers = []; clearLocalTimers(); demoPlaying.value = false; localPlaying.value = false; }
+function stopDemo() { demoTimers.forEach(clearTimeout); demoTimers = []; clearLocalTimers(); clearVisual(); demoPlaying.value = false; localPlaying.value = false; }
 function clearLocalTimers() { localTimers.forEach(clearTimeout); localTimers = []; }
 function scheduleSong(song, fromSec) {
   clearLocalTimers();
@@ -136,7 +170,7 @@ function scheduleSong(song, fromSec) {
     if (!Number.isFinite(pitch) || !Number.isFinite(st) || st < fromSec - 0.2) continue;
     if (++n > 5000) return;
     const dur = Math.max(.08, base(x.end != null ? x.end : x.start || 0) - st);
-    localTimers.push(setTimeout(() => playSound(pitch, dur), Math.max(0, (st - fromSec) * 1000)));
+    localTimers.push(setTimeout(() => { holdVisual(pitch, dur); playSound(pitch, dur); }, Math.max(0, (st - fromSec) * 1000)));
   }
 }
 function startLocal() {
@@ -187,7 +221,7 @@ function draw() {
   const ctx = rendererCtx;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
-  const song = activeSong();
+  const song = prepareVisualSong(activeSong());
   if (!song) return;
   const sec = currentSec();
   const tick = typeof song.secToTick === 'function' ? song.secToTick(sec) : sec * (song.tpb || 480) * (song.initialBpm || 120) / 60;
