@@ -526,7 +526,10 @@ L 'app started'
       try { source = await pickUpdateSource(ch); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
       _t('source=' + source);
       try {
-        const upd = spawn(updaterPath, ['-I', '-O', '--source', source], { cwd: updaterDir, detached: true, stdio: 'ignore' });
+        // ★ 显式把**当前运行安装目录**传给 kachina 更新器：更新器默认按注册表
+        // install_path 选目录，多份安装时会更新到另一份（E: 启动却升级 C:），
+        // 原目录永远停在旧版，检查更新又一直提示同一版本。
+        const upd = spawn(updaterPath, ['-I', '-O', '-D', updaterDir, '--source', source], { cwd: updaterDir, detached: true, stdio: 'ignore' });
         upd.on('error', (e) => _t('updater spawn error: ' + String((e && e.message) || e)));
         upd.unref();
         _t('updater spawned pid=' + upd.pid);
