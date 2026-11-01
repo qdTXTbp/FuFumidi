@@ -11,9 +11,11 @@ import { createRecorder } from '../../core/recorder.js';
 import { encodeMidi } from '../../core/midi.js';
 import { DEMO_SONGS, buildDemoSong } from '../../core/piano3d/demoSongs.js';
 import { analyzeSong } from '../../core/piano3d/rating.js';
+import { useVizBgStore } from '../../stores/vizbg';
 
 const props = defineProps({ song: { type: Object, default: null } });
 const app = useAppStore();
+const vizBg = useVizBgStore();
 const host = ref(null);
 const cv = ref(null);
 const devices = ref([]);
@@ -56,6 +58,7 @@ function prettyKey(code) { return KEY_LABELS[code] || code.replace(/^Key/, '').r
 const keyMap = reactive({ ...DEFAULT_KEYMAP });
 try { const saved = JSON.parse(localStorage.getItem('fufumidi_piano3d_keymap') || 'null'); if (saved && typeof saved === 'object') Object.assign(keyMap, saved); } catch (e) {}
 const keyLabels = ref([]);
+const gameResult = ref(null);
 
 let raf = 0, game = null, recorder = null, demoTimers = [], demoStart = 0, lastHud = 0, localTimers = [];
 let rendererCtx = null, mouseNote = null;
@@ -115,6 +118,24 @@ function prepareVisualSong(song) {
   }
   return clone;
 }
+function songEndSec() {
+  let end = 0;
+  for (const n of noteData) end = Math.max(end, n.en || 0);
+  const s = activeSong();
+  return Math.max(end, Number(s && s.totalSec) || 0);
+}
+function finishGame() {
+  if (!game || gameResult.value) return;
+  const st = game.stats();
+  const acc = Number(st.accuracy) || 0;
+  gameResult.value = { ...st, grade: acc >= 95 ? 'S' : acc >= 85 ? 'A' : acc >= 70 ? 'B' : 'C', label: rating.value ? rating.value.label : '', level: rating.value ? rating.value.level : 0 };
+  stopDemo();
+}
+function retryGame() {
+  gameResult.value = null; refreshSong();
+  if (demoId.value) startDemo(); else startLocal();
+}
+function closeResult() { gameResult.value = null; }
 function refreshSong() {
   const s = activeSong();
   hasSong.value = !!s;
@@ -267,12 +288,13 @@ function draw() {
   try {
     drawVizWaterfallPost(ctx, w, h, song, tick, {
       state: renderState, zoom: 1, showLyrics: false, lyricAt: '', activeNotes: activeNoteList(), energy: 0,
-      fx: { ...FX_DEFAULTS, keys3d: true, persp: 0.68, keyNames: false, particles: false, beams: false, hitLine: true, gloss: true },
+      fx: { ...vizBg.fxOpts(), keys3d: true, persp: Math.max(0.35, Number(vizBg.fxOpts().persp) || 0.68) },
       wallClock: true,
-      theme: {}, bg: {},
+      theme: vizBg.vizTheme(), bg: vizBg.drawOpts(),
     });
   } catch (e) { console.error('[p3d] draw failed', e); }
   if (gameMode.value === 'game' && game) {
+    if ((demoPlaying.value || localPlaying.value) && hasSong.value && sec >= songEndSec() + .25) finishGame();
     game.tick(sec);
     const now = performance.now();
     if (now - lastHud > 120) { lastHud = now; Object.assign(stats, game.stats()); }
@@ -384,6 +406,25 @@ onBeforeUnmount(() => {
       <span>{{ t('准确率') }} {{ stats.accuracy }}%</span>
       <span class="muted">{{ stats.perfect }}P / {{ stats.great }}G / {{ stats.good }}Gd / {{ stats.miss }}M</span>
     </div>
+    <div v-if="gameResult" class="p3d-result">
+      <div class="p3d-result-card">
+        <span class="p3d-result-grade">{{ gameResult.grade }}</span>
+        <b>{{ t('演奏结束') }}</b>
+        <div class="p3d-result-score">{{ gameResult.score }}</div>
+        <div class="p3d-result-grid">
+          <span>{{ t('最大连击') }} <b>{{ gameResult.maxCombo }}</b></span>
+          <span>{{ t('准确率') }} <b>{{ gameResult.accuracy }}%</b></span>
+          <span>Perfect <b>{{ gameResult.perfect }}</b></span>
+          <span>Great <b>{{ gameResult.great }}</b></span>
+          <span>Good <b>{{ gameResult.good }}</b></span>
+          <span>Miss <b>{{ gameResult.miss }}</b></span>
+        </div>
+        <div class="p3d-result-actions">
+          <button class="chip-btn" @click="retryGame">{{ t('再来一次') }}</button>
+          <button class="chip-btn" @click="closeResult">{{ t('关闭') }}</button>
+        </div>
+      </div>
+    </div>
     <div class="p3d-labels">
       <span v-for="l in keyLabels" :key="l.code" class="p3d-key" :class="{ active: noteActive(l.midi) }">{{ l.label }}</span>
     </div>
@@ -393,7 +434,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .p3d { position:relative; width:100%; height:100%; min-height:560px; display:flex; flex-direction:column; gap:8px; overflow:hidden; border-radius:var(--r-sm); background:transparent; color:var(--text); }
 .p3d-canvas { position:relative; order:2; flex:1 1 auto; width:100%; min-height:420px; display:block; border-radius:var(--r-sm); background:var(--canvas); border:1px solid var(--hairline); }
-.p3d-top { position:relative; order:1; z-index:5; display:flex; align-items:center; gap:6px; overflow-x:auto; white-space:nowrap; padding:8px 10px; border-radius:var(--r-sm); background:color-mix(in srgb, var(--panel) 86%, transparent); border:1px solid var(--hairline); box-shadow: var(--shadow-sm, 0 4px 18px rgba(0,0,0,.18)); backdrop-filter:blur(14px); color:var(--text); }
+.p3d-top { position:relative; order:1; z-index:5; display:flex; align-items:center; gap:6px; overflow-x:auto; white-space:nowrap; padding:2px 0; background:transparent; border:0; box-shadow:none; color:var(--text); }
 .p3d-sel { flex:0 0 auto; min-width:0; }
 .p3d-top b { flex:0 0 auto; font-size:var(--fs-md,13px); color:var(--text); } .p3d-sub { color:var(--text3); font-size:var(--fs-xs,11px); } .p3d-grow { flex:1 0 8px; }
 .p3d-rating { font-size:var(--fs-xs,11px); color:var(--text2); } .p3d-rating b { color:var(--accent-sky, #6cc7ff); font-size:var(--fs-md,15px); }
@@ -409,6 +450,14 @@ onBeforeUnmount(() => {
 .p3d-empty { position:absolute; left:0; right:0; top:80px; bottom:60px; display:grid; place-items:center; color:var(--text3); z-index:2; pointer-events:none; }
 .p3d-score { position:absolute; right:14px; bottom:52px; z-index:4; display:flex; align-items:center; gap:9px; padding:7px 11px; border-radius:var(--r-sm); background:color-mix(in srgb, var(--panel) 86%, transparent); border:1px solid var(--hairline); color:var(--text); font-size:var(--fs-xs,11px); }
 .p3d-score b { font-size:19px; color:#8fd6ff; } .p3d-grade { font-weight:800; color:#ffd166; min-width:50px; } .p3d-grade.miss { color:#ff7b7b; }
+.p3d-result { position:absolute; inset:0; z-index:15; display:grid; place-items:center; background:color-mix(in srgb, var(--canvas) 72%, transparent); backdrop-filter:blur(8px); }
+.p3d-result-card { display:flex; flex-direction:column; align-items:center; gap:8px; min-width:320px; padding:24px 30px; border-radius:var(--r-lg); border:1px solid var(--hairline); background:color-mix(in srgb, var(--panel) 94%, transparent); box-shadow:var(--shadow-lg,0 24px 70px rgba(0,0,0,.35)); color:var(--text); }
+.p3d-result-grade { font:800 54px/1 var(--font-display, sans-serif); color:var(--accent-sky); text-shadow:0 0 24px color-mix(in srgb,var(--accent-sky) 45%, transparent); }
+.p3d-result-card b { font-size:var(--fs-lg,17px); }
+.p3d-result-score { font:800 30px/1 var(--font-display, sans-serif); color:var(--text); }
+.p3d-result-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:5px 22px; color:var(--text3); font-size:var(--fs-xs,12px); margin:4px 0 6px; }
+.p3d-result-grid b { color:var(--text); }
+.p3d-result-actions { display:flex; gap:8px; }
 .p3d-labels { position:absolute; left:20px; right:20px; bottom:10px; z-index:4; display:flex; justify-content:center; gap:5px; pointer-events:none; flex-wrap:wrap; }
 .p3d-key.active { background:var(--accent-sky) !important; border-color:color-mix(in srgb, var(--accent-sky) 60%, white) !important; color:var(--on-accent, #03111e) !important; box-shadow:0 0 14px color-mix(in srgb, var(--accent-sky) 70%, transparent); transform:translateY(2px) scale(1.12); }
 .p3d-key { padding:2px 5px; transition:all .08s ease; border-radius:4px; border:1px solid rgba(120,210,255,.45); background:rgba(4,10,18,.62); color:#dff1ff; font:600 10px/1.1 Consolas, monospace; }
