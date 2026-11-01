@@ -45,7 +45,9 @@ try { const saved = JSON.parse(localStorage.getItem('fufumidi_piano3d_keymap') |
 const keyLabels = ref([]);
 
 let raf = 0, game = null, recorder = null, demoTimers = [], demoStart = 0, lastHud = 0;
-let rendererCtx = null;
+let rendererCtx = null, mouseNote = null;
+const activeInput = ref([]);
+const WHITE_MIDI = Array.from({ length: 88 }, (_, i) => 21 + i).filter(m => ![1,3,6,8,10].includes(m % 12));
 
 function activeSong() {
   const demo = DEMO_SONGS.find(d => d.id === demoId.value);
@@ -77,11 +79,14 @@ function playSound(midi, dur = .3) {
 }
 function pressNote(n) {
   if (n == null) return;
+  if (!activeInput.value.includes(n)) activeInput.value.push(n);
   playSound(n, .28);
   if (recording.value && recorder) { try { recorder.noteOn(n, 100, performance.now()); } catch (e) {} }
   if (gameMode.value === 'game' && game) { game.input(n, currentSec()); Object.assign(stats, game.stats()); }
 }
-function releaseNote(n) { if (recording.value && recorder) { try { recorder.noteOff(n, performance.now()); } catch (e) {} } }
+function releaseNote(n) {
+  activeInput.value = activeInput.value.filter(x => x !== n);
+  if (recording.value && recorder) { try { recorder.noteOff(n, performance.now()); } catch (e) {} } }
 function keyDown(e) {
   if (!e || e.repeat) return;
   const tag = (e.target && e.target.tagName || '').toLowerCase();
@@ -158,10 +163,37 @@ function draw() {
     if (now - lastHud > 120) { lastHud = now; Object.assign(stats, game.stats()); }
   }
 }
+function midiAt(ev) {
+  const el = cv.value; if (!el) return null;
+  const r = el.getBoundingClientRect();
+  const x = (ev.clientX - r.left) / Math.max(1, r.width);
+  const y = (ev.clientY - r.top) / Math.max(1, r.height);
+  if (y < .70) return null;
+  const i = Math.max(0, Math.min(WHITE_MIDI.length - 1, Math.floor(x * WHITE_MIDI.length)));
+  return WHITE_MIDI[i];
+}
+function onPointerDown(ev) {
+  const midi = midiAt(ev);
+  if (midi == null) return;
+  if (mappingMode.value) { bindTarget.value = midi; app.toast(t('已选中琴键，请按一个电脑键绑定'), 'ok'); return; }
+  mouseNote = midi; pressNote(midi);
+  try { cv.value.setPointerCapture(ev.pointerId); } catch (e) {}
+  ev.preventDefault();
+}
+function onPointerMove(ev) {
+  if (mouseNote == null) return;
+  const midi = midiAt(ev);
+  if (midi != null && midi !== mouseNote) { releaseNote(mouseNote); mouseNote = midi; pressNote(midi); }
+}
+function onPointerUp() { if (mouseNote != null) { releaseNote(mouseNote); mouseNote = null; } }
 function resize() { rendererCtx = null; }
 onMounted(async () => {
   refreshSong(); window.addEventListener('resize', resize);
   window.addEventListener('keydown', keyDown); window.addEventListener('keyup', keyUp);
+  cv.value.addEventListener('pointerdown', onPointerDown);
+  cv.value.addEventListener('pointermove', onPointerMove);
+  cv.value.addEventListener('pointerup', onPointerUp);
+  cv.value.addEventListener('pointercancel', onPointerUp);
   draw();
   try { await refreshDevices(); if (deviceId.value) await chooseDevice(); } catch (e) { midiStatus.value = t('MIDI 初始化失败'); }
 });
@@ -170,6 +202,7 @@ watch(() => demoId, () => refreshSong());
 onBeforeUnmount(() => {
   cancelAnimationFrame(raf); stopDemo(); window.removeEventListener('resize', resize);
   window.removeEventListener('keydown', keyDown); window.removeEventListener('keyup', keyUp);
+  try { cv.value.removeEventListener('pointerdown', onPointerDown); cv.value.removeEventListener('pointermove', onPointerMove); cv.value.removeEventListener('pointerup', onPointerUp); cv.value.removeEventListener('pointercancel', onPointerUp); } catch (e) {}
   try { selectMidiInput('', {}); } catch (e) {}
 });
 </script>
@@ -178,31 +211,35 @@ onBeforeUnmount(() => {
   <div ref="host" class="p3d">
     <canvas ref="cv" class="p3d-canvas"></canvas>
     <div class="p3d-top">
-      <b>{{ t('3D 钢琴') }}</b>
-      <span class="p3d-sub">{{ t('外接 MIDI / 电脑键盘') }}</span>
-      <span class="p3d-grow"></span>
-      <select v-model="demoId" class="select-input" style="width:120px" @change="selectDemo">
-        <option value="">{{ t('当前导入曲目') }}</option>
-        <option v-for="d in DEMO_SONGS" :key="d.id" :value="d.id">{{ d.name }}</option>
-      </select>
-      <button class="chip-btn" :disabled="!demoId" @click="toggleDemo">{{ demoPlaying ? t('停止示范') : t('播放示范') }}</button>
-      <span v-if="rating" class="p3d-rating">{{ t('难度') }} <b>{{ rating.level }}</b>/10 · {{ rating.label }}</span>
-      <select v-model.number="program" class="select-input" style="width:88px">
-        <option v-for="pg in PROGRAMS" :key="pg.id" :value="pg.id">{{ t(pg.label) }}</option>
-      </select>
-      <select v-model="gameMode" class="select-input" style="width:88px">
-        <option value="free">{{ t('自由演奏') }}</option>
-        <option value="game">{{ t('音游模式') }}</option>
-      </select>
-      <button class="chip-btn" :class="{ active: mappingMode }" @click="mappingMode = !mappingMode">{{ mappingMode ? t('退出键位') : t('自定义键位') }}</button>
-      <button class="chip-btn" :class="{ active: recording }" @click="recording ? stopRec() : startRec()">{{ recording ? t('停止录音') : t('录音') }}</button>
-      <button v-if="lastTake" class="chip-btn" @click="saveRec">{{ t('保存 MIDI') }}</button>
-      <span class="p3d-grow"></span>
-      <select v-model="deviceId" class="select-input" style="width:140px" @change="chooseDevice">
-        <option value="">{{ t('选择 MIDI 键盘') }}</option>
-        <option v-for="d in devices" :key="d.id" :value="d.id">{{ d.name }}</option>
-      </select>
-      <button class="chip-btn" @click="refreshDevices">{{ t('刷新') }}</button>
+      <div class="p3d-row">
+        <b>{{ t('3D 钢琴') }}</b>
+        <span class="p3d-sub">{{ t('外接 MIDI / 电脑键盘') }}</span>
+        <span class="p3d-grow"></span>
+        <select v-model="demoId" class="select-input" style="width:120px" @change="selectDemo">
+          <option value="">{{ t('当前导入曲目') }}</option>
+          <option v-for="d in DEMO_SONGS" :key="d.id" :value="d.id">{{ d.name }}</option>
+        </select>
+        <button class="chip-btn" :disabled="!demoId" @click="toggleDemo">{{ demoPlaying ? t('停止示范') : t('播放示范') }}</button>
+        <span v-if="rating" class="p3d-rating">{{ t('难度') }} <b>{{ rating.level }}</b>/10 · {{ rating.label }}</span>
+      </div>
+      <div class="p3d-row">
+        <select v-model.number="program" class="select-input" style="width:88px">
+          <option v-for="pg in PROGRAMS" :key="pg.id" :value="pg.id">{{ t(pg.label) }}</option>
+        </select>
+        <select v-model="gameMode" class="select-input" style="width:88px">
+          <option value="free">{{ t('自由演奏') }}</option>
+          <option value="game">{{ t('音游模式') }}</option>
+        </select>
+        <button class="chip-btn" :class="{ active: mappingMode }" @click="mappingMode = !mappingMode">{{ mappingMode ? t('退出键位') : t('自定义键位') }}</button>
+        <button class="chip-btn" :class="{ active: recording }" @click="recording ? stopRec() : startRec()">{{ recording ? t('停止录音') : t('录音') }}</button>
+        <button v-if="lastTake" class="chip-btn" @click="saveRec">{{ t('保存 MIDI') }}</button>
+        <span class="p3d-grow"></span>
+        <select v-model="deviceId" class="select-input" style="width:150px" @change="chooseDevice">
+          <option value="">{{ t('选择 MIDI 键盘') }}</option>
+          <option v-for="d in devices" :key="d.id" :value="d.id">{{ d.name }}</option>
+        </select>
+        <button class="chip-btn" @click="refreshDevices">{{ t('刷新') }}</button>
+      </div>
     </div>
     <div v-if="mappingMode" class="p3d-bindbar">
       <span>{{ t('选择要绑定的音') }}</span>
@@ -222,14 +259,14 @@ onBeforeUnmount(() => {
     <div class="p3d-labels">
       <span v-for="l in keyLabels" :key="l.code" class="p3d-key">{{ l.code }}</span>
     </div>
-    <div class="p3d-hint">{{ t('电脑键盘：Z–M / Q–I 弹奏 · 点击琴键试听') }}</div>
   </div>
 </template>
 
 <style scoped>
 .p3d { position:relative; width:100%; height:100%; min-height:560px; overflow:hidden; border-radius:18px; background:#050912; }
 .p3d-canvas { position:absolute; inset:0; width:100%; height:100%; display:block; }
-.p3d-top { position:absolute; top:10px; left:12px; right:12px; z-index:5; display:flex; align-items:center; flex-wrap:wrap; gap:6px; padding:7px 9px; border-radius:11px; background:rgba(5,12,24,.7); border:1px solid rgba(105,180,255,.16); backdrop-filter:blur(12px); color:#dff1ff; }
+.p3d-top { position:absolute; top:10px; left:12px; right:12px; z-index:5; display:flex; flex-direction:column; gap:5px; padding:7px 9px; border-radius:11px; background:rgba(5,12,24,.7); border:1px solid rgba(105,180,255,.16); backdrop-filter:blur(12px); color:#dff1ff; }
+.p3d-row { display:flex; align-items:center; flex-wrap:wrap; gap:6px; min-height:26px; }
 .p3d-top b { font-size:13px; } .p3d-sub { color:#7eabc9; font-size:11px; } .p3d-grow { flex:1; min-width:6px; }
 .p3d-rating { font-size:11px; color:#b9d8eb; } .p3d-rating b { color:#ffd166; font-size:15px; }
 .p3d-bindbar { position:absolute; top:62px; left:12px; z-index:6; display:flex; align-items:center; gap:8px; padding:6px 10px; border-radius:9px; background:rgba(5,12,24,.82); border:1px solid rgba(255,209,102,.4); color:#dff1ff; font-size:12px; }
