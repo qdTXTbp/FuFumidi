@@ -150,6 +150,7 @@ if (!gotLock) {
     },
   });
     registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngine, engineWorkerConvert, cancelEngineJob: (...a) => cancelJob(...a), pluginHost, readSettings, center: taskCenter, resolveSeparateModel: (id) => (ModelsService ? ModelsService.resolveSeparateModel(id) : null),
+    listSeparateModels: () => (ModelsService && ModelsService.listSeparateModels ? ModelsService.listSeparateModels() : Promise.resolve([])),
     // 分离前自愈：MSST 模型的配置是**下载时**从上游备齐的，老安装/半装状态在这里补一次
     ensureSepConfig: (id) => (ModelsService && ModelsService.ensureSepConfig ? ModelsService.ensureSepConfig(id) : null) });
     registerVideoIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEngineInline, parsePyJson });

@@ -6785,6 +6785,14 @@ export const I18N_MAP = {
   '外接电钢琴直接弹': 'Play directly with a digital piano',
   '选择 MIDI 键盘': 'Select MIDI keyboard',
   '已连接': 'Connected',
+  '智能分轨（推荐）': 'Smart stem split (recommended)',
+  '自动分轨 + 固定音色，失败自动回退整曲': 'Auto stem split + fixed timbres; falls back to full-mix if it fails',
+  '保留轨道': 'Keep tracks',
+  '自动（建议 12 轨）': 'Auto (about 12 tracks)',
+  '6 组': '6 groups',
+  '12 轨': '12 tracks',
+  '16 轨': '16 tracks',
+  '全部候选': 'All candidates',
 };
 
 /* 语言状态（响应式：切语言后 t() 返回值变化，Vue 模板自动重渲染） */

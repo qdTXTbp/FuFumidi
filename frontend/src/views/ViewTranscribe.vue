@@ -24,6 +24,9 @@ const isDesktop = !!(bridge && bridge.convert);
 
 /* ---------------- 状态 ---------------- */
 const mode = ref('universal');           // universal | piano | separate
+// 6.5.0：智能分轨（通用识别内联，默认开；后端失败自动回退整曲）
+const stemEnhance = ref(true);
+const trackBudget = ref('auto');
 const umodel = ref('basic');             // 通用子模型：basic | muscriptor
 const msSize = ref('medium');            // MuScriptor 规格：small | medium | large
 const pmodel = ref('piano_pt');          // 钢琴子模型：piano_pt | aria | transkun | hft
@@ -2250,6 +2253,19 @@ onBeforeUnmount(() => {
         <div class="tr-perf-hint tr-warn" v-if="umodel === 'muscriptor' && msSize === 'large'">{{ t('Large 1.3B 是离线转录里最慢的一档：5 秒一段串行生成，3 分钟音频可能等十几到几十分钟；追求速度建议 Medium 300M，质量优先再选 Large。') }}</div>
         <div class="tr-perf-hint" v-if="umodel === 'yourmt3'">{{ t('YourMT3+ 需先到资源中心下载运行时+权重（约 400 MB）') }}</div>
         <div class="tr-perf-hint" v-if="umodel === 'miros'">{{ t('MIROS 需先到资源中心下载运行时+权重（约 6 GB）') }}</div>
+        <div class="tr-stem-row">
+          <label class="tr-stem-toggle"><input type="checkbox" v-model="stemEnhance"> {{ t('智能分轨（推荐）') }}</label>
+          <span class="muted small">{{ t('自动分轨 + 固定音色，失败自动回退整曲') }}</span>
+          <span style="flex:1"></span>
+          <span class="muted small">{{ t('保留轨道') }}</span>
+          <select class="select-input" v-model="trackBudget" style="width:132px" :disabled="!stemEnhance">
+            <option value="auto">{{ t('自动（建议 12 轨）') }}</option>
+            <option value="6">{{ t('6 组') }}</option>
+            <option value="12">{{ t('12 轨') }}</option>
+            <option value="16">{{ t('16 轨') }}</option>
+            <option value="all">{{ t('全部候选') }}</option>
+          </select>
+        </div>
       </div>
 
       <!-- 钢琴子模型：piano-transcription / Aria-AMT / Transkun -->

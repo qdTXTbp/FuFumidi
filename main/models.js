@@ -1648,7 +1648,14 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
 
-  return { closeAll, resolveSeparateModel, ensureSepConfig };
+  // 6.5.0 智能分轨：列出可用于“分轨转录”的 MSST 模型（已安装状态由调用方判断）。
+  async function listSeparateModels() {
+    try { await ensureMsstModels(); } catch (e) { /* 离线时用缓存/空表 */ }
+    return Object.values(_msstRegistry).filter(m => m && m.outName && m.dest && (m.kind === 'separate' || m.splitCat === 'multi' || /stems/i.test(m.outName)));
+  }
+
+  return { closeAll, resolveSeparateModel, ensureSepConfig, listSeparateModels };
+
 }
 
 module.exports = { registerModelsIpc };

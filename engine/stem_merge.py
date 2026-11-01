@@ -175,3 +175,20 @@ def export_grouped_midi(midi_path, out_dir, max_channels=16):
         g.save(p)
         files.append(p)
     return {"ok": True, "files": files}
+
+
+def main(argv=None):
+    import argparse
+    ap = argparse.ArgumentParser(description='merge stem MIDI files')
+    ap.add_argument('--out', required=True)
+    ap.add_argument('--manifest-in', required=True, help='JSON array: [{role,midi,name,program,channel}]')
+    ap.add_argument('--manifest-out', default='')
+    a = ap.parse_args(argv)
+    with open(a.manifest_in, 'r', encoding='utf-8') as f:
+        stems = json.load(f)
+    res = merge_stem_midis(stems, a.out, a.manifest_out or None)
+    print(json.dumps(res, ensure_ascii=False))
+
+
+if __name__ == '__main__':
+    main()

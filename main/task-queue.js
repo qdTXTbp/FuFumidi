@@ -3,9 +3,10 @@
 // ============================================================
 'use strict';
 const SepCommon = require('./separate-common');
+const { runStemWorkflow } = require('./stem-workflow');
 const Paths = require('./paths');
 
-function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngine, engineWorkerConvert, cancelEngineJob, pluginHost, readSettings, resolveSeparateModel, ensureSepConfig, center }) {
+function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngine, engineWorkerConvert, cancelEngineJob, pluginHost, readSettings, resolveSeparateModel, ensureSepConfig, listSeparateModels, center }) {
   const convertChildren = new Map();  // jobId -> 子进程句柄（转录/修正取消用）
 
   // 转录
@@ -45,6 +46,24 @@ function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngi
       cancelable: true,
       onCancel: () => { try { if (cancelEngineJob) cancelEngineJob(cfg.id); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } },
     }) : null;
+    // 6.5.0：智能分轨转录。失败自动回退整曲转录，不阻塞原路径。
+    if (cfg.stemEnhance && cfg.audio && !cfg.forceSpawn) {
+      const wlog = (line) => { if (win && !win.isDestroyed()) win.webContents.send('engine:log', { id: cfg.id, line }); };
+      const wprog = (p) => { if (win && !win.isDestroyed()) win.webContents.send('engine:stem-progress', Object.assign({ id: cfg.id }, p || {})); };
+      wprog({ stage: 'start', text: '智能分轨转录启动…' });
+      const wf = await runStemWorkflow(cfg, {
+        fs, Paths, readSettings, spawnEngine, engineWorkerConvert,
+        resolveSeparateModel, listSeparateModels: listSeparateModels || (() => Promise.resolve([])),
+        sendLog: wlog, sendProg: wprog,
+      });
+      if (wf && wf.ok) {
+        try { task && task.done(wf); } catch (e) {}
+        try { pluginHost.emit('transcribe-done', { ok: true, out: wf.out, note_count: (wf.tracks || []).reduce((a, t) => a + (t.notes || 0), 0), mode: 'stem', perf: cfg.perf }); } catch (e) {}
+        return wf;
+      }
+      wlog('[分轨] ' + ((wf && wf.error) || '失败') + '，回退整曲转录');
+      wprog({ stage: 'fallback', text: '分轨失败，回退整曲转录' });
+    }
     const runSpawn = () => new Promise((resolve, reject) => {
       const args = ['convert', cfg.audio, '-o', cfg.out];
       if (cfg.mode) args.push('--mode', cfg.mode);
