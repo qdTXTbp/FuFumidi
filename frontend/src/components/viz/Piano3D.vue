@@ -5,6 +5,10 @@ import { useAppStore } from '../../stores/app';
 import { t } from '../../core/i18n.js';
 import { listMidiInputs, selectMidiInput } from '../../core/midiin.js';
 import { createGame } from '../../core/piano3d/game.js';
+import { createRecorder } from '../../core/recorder.js';
+import { encodeMidi } from '../../core/midi.js';
+import { DEMO_SONGS, buildDemoSong } from '../../core/piano3d/demoSongs.js';
+import { analyzeSong } from '../../core/piano3d/rating.js';
 
 const props = defineProps({ song: { type: Object, default: null } });
 const app = useAppStore();
@@ -12,9 +16,21 @@ const host = ref(null);
 const devices = ref([]);
 const deviceId = ref('');
 const midiStatus = ref('');
+const hasSong = ref(false);
 const gameMode = ref('free');   // free | game
 const stats = reactive({ perfect:0, great:0, good:0, miss:0, combo:0, maxCombo:0, score:0, accuracy:0, judged:0, total:0 });
+const demoId = ref('');
+const demoPlaying = ref(false);
+const fallSpeed = ref(1.15);
+const demoStart = ref(0);
+const rating = ref(null);
+let demoTimers = [];
+let toneCtx = null;
 let game = null;
+let recorder = null;
+const recording = ref(false);
+const recordedNotes = ref(0);
+const lastTake = ref(null);
 let lastStatsAt = 0;
 
 let renderer, scene, camera, raf = 0;
@@ -23,6 +39,67 @@ let notePool = [];             // reusable bars
 let activeNotes = [];
 let pressed = new Map();       // midi -> until (performance.now)
 const zNear = 0.2;
+
+function activeSong() {
+  const demo = DEMO_SONGS.find(d => d.id === demoId.value);
+  if (demo) return buildDemoSong(demo);
+  return props.song && props.song.song ? props.song.song : null;
+}
+function currentSec() {
+  if (demoPlaying.value && demoId.value) return (performance.now() - demoStart.value) / 1000;
+  try { return app.curSec || 0; } catch (e) { return 0; }
+}
+function ensureTone() {
+  if (toneCtx) return toneCtx;
+  try { toneCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { toneCtx = null; }
+  return toneCtx;
+}
+function tone(midi, dur = 0.35) {
+  const ctx = ensureTone(); if (!ctx) return;
+  try {
+    if (ctx.state === 'suspended') ctx.resume();
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'triangle'; o.frequency.value = 440 * Math.pow(2, (midi - 69) / 12);
+    g.gain.setValueAtTime(0.0001, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.16, ctx.currentTime + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + Math.max(0.08, dur));
+    o.connect(g); g.connect(ctx.destination); o.start(); o.stop(ctx.currentTime + Math.max(0.1, dur) + 0.02);
+  } catch (e) {}
+}
+function stopDemo() {
+  demoTimers.forEach(clearTimeout); demoTimers = []; demoPlaying.value = false;
+}
+function startDemo() {
+  stopDemo();
+  const demo = DEMO_SONGS.find(d => d.id === demoId.value);
+  if (!demo) return;
+  demoPlaying.value = true; demoStart.value = performance.now();
+  refreshGame();
+  const song = buildDemoSong(demo);
+  for (const n of demo.notes) {
+    const at = song.baseSec(n.start) * 1000;
+    demoTimers.push(setTimeout(() => tone(n.pitch, song.baseSec(n.end) - song.baseSec(n.start)), at));
+  }
+}
+function toggleDemo() { if (demoPlaying.value) stopDemo(); else startDemo(); }
+function selectDemo() { stopDemo(); refreshGame(); }
+
+const KEY_TO_MIDI = {
+  KeyZ: 48, KeyS: 49, KeyX: 50, KeyD: 51, KeyC: 52, KeyV: 53, KeyG: 54, KeyB: 55, KeyH: 56, KeyN: 57, KeyJ: 58, KeyM: 59,
+  KeyQ: 60, Digit2: 61, KeyW: 62, Digit3: 63, KeyE: 64, KeyR: 65, Digit5: 66, KeyT: 67, Digit6: 68, KeyY: 69, Digit7: 70, KeyU: 71, KeyI: 72,
+};
+const heldKeys = new Set();
+function keyDown(e) {
+  if (!e || e.repeat) return;
+  const tag = (e.target && e.target.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'select' || tag === 'textarea' || (e.target && e.target.isContentEditable)) return;
+  const n = KEY_TO_MIDI[e.code]; if (n == null) return;
+  e.preventDefault(); heldKeys.add(n); pressNote(n);
+}
+function keyUp(e) {
+  const n = KEY_TO_MIDI[e.code]; if (n == null) return;
+  heldKeys.delete(n); releaseNote(n);
+}
 
 function midiToX(m) {
   // 21..108 白键/黑键近似坐标；等距即可，重点是 3D 观感
@@ -60,7 +137,7 @@ function buildPiano() {
 }
 
 function makeBars() {
-  const geo = new THREE.BoxGeometry(0.19, 0.10, 1);
+  const geo = new THREE.BoxGeometry(0.22, 1, 0.16);
   const mats = [0x5cc8ff, 0xff6b9d, 0x9b7bff, 0x7ddf9a, 0xffc45c].map(c => new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.82 }));
   for (let i = 0; i < 260; i++) {
     const m = new THREE.Mesh(geo, mats[i % mats.length].clone());
@@ -69,7 +146,7 @@ function makeBars() {
 }
 
 function updateBars(nowSec) {
-  const song = props.song && props.song.song ? props.song : null;
+  const song = activeSong();
   const tracks = (song && song.tracks) || [];
   // 取当前时间之后 4 秒内的音符
   let out = 0;
@@ -77,6 +154,9 @@ function updateBars(nowSec) {
     for (let ti = 0; ti < tracks.length && out < notePool.length; ti++) {
       const tr = tracks[ti];
       for (const n of (tr.notes || [])) {
+        n._trackIdx = ti;
+        const pitch = n.pitch != null ? n.pitch : n.midi;
+        if (!Number.isFinite(pitch)) continue;
         const st = song.baseSec(n.start);
         const en = song.baseSec(n.end);
         const dt = st - nowSec;
@@ -84,10 +164,12 @@ function updateBars(nowSec) {
         const obj = notePool[out++]; if (!obj) break;
         const dur = Math.max(0.08, en - st);
         obj.visible = true;
-        obj.position.set(midiToX(n.pitch), 0.55 + dt * 0.9, -dt * 1.65);
-        obj.scale.set(1, 1, Math.max(0.15, dur * 1.65));
-        obj.material.opacity = 0.62 + Math.min(0.28, (n.vel || 80) / 500);
-        obj.userData.pitch = n.pitch;
+        const len = Math.max(0.12, dur * fallSpeed.value);
+        obj.position.set(midiToX(pitch), 0.58 + dt * fallSpeed.value + len / 2, -0.18);
+        obj.scale.set(1, len, 1);
+        obj.material.opacity = 0.58 + Math.min(0.32, (n.vel || 80) / 500);
+        if (obj.material.color && n._trackIdx != null) obj.material.color.setHSL((n._trackIdx * 0.13) % 1, 0.72, 0.62);
+        obj.userData.pitch = pitch;
       }
     }
   }
@@ -102,7 +184,8 @@ function animate() {
     const down = until > now;
     k.mesh.position.y = k.baseY - (down ? 0.055 : 0);
   }
-  const nowSec = (() => { try { return app.curSec || 0; } catch (e) { return 0; } })();
+  const nowSec = currentSec();
+  if (!window.__piano3dFrames) { window.__piano3dFrames = 0; console.log('[piano3d] first frame', nowSec, keys.length); } window.__piano3dFrames++;
   updateBars(nowSec);
   if (gameMode.value === 'game' && game) {
     game.tick(nowSec);
@@ -111,15 +194,59 @@ function animate() {
   renderer.render(scene, camera);
 }
 
-function refreshGame() { game = props.song && props.song.song ? createGame(props.song.song) : null; Object.assign(stats, game ? game.stats() : { perfect:0,great:0,good:0,miss:0,combo:0,maxCombo:0,score:0,accuracy:0,judged:0,total:0 }); }
-const midiDown = (n) => {
-  pressed.set(n, performance.now() + 180);
+function startRec() {
+  if (recording.value) return;
+  const songObj = activeSong();
+  if (!songObj) { app.toast(t('请先载入曲目'), 'warn'); return; }
+  try {
+    recorder = createRecorder({ tpb: songObj.tpb || 480, bpm: songObj.initialBpm || 120, preRollBars: 0, quantize: 'off', mode: 'overdub' });
+    recorder.start({ atMs: performance.now(), startTick: 0, loopStartTick: 0, loopEndTick: (songObj.tpb || 480) * 64 });
+    recording.value = true; recordedNotes.value = 0; lastTake.value = null;
+    app.toast(t('开始录音，弹奏外接键盘'), 'ok');
+  } catch (e) { app.toast(t('录音启动失败：') + ((e && e.message) || e), 'warn'); }
+}
+function stopRec() {
+  if (!recording.value || !recorder) return;
+  try { lastTake.value = recorder.stop(performance.now()); } catch (e) { lastTake.value = null; }
+  recorder = null; recording.value = false;
+  recordedNotes.value = lastTake.value && lastTake.value.notes ? lastTake.value.notes.length : 0;
+}
+async function saveRec() {
+  const take = lastTake.value;
+  if (!take || !take.notes || !take.notes.length) { app.toast(t('还没有录到音符'), 'warn'); return; }
+  const songObj = activeSong();
+  const tpb = (songObj && songObj.tpb) || 480;
+  const bpm = (songObj && songObj.initialBpm) || 120;
+  const startTick = Number(take.takeStartTick) || 0;
+  const notes = take.notes.map(n => ({ start: startTick + n.start, end: startTick + Math.max(1, n.end), midi: n.midi, vel: n.vel, ch: 0 }));
+  const bytes = encodeMidi([{ name: t('3D 钢琴录音'), ch: 0, program: 0, notes }], { ticksPerBeat: tpb, tempoMap: [{ tick: 0, us: Math.round(60000000 / bpm) }] });
+  try {
+    const path = await app.writeMidiFile(t('3D 钢琴录音') + '.mid', bytes);
+    app.toast(path ? t('已保存') + '：' + path : t('保存失败'), path ? 'ok' : 'warn');
+  } catch (e) { app.toast(t('保存失败：') + ((e && e.message) || e), 'warn'); }
+}
+function refreshGame() {
+  const song = activeSong();
+  hasSong.value = !!song;
+  game = song ? createGame(song) : null;
+  rating.value = song ? analyzeSong(song) : null;
+  Object.assign(stats, game ? game.stats() : { perfect:0,great:0,good:0,miss:0,combo:0,maxCombo:0,score:0,accuracy:0,judged:0,total:0 });
+}
+function pressNote(n) {
+  if (n == null) return;
+  pressed.set(n, performance.now() + 200);
+  tone(n, 0.28);
+  if (recording.value && recorder) { try { recorder.noteOn(n, 100, performance.now()); } catch (e) {} }
   if (gameMode.value === 'game' && game) {
-    game.input(n, app.curSec || 0);
+    game.input(n, currentSec());
     Object.assign(stats, game.stats());
   }
-};
-const midiUp = (n) => { /* visual key stays for 180ms */ };
+}
+function releaseNote(n) {
+  if (recording.value && recorder) { try { recorder.noteOff(n, performance.now()); } catch (e) {} }
+}
+const midiDown = (n) => pressNote(n);
+const midiUp = (n) => releaseNote(n);
 
 async function refreshDevices() {
   devices.value = await listMidiInputs();
@@ -141,7 +268,7 @@ function resize() {
 
 onMounted(async () => {
   const el = host.value;
-  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, preserveDrawingBuffer: true });
   renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
   renderer.setClearColor(0x070b12, 1);
   renderer.shadowMap.enabled = true;
@@ -149,19 +276,26 @@ onMounted(async () => {
   scene = new THREE.Scene();
   scene.fog = new THREE.Fog(0x070b12, 8, 22);
   camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
-  camera.position.set(0, 4.2, 7.5); camera.lookAt(0, 0.2, -0.8);
+  camera.position.set(0, 5.2, 9.0); camera.lookAt(0, -0.8, -1.5);
   const amb = new THREE.HemisphereLight(0xaad4ff, 0x10131c, 1.1); scene.add(amb);
   const key = new THREE.DirectionalLight(0xbfe6ff, 2.2); key.position.set(-4, 8, 6); key.castShadow = true; scene.add(key);
   const rim = new THREE.PointLight(0x6a7cff, 2.2, 30); rim.position.set(5, 2, -4); scene.add(rim);
   buildPiano(); makeBars(); refreshGame();
+  window.__piano3d = { scene, camera, renderer, keys, notePool };
+  console.log('[piano3d] built', keys.length, notePool.length);
   resize(); window.addEventListener('resize', resize);
-  await refreshDevices();
-  if (deviceId.value) await chooseDevice();
+  // 先渲染一帧，再初始化 MIDI：Web MIDI 权限/设备异常不能把 3D 场景一起卡黑。
+  renderer.render(scene, camera);
   animate();
+  window.addEventListener('keydown', keyDown);
+  window.addEventListener('keyup', keyUp);
+  try { await refreshDevices(); if (deviceId.value) await chooseDevice(); } catch (e) { midiStatus.value = t('MIDI 初始化失败'); }
 });
-watch(() => props.song, () => refreshGame());
+watch(() => props.song, () => { if (!demoId.value) { stopDemo(); refreshGame(); } });
+watch(() => demoId, () => refreshGame());
 onBeforeUnmount(() => {
   cancelAnimationFrame(raf); window.removeEventListener('resize', resize);
+  window.removeEventListener('keydown', keyDown); window.removeEventListener('keyup', keyUp); stopDemo();
   try { selectMidiInput('', {}); } catch (e) {}
   try { renderer && renderer.dispose(); } catch (e) {}
   try { host.value && renderer && host.value.removeChild(renderer.domElement); } catch (e) {}
@@ -184,9 +318,24 @@ onBeforeUnmount(() => {
         <option value="game">{{ t('音游模式') }}</option>
       </select>
       <span class="muted small">{{ midiStatus }}</span>
+      <button class="chip-btn" :class="{ active: recording }" @click="recording ? stopRec() : startRec()">{{ recording ? t('停止录音') : t('录音') }}</button>
+      <span v-if="recordedNotes" class="muted small">{{ t('已录') }} {{ recordedNotes }} {{ t('个音符') }}</span>
+      <button v-if="lastTake" class="chip-btn" @click="saveRec">{{ t('保存 MIDI') }}</button>
     </div>
-    <div v-if="!song" class="viz-empty" role="status"><b>{{ t('还没有可演奏的曲目') }}</b></div>
-    <div v-if="song && gameMode === 'game'" class="piano3d-score">
+    <div class="piano3d-bar">
+      <span class="muted small">{{ t('内置曲目') }}</span>
+      <select v-model="demoId" class="select-input" style="width:120px" @change="selectDemo">
+        <option value="">{{ t('当前导入曲目') }}</option>
+        <option v-for="d in DEMO_SONGS" :key="d.id" :value="d.id">{{ d.name }}</option>
+      </select>
+      <button class="chip-btn" :disabled="!demoId" @click="toggleDemo">{{ demoPlaying ? t('停止示范') : t('播放示范') }}</button>
+      <span v-if="rating" class="piano3d-rating">难度 <b>{{ rating.level }}</b>/10 · {{ rating.label }}</span>
+      <span class="muted small">{{ t('电脑键盘：Z–M / Q–I 弹奏') }}</span>
+      <span class="muted small">{{ t('速度') }}</span>
+      <input type="range" min="0.6" max="2.2" step="0.05" v-model.number="fallSpeed" style="width:80px" />
+    </div>
+    <div v-if="!hasSong" class="viz-empty" role="status"><b>{{ t('还没有可演奏的曲目') }}</b></div>
+    <div v-if="hasSong && gameMode === 'game'" class="piano3d-score">
       <span class="piano3d-grade" :class="stats.lastGrade">{{ stats.lastGrade || 'READY' }}</span>
       <b>{{ stats.score }}</b>
       <span>{{ t('连击') }} {{ stats.combo }}</span>
@@ -201,6 +350,8 @@ onBeforeUnmount(() => {
 .piano3d-host canvas { display:block; width:100%; height:100%; }
 .piano3d-hud { position:absolute; top:10px; left:12px; right:12px; display:flex; align-items:center; gap:8px; z-index:2; padding:8px 10px; border-radius:10px; background:rgba(8,14,26,.72); border:1px solid rgba(120,180,255,.18); backdrop-filter:blur(10px); }
 .piano3d-hud b { color:#dff1ff; font-size:13px; }
+.piano3d-bar { position:absolute; top:62px; left:12px; right:12px; display:flex; align-items:center; gap:8px; z-index:2; padding:7px 10px; border-radius:10px; background:rgba(8,14,26,.64); border:1px solid rgba(120,180,255,.14); backdrop-filter:blur(8px); }
+.piano3d-rating { color:#cfe7ff; font-size:12px; } .piano3d-rating b { color:#ffd166; font-size:16px; }
 .piano3d-score { position:absolute; right:16px; bottom:16px; display:flex; align-items:center; gap:10px; padding:8px 12px; border-radius:10px; background:rgba(8,14,26,.78); border:1px solid rgba(120,180,255,.2); color:#dff1ff; font-size:12px; z-index:2; }
 .piano3d-score b { font-size:20px; color:#8fd6ff; }
 .piano3d-grade { font-weight:800; color:#ffd166; min-width:58px; }

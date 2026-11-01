@@ -9,7 +9,7 @@ function collectNotes(song) {
       const t = song.baseSec(n.start);
       const end = song.baseSec(n.end);
       if (!Number.isFinite(t)) continue;
-      out.push({ id: out.length, pitch: n.pitch, time: t, end: Number.isFinite(end) ? end : t + 0.2, track: tr.name || '', hit: false, judged: false });
+      out.push({ id: out.length, pitch: n.pitch != null ? n.pitch : n.midi, time: t, end: Number.isFinite(end) ? end : t + 0.2, track: tr.name || '', hit: false, judged: false });
     }
   }
   out.sort((a, b) => a.time - b.time);

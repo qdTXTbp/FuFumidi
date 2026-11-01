@@ -6797,6 +6797,19 @@ export const I18N_MAP = {
   '音游模式': 'Rhythm game',
   '连击': 'Combo',
   '准确率': 'Accuracy',
+  '请先载入曲目': 'Load a song first',
+  '开始录音，弹奏外接键盘': 'Recording started — play your MIDI keyboard',
+  '录音启动失败：': 'Could not start recording: ',
+  '已录': 'Recorded',
+  '保存 MIDI': 'Save MIDI',
+  '3D 钢琴录音': '3D Piano Take',
+  '还没有录到音符': 'No notes recorded yet',
+  '播放示范': 'Play demo',
+  '当前导入曲目': 'Current imported song',
+  '电脑键盘：Z–M / Q–I 弹奏': 'Computer keyboard: Z–M / Q–I to play',
+  '内置曲目': 'Built-in songs',
+  '停止示范': 'Stop demo',
+  'MIDI 初始化失败': 'MIDI initialization failed',
 };
 
 /* 语言状态（响应式：切语言后 t() 返回值变化，Vue 模板自动重渲染） */

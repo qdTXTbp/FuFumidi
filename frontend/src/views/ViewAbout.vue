@@ -24,7 +24,7 @@ function back() { try { app.setView('home'); } catch (e) { location.hash = '#/ho
 
     <div class="card about-card">
       <h4><Icon name="box" :size="14" /> {{ t('应用') }}</h4>
-      <div class="about-row"><b>{{ data.app.name }}</b><span>{{ data.app.version }}</span><span class="muted">{{ data.app.license }}</span></div>
+      <div class="about-row"><b>{{ data.app.name }}</b><span class="muted">{{ data.app.license }}</span></div>
     </div>
 
     <div class="card about-card">

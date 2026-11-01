@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // P1-7 许可与溯源：从代码里的真实数据生成许可清单（不要手写维护两份）
-//   · 应用自身：package.json 的 name/version/license
+//   · 应用自身：package.json 的 name/license（版本号不进免责声明，避免每次发版都改）
 //   · 内置音色库：main/soundfonts.js 的 REGISTRY（id/name/version/license）
 //   · 内置第三方二进制：docs/VENDOR.md 的清单表 + 许可证提示（按上游识别）
 // 生成：frontend/src/core/licenses.js（关于页 import）与 docs/licenses.md
@@ -19,7 +19,7 @@ function read(p) { return fs.readFileSync(p, 'utf8'); }
 function readJson(p) { return JSON.parse(read(p)); }
 
 const pkg = readJson(path.join(ROOT, 'package.json'));
-const app = { name: pkg.name || 'FuFumidi', version: pkg.version || '', license: pkg.license || 'UNKNOWN' };
+const app = { name: pkg.name || 'FuFumidi', license: pkg.license || 'UNKNOWN' };
 
 function parseSoundfonts() {
   const text = read(path.join(ROOT, 'main', 'soundfonts.js'));
@@ -106,9 +106,9 @@ function renderMd(data) {
   L.push('');
   L.push('## 应用');
   L.push('');
-  L.push('| 名称 | 版本 | 许可证 |');
-  L.push('| --- | --- | --- |');
-  L.push('| ' + data.app.name + ' | ' + data.app.version + ' | ' + data.app.license + ' |');
+  L.push('| 名称 | 许可证 |');
+  L.push('| --- | --- |');
+  L.push('| ' + data.app.name + ' | ' + data.app.license + ' |');
   L.push('');
   L.push('## 内置音色库');
   L.push('');
