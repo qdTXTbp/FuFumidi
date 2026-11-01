@@ -44,9 +44,15 @@ const PROGRAMS = [
   { id: 56, label: '小号' }, { id: 73, label: '长笛' }, { id: 80, label: '合成器' },
 ];
 const DEFAULT_KEYMAP = {
-  KeyZ: 48, KeyS: 49, KeyX: 50, KeyD: 51, KeyC: 52, KeyV: 53, KeyG: 54, KeyB: 55, KeyH: 56, KeyN: 57, KeyJ: 58, KeyM: 59,
-  KeyQ: 60, Digit2: 61, KeyW: 62, Digit3: 63, KeyE: 64, KeyR: 65, Digit5: 66, KeyT: 67, Digit6: 68, KeyY: 69, Digit7: 70, KeyU: 71, KeyI: 72,
+  // 低八度 C2–B2
+  KeyZ: 36, KeyS: 37, KeyX: 38, KeyD: 39, KeyC: 40, KeyV: 41, KeyG: 42, KeyB: 43, KeyH: 44, KeyN: 45, KeyJ: 46, KeyM: 47,
+  // 中八度 C3–B3
+  KeyQ: 48, Digit2: 49, KeyW: 50, Digit3: 51, KeyE: 52, KeyR: 53, Digit5: 54, KeyT: 55, Digit6: 56, KeyY: 57, Digit7: 58, KeyU: 59,
+  // 高八度 C4–B4
+  KeyA: 60, KeyF: 61, KeyK: 62, KeyL: 63, Semicolon: 64, Quote: 65, Comma: 66, Period: 67, Slash: 68, KeyI: 69, KeyO: 70, KeyP: 71,
 };
+const KEY_LABELS = { Semicolon: ';', Quote: "'", Comma: ',', Period: '.', Slash: '/', BracketLeft: '[', BracketRight: ']', Backslash: '\\', Minus: '-', Equal: '=' };
+function prettyKey(code) { return KEY_LABELS[code] || code.replace(/^Key/, '').replace(/^Digit/, ''); }
 const keyMap = reactive({ ...DEFAULT_KEYMAP });
 try { const saved = JSON.parse(localStorage.getItem('fufumidi_piano3d_keymap') || 'null'); if (saved && typeof saved === 'object') Object.assign(keyMap, saved); } catch (e) {}
 const keyLabels = ref([]);
@@ -116,7 +122,7 @@ function refreshSong() {
   game = s ? createGame(s) : null;
   Object.assign(stats, game ? game.stats() : { perfect:0,great:0,good:0,miss:0,combo:0,maxCombo:0,score:0,accuracy:0,judged:0,total:0 });
   const arr = [];
-  for (const [code, midi] of Object.entries(keyMap)) arr.push({ code: code.replace(/^Key/, '').replace(/^Digit/, ''), midi });
+  for (const [code, midi] of Object.entries(keyMap)) arr.push({ code, label: prettyKey(code), midi });
   keyLabels.value = arr.sort((a, b) => a.midi - b.midi);
 }
 function saveKeyMap() { try { localStorage.setItem('fufumidi_piano3d_keymap', JSON.stringify(keyMap)); } catch (e) {} }
@@ -151,7 +157,7 @@ function bindPending(code) {
   if (pendingBind.value == null) return;
   for (const [c, m] of Object.entries(keyMap)) if (m === pendingBind.value) delete keyMap[c];
   keyMap[code] = pendingBind.value; saveKeyMap(); refreshSong();
-  app.toast(t('键位已绑定') + '：' + code.replace(/^Key/, '').replace(/^Digit/, ''), 'ok');
+  app.toast(t('键位已绑定') + '：' + prettyKey(code), 'ok');
   pendingBind.value = null;
 }
 function resetKeymap() {
@@ -369,7 +375,7 @@ onBeforeUnmount(() => {
       <div class="p3d-page-body">
         <div class="p3d-bind-grid">
           <div v-for="l in keyLabels" :key="l.midi" class="p3d-bind-row" :class="{ waiting: pendingBind === l.midi }">
-            <span class="p3d-bind-key">{{ l.code }}</span>
+            <span class="p3d-bind-key">{{ l.label }}</span>
             <span class="p3d-bind-note">{{ noteName(l.midi) }}</span>
             <button class="chip-btn" @click="beginBind(l.midi)">{{ pendingBind === l.midi ? t('请按键…') : t('重新绑定') }}</button>
           </div>
@@ -385,32 +391,32 @@ onBeforeUnmount(() => {
       <span class="muted">{{ stats.perfect }}P / {{ stats.great }}G / {{ stats.good }}Gd / {{ stats.miss }}M</span>
     </div>
     <div class="p3d-labels">
-      <span v-for="l in keyLabels" :key="l.code" class="p3d-key" :class="{ active: noteActive(l.midi) }">{{ l.code }}</span>
+      <span v-for="l in keyLabels" :key="l.code" class="p3d-key" :class="{ active: noteActive(l.midi) }">{{ l.label }}</span>
     </div>
   </div>
 </template>
 
 <style scoped>
-.p3d { position:relative; width:100%; height:100%; min-height:560px; overflow:hidden; border-radius:18px; background:#050912; }
+.p3d { position:relative; width:100%; height:100%; min-height:560px; overflow:hidden; border-radius:var(--r-sm); background:var(--canvas); color:var(--text); }
 .p3d-canvas { position:absolute; inset:0; width:100%; height:100%; display:block; }
-.p3d-top { position:absolute; top:10px; left:12px; right:12px; z-index:5; display:flex; flex-direction:column; gap:5px; padding:7px 9px; border-radius:11px; background:rgba(5,12,24,.7); border:1px solid rgba(105,180,255,.16); backdrop-filter:blur(12px); color:#dff1ff; }
+.p3d-top { position:absolute; top:10px; left:12px; right:12px; z-index:5; display:flex; flex-direction:column; gap:6px; padding:8px 10px; border-radius:var(--r-sm); background:color-mix(in srgb, var(--panel) 86%, transparent); border:1px solid var(--hairline); box-shadow: var(--shadow-sm, 0 4px 18px rgba(0,0,0,.18)); backdrop-filter:blur(14px); color:var(--text); }
 .p3d-row { display:flex; align-items:center; flex-wrap:wrap; gap:6px; min-height:26px; }
-.p3d-top b { font-size:13px; } .p3d-sub { color:#7eabc9; font-size:11px; } .p3d-grow { flex:1; min-width:6px; }
-.p3d-rating { font-size:11px; color:#b9d8eb; } .p3d-rating b { color:#ffd166; font-size:15px; }
-.p3d-page { position:absolute; inset:0; z-index:20; display:flex; flex-direction:column; background:linear-gradient(180deg, rgba(5,11,22,.98), rgba(4,8,16,.99)); backdrop-filter:blur(16px); padding:18px 22px; }
-.p3d-page-head { display:flex; align-items:center; gap:10px; padding-bottom:12px; border-bottom:1px solid rgba(105,180,255,.2); color:#e4f6ff; }
-.p3d-page-head b { font-size:17px; }
+.p3d-top b { font-size:var(--fs-md,13px); color:var(--text); } .p3d-sub { color:var(--text3); font-size:var(--fs-xs,11px); } .p3d-grow { flex:1; min-width:6px; }
+.p3d-rating { font-size:var(--fs-xs,11px); color:var(--text2); } .p3d-rating b { color:var(--accent-sky, #6cc7ff); font-size:var(--fs-md,15px); }
+.p3d-page { position:absolute; inset:0; z-index:20; display:flex; flex-direction:column; background:color-mix(in srgb, var(--panel) 96%, transparent); backdrop-filter:blur(18px); padding:18px 22px; }
+.p3d-page-head { display:flex; align-items:center; gap:var(--sp-2,10px); padding-bottom:12px; border-bottom:1px solid var(--hairline); color:var(--text); }
+.p3d-page-head b { font-size:var(--fs-lg,17px); }
 .p3d-page-body { flex:1; overflow:auto; padding-top:14px; }
 .p3d-bind-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:8px; }
-.p3d-bind-row { display:flex; align-items:center; gap:10px; padding:8px 10px; border:1px solid rgba(105,180,255,.16); border-radius:9px; background:rgba(16,32,52,.55); color:#dff1ff; }
-.p3d-bind-row.waiting { border-color:#ffd166; box-shadow:0 0 14px rgba(255,209,102,.35); }
-.p3d-bind-key { min-width:34px; text-align:center; padding:2px 6px; border-radius:5px; border:1px solid rgba(105,180,255,.4); font:700 11px Consolas, monospace; color:#8fe1ff; }
-.p3d-bind-note { flex:1; color:#b9d8eb; font-size:12px; }
-.p3d-empty { position:absolute; inset:0; display:grid; place-items:center; color:#89b6d1; z-index:2; pointer-events:none; }
-.p3d-score { position:absolute; right:14px; bottom:48px; z-index:4; display:flex; align-items:center; gap:9px; padding:7px 11px; border-radius:10px; background:rgba(4,10,18,.76); border:1px solid rgba(120,210,255,.2); color:#dff1ff; font-size:11px; }
+.p3d-bind-row { display:flex; align-items:center; gap:var(--sp-2,10px); padding:8px 10px; border:1px solid var(--hairline); border-radius:var(--r-sm); background:color-mix(in srgb, var(--card) 82%, transparent); color:var(--text); }
+.p3d-bind-row.waiting { border-color:var(--accent-sky); box-shadow:0 0 16px color-mix(in srgb, var(--accent-sky) 36%, transparent); }
+.p3d-bind-key { min-width:34px; text-align:center; padding:2px 6px; border-radius:6px; border:1px solid color-mix(in srgb, var(--accent-sky) 42%, var(--hairline)); background:color-mix(in srgb, var(--accent-sky) 10%, transparent); font:700 var(--fs-xs,11px) Consolas, monospace; color:var(--accent-sky); }
+.p3d-bind-note { flex:1; color:var(--text2); font-size:var(--fs-xs,12px); }
+.p3d-empty { position:absolute; inset:0; display:grid; place-items:center; color:var(--text3); z-index:2; pointer-events:none; }
+.p3d-score { position:absolute; right:14px; bottom:48px; z-index:4; display:flex; align-items:center; gap:9px; padding:7px 11px; border-radius:var(--r-sm); background:color-mix(in srgb, var(--panel) 86%, transparent); border:1px solid var(--hairline); color:var(--text); font-size:var(--fs-xs,11px); }
 .p3d-score b { font-size:19px; color:#8fd6ff; } .p3d-grade { font-weight:800; color:#ffd166; min-width:50px; } .p3d-grade.miss { color:#ff7b7b; }
 .p3d-labels { position:absolute; left:20px; right:20px; bottom:10px; z-index:4; display:flex; justify-content:center; gap:5px; pointer-events:none; flex-wrap:wrap; }
-.p3d-key.active { background:#66d9ff !important; border-color:#e9fbff !important; color:#03111e !important; box-shadow:0 0 16px rgba(90,210,255,.95), 0 0 32px rgba(90,210,255,.45); transform:translateY(2px) scale(1.12); }
+.p3d-key.active { background:var(--accent-sky) !important; border-color:color-mix(in srgb, var(--accent-sky) 60%, white) !important; color:var(--on-accent, #03111e) !important; box-shadow:0 0 14px color-mix(in srgb, var(--accent-sky) 70%, transparent); transform:translateY(2px) scale(1.12); }
 .p3d-key { padding:2px 5px; transition:all .08s ease; border-radius:4px; border:1px solid rgba(120,210,255,.45); background:rgba(4,10,18,.62); color:#dff1ff; font:600 10px/1.1 Consolas, monospace; }
 .p3d-hint { position:absolute; left:16px; bottom:42px; z-index:4; color:#75a3bd; font-size:11px; pointer-events:none; }
 </style>
