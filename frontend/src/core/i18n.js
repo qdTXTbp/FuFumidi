@@ -6780,6 +6780,11 @@ export const I18N_MAP = {
   'Verovio 组件加载失败': 'Failed to load Verovio component',
   'Verovio 组件未加载（离线资源缺失）': 'Verovio component not loaded (offline resource missing)',
   'WAV（默认）': 'WAV (default)',
+  '3D 钢琴': '3D Piano',
+  '还没有可演奏的曲目': 'No song loaded for performance',
+  '外接电钢琴直接弹': 'Play directly with a digital piano',
+  '选择 MIDI 键盘': 'Select MIDI keyboard',
+  '已连接': 'Connected',
 };
 
 /* 语言状态（响应式：切语言后 t() 返回值变化，Vue 模板自动重渲染） */

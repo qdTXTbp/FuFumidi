@@ -8,6 +8,7 @@ import { FX_DEFAULT_COLORS } from '../core/palette.js';
 const app = useAppStore();
 const currentSong = computed(() => app.currentSong);
 import Icon from '../components/Icon.vue';
+import Piano3D from '../components/viz/Piano3D.vue';
 // ★ 必须用 drawVizWaterfallPost：它内部才是"场景 + 后处理泛光"的完整一帧。
 //   直接调 drawVizWaterfall 会得到"实时没有泛光、导出有"（或反过来）—— 预览与成片就不一致了。
 // ★ 重做后走新门面 core/viz/index.js（图元层 + 光栅器 + 后处理）。
@@ -19,7 +20,7 @@ import { COLOR_MODES, COLOR_PRESETS, COLOR_PARAMS } from '../core/viz/state/colo
 import { t } from '../core/i18n.js';
 import NumSlider from '../components/NumSlider.vue';
 
-const mode = ref('dash'); // 'dash' | 'waterfall'
+const mode = ref('dash'); // 'dash' | 'waterfall' | 'piano3d'
 const wfZoom = ref(1);
 const immersive = ref(false);
 
@@ -562,6 +563,7 @@ onBeforeUnmount(() => {
           <span class="dot" style="background:var(--brand-coral)"></span><b>{{ t('音符瀑布') }}</b>
           <button class="chip-btn" :class="{ 'active': mode === 'dash' }" data-guide="viz-modes" @click="mode = 'dash'">{{ t('仪表盘') }}</button>
           <button class="chip-btn" :class="{ 'active': mode === 'waterfall' }" data-guide="viz-waterfall" @click="mode = 'waterfall'">{{ t('瀑布流') }}</button>
+          <button class="chip-btn" :class="{ 'active': mode === 'piano3d' }" data-guide="viz-piano3d" @click="mode = 'piano3d'">{{ t('3D 钢琴') }}</button>
           <!-- 配色原本是工具栏上一个单独循环的 chip；用户要求「配色归入视效」——
                它本来就是视效的一部分（轨道色 / 按音高推导的两套 HSL），现在住进视效面板。 -->
           <!-- 背景：主题 / 纯色 / 图片 / 透明（叠加层）。SeeMusic 那类软件把"背景图 + 模糊"
@@ -679,7 +681,8 @@ onBeforeUnmount(() => {
           <!-- ★ 画布自己有一层 CSS 底色（.vc-body canvas 的 background）—— 透明档只 clearRect
                是没用的，元素底色照样透不出来。所以透明档必须把画布元素的底色也去掉，
                并由容器铺 --canvas（否则透出的是卡片那层半透明白，和沉浸态不一致）。 -->
-          <canvas id="vizRoll" :class="{ 'cv-transparent': bg.mode === 'transparent' || bg.mode === 'we' }"></canvas>
+          <canvas v-if="mode !== 'piano3d'" id="vizRoll" :class="{ 'cv-transparent': bg.mode === 'transparent' || bg.mode === 'we' }"></canvas>
+          <Piano3D v-if="mode === 'piano3d'" :song="currentSong" />
           <div v-if="!currentSong" class="viz-empty" role="status">
             <b>{{ t('还没有可播放的曲目') }}</b>
             <span>{{ t('载入一首曲目后，这里会显示音符瀑布与实时频谱。') }}</span>
@@ -702,7 +705,7 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <div class="viz-grid" v-if="!isWaterfall">
+      <div class="viz-grid" v-if="!isWaterfall && mode !== 'piano3d'">
         <div class="viz-card card">
           <div class="vc-head"><span class="dot" style="background:var(--brand-blue)"></span><b>{{ t('频谱瀑布') }}</b><span class="muted small" style="margin-left:auto">{{ t('竖直下落') }}</span></div>
           <div class="vc-body"><canvas id="vizSpectrum"></canvas></div>
@@ -761,6 +764,8 @@ onBeforeUnmount(() => {
 /* ★ fixed + inset:0：实测旧写法在沉浸态下画面**下移 61px（顶栏高度）、右侧留 10px（滚动条槽）**——
    只写 padding:0/max-width:none 管不到父容器的内边距与滚动条。铺满由这里保证，不靠外层。 */
 .viz-page.immersive { position: fixed; inset: 0; z-index: 30; padding: 0; max-width: none; background: var(--canvas); }
+.viz-page.piano3d .viz-hero { flex:1; }
+.viz-page.piano3d .vc-body { flex:1; height:auto; min-height:360px; }
 .viz-page.immersive .viz-hero {
   border: 0; border-radius: 0; background: transparent; box-shadow: none; padding: 0;
 }
