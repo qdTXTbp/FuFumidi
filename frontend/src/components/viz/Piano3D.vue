@@ -54,6 +54,11 @@ let rendererCtx = null, mouseNote = null;
 const renderState = {};
 const activeInput = ref([]);
 const WHITE_MIDI = Array.from({ length: 88 }, (_, i) => 21 + i).filter(m => ![1,3,6,8,10].includes(m % 12));
+const BLACK_MIDI = Array.from({ length: 88 }, (_, i) => 21 + i).filter(m => [1,3,6,8,10].includes(m % 12));
+const BLACK_CENTERS = BLACK_MIDI.map(m => {
+  const i = WHITE_MIDI.indexOf(m - 1);
+  return { midi: m, u: (i + 1) / WHITE_MIDI.length };
+});
 
 function activeSong() {
   const demo = DEMO_SONGS.find(d => d.id === demoId.value);
@@ -245,6 +250,13 @@ function midiAt(ev) {
   const x = (ev.clientX - r.left) / Math.max(1, r.width);
   const y = (ev.clientY - r.top) / Math.max(1, r.height);
   if (y < .55) return null;
+  const kw = 1 / WHITE_MIDI.length;
+  // 黑键在键盘上半段：先找最近的黑键中心，命中就返回黑键，否则回落白键。
+  if (y < .88) {
+    let best = null, bd = Infinity;
+    for (const b of BLACK_CENTERS) { const d = Math.abs(x - b.u); if (d < bd) { bd = d; best = b; } }
+    if (best && bd <= kw * 0.34) return best.midi;
+  }
   const i = Math.max(0, Math.min(WHITE_MIDI.length - 1, Math.floor(x * WHITE_MIDI.length)));
   return WHITE_MIDI[i];
 }
