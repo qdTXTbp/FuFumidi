@@ -6793,6 +6793,10 @@ export const I18N_MAP = {
   '12 轨': '12 tracks',
   '16 轨': '16 tracks',
   '全部候选': 'All candidates',
+  '自由演奏': 'Free play',
+  '音游模式': 'Rhythm game',
+  '连击': 'Combo',
+  '准确率': 'Accuracy',
 };
 
 /* 语言状态（响应式：切语言后 t() 返回值变化，Vue 模板自动重渲染） */

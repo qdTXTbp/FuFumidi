@@ -1,9 +1,10 @@
 <script setup>
-import { ref, onMounted, onBeforeUnmount, computed } from 'vue';
+import { ref, reactive, watch, onMounted, onBeforeUnmount } from 'vue';
 import * as THREE from 'three';
 import { useAppStore } from '../../stores/app';
 import { t } from '../../core/i18n.js';
 import { listMidiInputs, selectMidiInput } from '../../core/midiin.js';
+import { createGame } from '../../core/piano3d/game.js';
 
 const props = defineProps({ song: { type: Object, default: null } });
 const app = useAppStore();
@@ -11,6 +12,10 @@ const host = ref(null);
 const devices = ref([]);
 const deviceId = ref('');
 const midiStatus = ref('');
+const gameMode = ref('free');   // free | game
+const stats = reactive({ perfect:0, great:0, good:0, miss:0, combo:0, maxCombo:0, score:0, accuracy:0, judged:0, total:0 });
+let game = null;
+let lastStatsAt = 0;
 
 let renderer, scene, camera, raf = 0;
 let keys = [];                 // { midi, mesh, black, x }
@@ -99,10 +104,21 @@ function animate() {
   }
   const nowSec = (() => { try { return app.curSec || 0; } catch (e) { return 0; } })();
   updateBars(nowSec);
+  if (gameMode.value === 'game' && game) {
+    game.tick(nowSec);
+    if (now - lastStatsAt > 100) { lastStatsAt = now; Object.assign(stats, game.stats()); }
+  }
   renderer.render(scene, camera);
 }
 
-const midiDown = (n) => { pressed.set(n, performance.now() + 180); };
+function refreshGame() { game = props.song && props.song.song ? createGame(props.song.song) : null; Object.assign(stats, game ? game.stats() : { perfect:0,great:0,good:0,miss:0,combo:0,maxCombo:0,score:0,accuracy:0,judged:0,total:0 }); }
+const midiDown = (n) => {
+  pressed.set(n, performance.now() + 180);
+  if (gameMode.value === 'game' && game) {
+    game.input(n, app.curSec || 0);
+    Object.assign(stats, game.stats());
+  }
+};
 const midiUp = (n) => { /* visual key stays for 180ms */ };
 
 async function refreshDevices() {
@@ -137,12 +153,13 @@ onMounted(async () => {
   const amb = new THREE.HemisphereLight(0xaad4ff, 0x10131c, 1.1); scene.add(amb);
   const key = new THREE.DirectionalLight(0xbfe6ff, 2.2); key.position.set(-4, 8, 6); key.castShadow = true; scene.add(key);
   const rim = new THREE.PointLight(0x6a7cff, 2.2, 30); rim.position.set(5, 2, -4); scene.add(rim);
-  buildPiano(); makeBars();
+  buildPiano(); makeBars(); refreshGame();
   resize(); window.addEventListener('resize', resize);
   await refreshDevices();
   if (deviceId.value) await chooseDevice();
   animate();
 });
+watch(() => props.song, () => refreshGame());
 onBeforeUnmount(() => {
   cancelAnimationFrame(raf); window.removeEventListener('resize', resize);
   try { selectMidiInput('', {}); } catch (e) {}
@@ -162,9 +179,20 @@ onBeforeUnmount(() => {
         <option v-for="d in devices" :key="d.id" :value="d.id">{{ d.name }}</option>
       </select>
       <button class="chip-btn" @click="refreshDevices">{{ t('刷新') }}</button>
+      <select v-model="gameMode" class="select-input" style="width:96px">
+        <option value="free">{{ t('自由演奏') }}</option>
+        <option value="game">{{ t('音游模式') }}</option>
+      </select>
       <span class="muted small">{{ midiStatus }}</span>
     </div>
     <div v-if="!song" class="viz-empty" role="status"><b>{{ t('还没有可演奏的曲目') }}</b></div>
+    <div v-if="song && gameMode === 'game'" class="piano3d-score">
+      <span class="piano3d-grade" :class="stats.lastGrade">{{ stats.lastGrade || 'READY' }}</span>
+      <b>{{ stats.score }}</b>
+      <span>{{ t('连击') }} {{ stats.combo }}</span>
+      <span>{{ t('准确率') }} {{ stats.accuracy }}%</span>
+      <span class="muted">{{ stats.perfect }}P / {{ stats.great }}G / {{ stats.good }}Gd / {{ stats.miss }}M</span>
+    </div>
   </div>
 </template>
 
@@ -173,4 +201,8 @@ onBeforeUnmount(() => {
 .piano3d-host canvas { display:block; width:100%; height:100%; }
 .piano3d-hud { position:absolute; top:10px; left:12px; right:12px; display:flex; align-items:center; gap:8px; z-index:2; padding:8px 10px; border-radius:10px; background:rgba(8,14,26,.72); border:1px solid rgba(120,180,255,.18); backdrop-filter:blur(10px); }
 .piano3d-hud b { color:#dff1ff; font-size:13px; }
+.piano3d-score { position:absolute; right:16px; bottom:16px; display:flex; align-items:center; gap:10px; padding:8px 12px; border-radius:10px; background:rgba(8,14,26,.78); border:1px solid rgba(120,180,255,.2); color:#dff1ff; font-size:12px; z-index:2; }
+.piano3d-score b { font-size:20px; color:#8fd6ff; }
+.piano3d-grade { font-weight:800; color:#ffd166; min-width:58px; }
+.piano3d-grade.miss { color:#ff7b7b; }
 </style>
