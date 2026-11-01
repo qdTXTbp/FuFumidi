@@ -26,6 +26,9 @@ const hasSong = ref(false);
 const rating = ref(null);
 const stats = reactive({ perfect:0, great:0, good:0, miss:0, combo:0, maxCombo:0, score:0, accuracy:0, judged:0, total:0 });
 const recording = ref(false);
+const localPlaying = ref(false);
+const playStart = ref(0);
+const flashNotes = new Map();
 const recordedNotes = ref(0);
 const lastTake = ref(null);
 const mappingMode = ref(false);
@@ -55,8 +58,18 @@ function activeSong() {
   return demo ? buildDemoSong(demo) : (props.song && props.song.song ? props.song.song : null);
 }
 function currentSec() {
-  if (demoPlaying.value && demoId.value) return (performance.now() - demoStart) / 1000;
-  try { return app.curSec || 0; } catch (e) { return 0; }
+  if ((demoPlaying.value || localPlaying.value) && hasSong.value) return (performance.now() - playStart.value) / 1000;
+  return 0;
+}
+function noteActive(midi) {
+  if (activeInput.value.includes(midi)) return true;
+  return (flashNotes.get(midi) || 0) > performance.now();
+}
+function activeNoteList() {
+  const now = performance.now();
+  const set = new Set(activeInput.value);
+  for (const [m, until] of flashNotes) if (until > now) set.add(m);
+  return [...set].map(midi => ({ midi }));
 }
 function refreshSong() {
   const s = activeSong();
@@ -80,6 +93,7 @@ function playSound(midi, dur = .3) {
 }
 function pressNote(n) {
   if (n == null) return;
+  flashNotes.set(n, performance.now() + 420);
   if (!activeInput.value.includes(n)) activeInput.value.push(n);
   playSound(n, .28);
   if (recording.value && recorder) { try { recorder.noteOn(n, 100, performance.now()); } catch (e) {} }
@@ -105,12 +119,21 @@ function keyUp(e) { const n = keyMap[e.code]; if (n != null) releaseNote(n); }
 function startDemo() {
   stopDemo();
   const demo = DEMO_SONGS.find(d => d.id === demoId.value); if (!demo) return;
-  demoPlaying.value = true; demoStart = performance.now(); refreshSong();
+  demoPlaying.value = true; localPlaying.value = true; playStart.value = performance.now(); refreshSong();
   const song = buildDemoSong(demo);
   for (const n of demo.notes) demoTimers.push(setTimeout(() => playSound(n.pitch, Math.max(.08, song.baseSec(n.end) - song.baseSec(n.start))), song.baseSec(n.start) * 1000));
 }
-function stopDemo() { demoTimers.forEach(clearTimeout); demoTimers = []; demoPlaying.value = false; }
-function toggleDemo() { if (demoPlaying.value) stopDemo(); else startDemo(); }
+function stopDemo() { demoTimers.forEach(clearTimeout); demoTimers = []; demoPlaying.value = false; localPlaying.value = false; }
+function startLocal() {
+  if (!hasSong.value) return;
+  stopDemo();
+  localPlaying.value = true; playStart.value = performance.now(); refreshSong();
+}
+function stopLocal() { localPlaying.value = false; }
+function toggleDemo() {
+  if (demoPlaying.value || localPlaying.value) { stopDemo(); return; }
+  if (demoId.value) startDemo(); else startLocal();
+}
 function selectDemo() { stopDemo(); refreshSong(); }
 function startRec() {
   if (recording.value) return;
@@ -195,13 +218,14 @@ onMounted(async () => {
   cv.value.addEventListener('pointermove', onPointerMove);
   cv.value.addEventListener('pointerup', onPointerUp);
   cv.value.addEventListener('pointercancel', onPointerUp);
+  try { if (app.playing) await app.togglePlay(); } catch (e) {}
   draw();
   try { await refreshDevices(); if (deviceId.value) await chooseDevice(); } catch (e) { midiStatus.value = t('MIDI 初始化失败'); }
 });
 watch(() => props.song, () => { if (!demoId.value) { stopDemo(); refreshSong(); } });
 watch(() => demoId, () => refreshSong());
 onBeforeUnmount(() => {
-  cancelAnimationFrame(raf); stopDemo(); window.removeEventListener('resize', resize);
+  cancelAnimationFrame(raf); stopDemo(); localPlaying.value = false; window.removeEventListener('resize', resize);
   window.removeEventListener('keydown', keyDown); window.removeEventListener('keyup', keyUp);
   try { cv.value.removeEventListener('pointerdown', onPointerDown); cv.value.removeEventListener('pointermove', onPointerMove); cv.value.removeEventListener('pointerup', onPointerUp); cv.value.removeEventListener('pointercancel', onPointerUp); } catch (e) {}
   try { selectMidiInput('', {}); } catch (e) {}
@@ -220,7 +244,7 @@ onBeforeUnmount(() => {
           <option value="">{{ t('当前导入曲目') }}</option>
           <option v-for="d in DEMO_SONGS" :key="d.id" :value="d.id">{{ d.name }}</option>
         </select>
-        <button class="chip-btn" :disabled="!demoId" @click="toggleDemo">{{ demoPlaying ? t('停止示范') : t('播放示范') }}</button>
+        <button class="chip-btn" :disabled="!hasSong" @click="toggleDemo">{{ demoPlaying || localPlaying ? t('暂停') : t('播放') }}</button>
         <span v-if="rating" class="p3d-rating">{{ t('难度') }} <b>{{ rating.level }}</b>/10 · {{ rating.label }}</span>
       </div>
       <div class="p3d-row">
@@ -258,7 +282,7 @@ onBeforeUnmount(() => {
       <span class="muted">{{ stats.perfect }}P / {{ stats.great }}G / {{ stats.good }}Gd / {{ stats.miss }}M</span>
     </div>
     <div class="p3d-labels">
-      <span v-for="l in keyLabels" :key="l.code" class="p3d-key" :class="{ active: activeInput.includes(l.midi) }">{{ l.code }}</span>
+      <span v-for="l in keyLabels" :key="l.code" class="p3d-key" :class="{ active: noteActive(l.midi) }">{{ l.code }}</span>
     </div>
   </div>
 </template>
