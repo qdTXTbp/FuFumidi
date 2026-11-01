@@ -232,6 +232,7 @@ function draw() {
       theme: {}, bg: {},
     });
   } catch (e) {}
+  drawPressedKeys(ctx, w, h);
   if (gameMode.value === 'game' && game) {
     game.tick(sec);
     const now = performance.now();
@@ -261,6 +262,29 @@ function onPointerMove(ev) {
   if (midi != null && midi !== mouseNote) { releaseNote(mouseNote); mouseNote = midi; pressNote(midi); }
 }
 function onPointerUp() { if (mouseNote != null) { releaseNote(mouseNote); mouseNote = null; } }
+function drawPressedKeys(ctx, w, h) {
+  const notes = activeNoteList(); if (!notes.length) return;
+  const kw = w / WHITE_MIDI.length;
+  const top = h - 70;
+  ctx.save();
+  for (const n of notes) {
+    const midi = n.midi;
+    const idx = WHITE_MIDI.indexOf(midi);
+    if (idx < 0) continue;
+    const x = idx * kw;
+    ctx.shadowColor = 'rgba(90,220,255,.95)'; ctx.shadowBlur = 22;
+    const grad = ctx.createLinearGradient(0, top, 0, h - 8);
+    grad.addColorStop(0, 'rgba(225,250,255,.92)');
+    grad.addColorStop(.55, 'rgba(95,215,255,.72)');
+    grad.addColorStop(1, 'rgba(25,120,190,.30)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(x + 1.2, top + 6, Math.max(2, kw - 2.4), h - top - 12);
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = 'rgba(230,252,255,.9)'; ctx.lineWidth = 1;
+    ctx.strokeRect(x + 1.2, top + 6, Math.max(2, kw - 2.4), h - top - 12);
+  }
+  ctx.restore();
+}
 function resize() { rendererCtx = null; }
 onMounted(async () => {
   refreshSong(); window.addEventListener('resize', resize);
