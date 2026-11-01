@@ -4,7 +4,7 @@ const C4 = 60, D4 = 62, E4 = 64, F4 = 65, G4 = 67, A4 = 69, B4 = 71, C5 = 72;
 const def = (id, name, bpm, seq) => {
   let tick = 0;
   const notes = seq.map(([pitch, beats]) => {
-    const n = { start: tick, end: tick + Math.max(1, Math.round(beats * 480)), pitch, vel: 88, ch: 0 };
+    const n = { start: tick, end: tick + Math.max(1, Math.round(beats * 480)), pitch, midi: pitch, vel: 88, ch: 0 };
     tick += Math.max(1, Math.round(beats * 480));
     return n;
   });

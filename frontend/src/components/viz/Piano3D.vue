@@ -47,7 +47,7 @@ const keyMap = reactive({ ...DEFAULT_KEYMAP });
 try { const saved = JSON.parse(localStorage.getItem('fufumidi_piano3d_keymap') || 'null'); if (saved && typeof saved === 'object') Object.assign(keyMap, saved); } catch (e) {}
 const keyLabels = ref([]);
 
-let raf = 0, game = null, recorder = null, demoTimers = [], demoStart = 0, lastHud = 0;
+let raf = 0, game = null, recorder = null, demoTimers = [], demoStart = 0, lastHud = 0, localTimers = [];
 let rendererCtx = null, mouseNote = null;
 const renderState = {};
 const activeInput = ref([]);
@@ -123,13 +123,30 @@ function startDemo() {
   const song = buildDemoSong(demo);
   for (const n of demo.notes) demoTimers.push(setTimeout(() => playSound(n.pitch, Math.max(.08, song.baseSec(n.end) - song.baseSec(n.start))), song.baseSec(n.start) * 1000));
 }
-function stopDemo() { demoTimers.forEach(clearTimeout); demoTimers = []; demoPlaying.value = false; localPlaying.value = false; }
+function stopDemo() { demoTimers.forEach(clearTimeout); demoTimers = []; clearLocalTimers(); demoPlaying.value = false; localPlaying.value = false; }
+function clearLocalTimers() { localTimers.forEach(clearTimeout); localTimers = []; }
+function scheduleSong(song, fromSec) {
+  clearLocalTimers();
+  if (!song || !song.tracks) return;
+  const base = typeof song.baseSec === 'function' ? song.baseSec.bind(song) : (t => t / (song.tpb || 480));
+  let n = 0;
+  for (const tr of song.tracks) for (const x of (tr.notes || [])) {
+    const pitch = x.pitch != null ? x.pitch : x.midi;
+    const st = base(x.start || 0);
+    if (!Number.isFinite(pitch) || !Number.isFinite(st) || st < fromSec - 0.2) continue;
+    if (++n > 5000) return;
+    const dur = Math.max(.08, base(x.end != null ? x.end : x.start || 0) - st);
+    localTimers.push(setTimeout(() => playSound(pitch, dur), Math.max(0, (st - fromSec) * 1000)));
+  }
+}
 function startLocal() {
   if (!hasSong.value) return;
   stopDemo();
+  const song = activeSong();
   localPlaying.value = true; playStart.value = performance.now(); refreshSong();
+  scheduleSong(song, 0);
 }
-function stopLocal() { localPlaying.value = false; }
+function stopLocal() { localPlaying.value = false; clearLocalTimers(); }
 function toggleDemo() {
   if (demoPlaying.value || localPlaying.value) { stopDemo(); return; }
   if (demoId.value) startDemo(); else startLocal();
@@ -192,7 +209,7 @@ function midiAt(ev) {
   const r = el.getBoundingClientRect();
   const x = (ev.clientX - r.left) / Math.max(1, r.width);
   const y = (ev.clientY - r.top) / Math.max(1, r.height);
-  if (y < .70) return null;
+  if (y < .55) return null;
   const i = Math.max(0, Math.min(WHITE_MIDI.length - 1, Math.floor(x * WHITE_MIDI.length)));
   return WHITE_MIDI[i];
 }
@@ -225,7 +242,7 @@ onMounted(async () => {
 watch(() => props.song, () => { if (!demoId.value) { stopDemo(); refreshSong(); } });
 watch(() => demoId, () => refreshSong());
 onBeforeUnmount(() => {
-  cancelAnimationFrame(raf); stopDemo(); localPlaying.value = false; window.removeEventListener('resize', resize);
+  cancelAnimationFrame(raf); stopDemo(); clearLocalTimers(); localPlaying.value = false; window.removeEventListener('resize', resize);
   window.removeEventListener('keydown', keyDown); window.removeEventListener('keyup', keyUp);
   try { cv.value.removeEventListener('pointerdown', onPointerDown); cv.value.removeEventListener('pointermove', onPointerMove); cv.value.removeEventListener('pointerup', onPointerUp); cv.value.removeEventListener('pointercancel', onPointerUp); } catch (e) {}
   try { selectMidiInput('', {}); } catch (e) {}
