@@ -526,7 +526,7 @@ L 'app started'
       try { source = await pickUpdateSource(ch); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
       _t('source=' + source);
       try {
-        const upd = spawn(updaterPath, ['-I', '-O', '--source', source], { cwd: updaterDir, detached: true, stdio: 'ignore' });
+        const upd = spawn(updaterPath, ['-I', '-O', '-D', updaterDir, '--source', source], { cwd: updaterDir, detached: true, stdio: 'ignore' });
         upd.on('error', (e) => _t('updater spawn error: ' + String((e && e.message) || e)));
         upd.unref();
         _t('updater spawned pid=' + upd.pid);

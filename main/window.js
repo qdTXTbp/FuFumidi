@@ -14,7 +14,7 @@ function createWindow({ BrowserWindow, shell, pluginHost, rootDir }) {
     minHeight: 640,
     backgroundColor: '#0a0f18',
     autoHideMenuBar: true,
-    show: true,
+    show: false,
     title: 'FuFumidi',
     // ★ 图标必须解析到**真实磁盘文件**：打包后 rootDir 在 app.asar 内，而 build/ 不进包，
     //   `rootDir/build/icon.png` 解析不到 → Electron 用空图标覆盖 exe 自带图标 →
@@ -42,7 +42,31 @@ function createWindow({ BrowserWindow, shell, pluginHost, rootDir }) {
     },
   });
 
-  win.once('ready-to-show', () => win.show());
+  // 冷启动 splash（6.5.0 恢复）：6.4.4 的 preload 没有 rendererReady，
+  // 因此主窗口 ready-to-show 后至少展示 600ms，再切主窗口。
+  let splash = null;
+  try {
+    splash = new BrowserWindow({
+      width: 520, height: 286, frame: false, resizable: false, movable: false,
+      minimizable: false, maximizable: false, alwaysOnTop: true, skipTaskbar: true,
+      show: false, backgroundColor: "#0a0f18", hasShadow: true,
+      webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: false, devTools: false },
+    });
+    const splashHtml = fs.readFileSync(path.join(rootDir, "main", "splash.html"), "utf8");
+    splash.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(splashHtml));
+    splash.once("ready-to-show", () => { try { splash.show(); } catch (_) {} });
+  } catch (_) { splash = null; }
+  let mainShown = false;
+  const closeSplash = () => { try { if (splash && !splash.isDestroyed()) splash.destroy(); } catch (_) {} splash = null; };
+  const showMain = () => {
+    if (mainShown) return;
+    mainShown = true;
+    try { if (!win.isDestroyed()) win.show(); } catch (_) {}
+    closeSplash();
+  };
+  win.once("ready-to-show", () => setTimeout(showMain, 600));
+  win.webContents.once("did-fail-load", closeSplash);
+  setTimeout(showMain, 15000);
   // 渲染器就绪后补发插件渲染脚本（registerPluginsIpc 在窗口创建前已 loadAll，
   // 首次广播会落在渲染器监听之前而丢失，这里重播兜底）
   win.webContents.on('did-finish-load', () => {
