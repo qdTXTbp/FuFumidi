@@ -742,6 +742,12 @@ onMounted(() => {
   // 会读该引用选择音色库，曾因晚于音频初始化导致重启后回退内置音色（另有 localStorage 兜底）
   loadWallpaper();
   Promise.resolve(restoreSongs()).finally(() => {
+      // 渲染层把曲库/主题/会话恢复完后再通知主进程关闭 splash；
+      // splash 的时长由此与真实加载时间挂钩，而不是固定秒数。
+      try {
+        const notifyReady = () => { try { if (window.fuBridge && window.fuBridge.rendererReady) window.fuBridge.rendererReady(); } catch (e) {} };
+        setTimeout(notifyReady, 260);
+      } catch (e) {}
     try {
       tabsStore.hydrate((state.songs || []).map((s) => s.id));
       if (state.currentId) tabsStore.open(state.currentId, (state.songs.find((s) => s.id === state.currentId) || {}).name || state.currentId);

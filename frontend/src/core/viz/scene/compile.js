@@ -68,6 +68,9 @@ export function createCompiler() {
   }
 
   function compile(song, tick, opts = {}) {
+    const wallNow = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    const wallDt = state.lastWall ? Math.min(0.05, Math.max(0, (wallNow - state.lastWall) / 1000)) : 0;
+    state.lastWall = wallNow;
     const w = opts.w || 960, h = opts.h || 540;
     const theme = resolveTheme(opts.theme || 'studio');
     const fx = opts.fx || {};
@@ -344,7 +347,7 @@ export function createCompiler() {
              所以纯几何单测里传 {gv:1} 仍然成立）。 */
           const target = on ? 1 : 0;
           const prevD = state.lastD < 0 ? d : state.lastD;
-          const frameDt = d - prevD;
+          const frameDt = opts.wallClock ? wallDt : (d - prevD);
           let pp = state.press.get(pitch);
           if (!pp) { pp = { p: 0, v: 0 }; state.press.set(pitch, pp); }
           // ★ 只在"时间真的前进了"时积分：同一 tick 连编两次（确定性单测）必须给出同样的图元

@@ -5,6 +5,7 @@
 
 const path = require('path');
 const fs = require('fs');
+const { ipcMain } = require('electron');
 
 function createWindow({ BrowserWindow, shell, pluginHost, rootDir }) {
   const win = new BrowserWindow({
@@ -64,8 +65,12 @@ function createWindow({ BrowserWindow, shell, pluginHost, rootDir }) {
     try { if (!win.isDestroyed()) win.show(); } catch (_) {}
     closeSplash();
   };
-  win.once("ready-to-show", () => setTimeout(showMain, 600));
-  win.webContents.once("did-fail-load", closeSplash);
+  // 生产环境等渲染层真正把曲库/设置恢复完再切主窗口，而不是固定 600ms 关 splash。
+  const onRendererReady = () => { console.log('[splash] renderer-ready'); showMain(); };
+  try { ipcMain.on('app:renderer-ready', onRendererReady); } catch (_) {}
+  win.once('closed', () => { try { ipcMain.removeListener('app:renderer-ready', onRendererReady); } catch (_) {} });
+  win.webContents.once('ready-to-show', () => { if (!splash) showMain(); });
+  win.webContents.once('did-fail-load', showMain);
   setTimeout(showMain, 15000);
   // 渲染器就绪后补发插件渲染脚本（registerPluginsIpc 在窗口创建前已 loadAll，
   // 首次广播会落在渲染器监听之前而丢失，这里重播兜底）

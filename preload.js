@@ -398,6 +398,7 @@ contextBridge.exposeInMainWorld('fuBridge', {
   dbCloudSongDir: () => ipcRenderer.invoke('db:cloud-song:dir'),
   // 应用事件通知（song-loaded / view-changed 等 → 插件事件钩子）
   notify: (ev, payload) => ipcRenderer.send('app:event', ev, payload),
+  rendererReady: () => ipcRenderer.send('app:renderer-ready'),
   // E2E 测试实例标记（scripts/e2e）：只有 FUFUMIDI_E2E=1 时为 true。
   // 渲染进程据此注册 window.__fufumidiE2E 的最小测试钩子；正常启动不注册任何东西。
   e2e: process.env.FUFUMIDI_E2E === '1',
