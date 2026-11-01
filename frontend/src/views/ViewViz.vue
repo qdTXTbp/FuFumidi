@@ -764,7 +764,8 @@ onBeforeUnmount(() => {
 /* ★ fixed + inset:0：实测旧写法在沉浸态下画面**下移 61px（顶栏高度）、右侧留 10px（滚动条槽）**——
    只写 padding:0/max-width:none 管不到父容器的内边距与滚动条。铺满由这里保证，不靠外层。 */
 .viz-page.immersive { position: fixed; inset: 0; z-index: 30; padding: 0; max-width: none; background: var(--canvas); }
-.viz-page.piano3d .viz-hero { flex:1 1 auto; min-height:0; }
+.viz-page.piano3d .viz-hero { flex:1 1 auto; min-height:0; background:var(--panel); overflow:hidden; }
+.viz-page.piano3d .vc-head { position:relative; z-index:10; background:var(--panel); }
 .viz-page.piano3d .vc-body { flex:1 1 auto; height:calc(100vh - 250px); min-height:520px; }
 .viz-page.immersive .viz-hero {
   border: 0; border-radius: 0; background: transparent; box-shadow: none; padding: 0;

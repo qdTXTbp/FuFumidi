@@ -142,9 +142,10 @@ function refreshLabels() {
     g.fillStyle = '#dff6ff'; g.font = 'bold 30px Consolas, monospace'; g.textAlign = 'center'; g.textBaseline = 'middle';
     g.fillText(label, 64, 33);
     const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
-    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
-    sp.position.set(midiToX(k.midi), 0.42, k.black ? 0.28 : 0.72);
-    sp.scale.set(0.44, 0.22, 1); sp.renderOrder = 5;
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false }));
+    sp.frustumCulled = false; sp.material.depthTest = false;
+    sp.position.set(midiToX(k.midi), 0.62, k.black ? 0.36 : 0.86);
+    sp.scale.set(0.34, 0.17, 1); sp.renderOrder = 20;
     scene.add(sp); labelSprites.push(sp);
   }
 }
@@ -174,12 +175,12 @@ function midiToX(m) {
   const whiteIndex = [];
   for (let n = 21; n <= 108; n++) if (![1,3,6,8,10].includes(n % 12)) whiteIndex.push(n);
   const idx = whiteIndex.indexOf(m);
-  if (idx >= 0) return (idx - (whiteIndex.length - 1) / 2) * 0.235;
+  if (idx >= 0) return (idx - (whiteIndex.length - 1) / 2) * 0.15;
   // 黑键落在相邻白键之间
   let prev = m - 1;
   while (!whiteIndex.includes(prev) && prev > 21) prev--;
   const i = whiteIndex.indexOf(prev);
-  return (i - (whiteIndex.length - 1) / 2 + 0.5) * 0.235;
+  return (i - (whiteIndex.length - 1) / 2 + 0.5) * 0.15;
 }
 
 function isBlack(m) { return [1,3,6,8,10].includes(m % 12); }
@@ -189,7 +190,7 @@ function buildPiano() {
   const blackMat = new THREE.MeshStandardMaterial({ color: '#11151c', roughness: 0.28, metalness: 0.15 });
   for (let m = 21; m <= 108; m++) {
     const black = isBlack(m);
-    const w = black ? 0.145 : 0.215;
+    const w = black ? 0.095 : 0.14;
     const h = black ? 0.28 : 0.16;
     const d = black ? 0.9 : 1.35;
     const geo = new THREE.BoxGeometry(w, h, d);
@@ -200,7 +201,7 @@ function buildPiano() {
     keys.push({ midi: m, mesh, black, baseY: mesh.position.y });
   }
   // 琴体
-  const body = new THREE.Mesh(new THREE.BoxGeometry(12.2, 0.85, 2.6), new THREE.MeshStandardMaterial({ color: '#080b12', roughness: 0.22, metalness: 0.35 }));
+  const body = new THREE.Mesh(new THREE.BoxGeometry(8.2, 0.85, 2.6), new THREE.MeshStandardMaterial({ color: '#080b12', roughness: 0.22, metalness: 0.35 }));
   body.position.set(0, -0.55, -0.55); body.receiveShadow = true; scene.add(body);
 }
 
