@@ -6810,6 +6810,20 @@ export const I18N_MAP = {
   '内置曲目': 'Built-in songs',
   '停止示范': 'Stop demo',
   'MIDI 初始化失败': 'MIDI initialization failed',
+  '自定义键位': 'Custom keymap',
+  '退出键位': 'Exit keymap',
+  '键位已绑定': 'Key bound',
+  '请按一个电脑键绑定': 'Press a computer key to bind',
+  '音色': 'Timbre',
+  '钢琴': 'Piano',
+  '电钢琴': 'Electric piano',
+  '吉他': 'Guitar',
+  '贝斯': 'Bass',
+  '小提琴': 'Violin',
+  '弦乐': 'Strings',
+  '小号': 'Trumpet',
+  '长笛': 'Flute',
+  '合成器': 'Synth',
 };
 
 /* 语言状态（响应式：切语言后 t() 返回值变化，Vue 模板自动重渲染） */
