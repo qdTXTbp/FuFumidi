@@ -227,7 +227,7 @@ function draw() {
   const tick = typeof song.secToTick === 'function' ? song.secToTick(sec) : sec * (song.tpb || 480) * (song.initialBpm || 120) / 60;
   try {
     drawVizWaterfallPost(ctx, w, h, song, tick, {
-      state: renderState, zoom: 1, showLyrics: false, lyricAt: '', activeNotes: [], energy: 0,
+      state: renderState, zoom: 1, showLyrics: false, lyricAt: '', activeNotes: activeNoteList(), energy: 0,
       fx: { ...FX_DEFAULTS, keys3d: true, persp: 0.68, keyNames: false, particles: false, beams: false, hitLine: true, gloss: true },
       wallClock: true,
       theme: {}, bg: {},

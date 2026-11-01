@@ -350,6 +350,8 @@ export function createCompiler() {
           const frameDt = opts.wallClock ? wallDt : (d - prevD);
           let pp = state.press.get(pitch);
           if (!pp) { pp = { p: 0, v: 0 }; state.press.set(pitch, pp); }
+          if (opts.debugPress) { const g = (window.__p3dPress = window.__p3dPress || {}); g[pitch] = { on, live: liveSet.size, prs: pp ? pp.p : 0 }; }
+
           // ★ 只在"时间真的前进了"时积分：同一 tick 连编两次（确定性单测）必须给出同样的图元
           if (frameDt > 0.0008) {
             const sdt = Math.min(0.05, frameDt);
