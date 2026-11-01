@@ -257,7 +257,7 @@ onBeforeUnmount(() => {
       <span class="muted">{{ stats.perfect }}P / {{ stats.great }}G / {{ stats.good }}Gd / {{ stats.miss }}M</span>
     </div>
     <div class="p3d-labels">
-      <span v-for="l in keyLabels" :key="l.code" class="p3d-key">{{ l.code }}</span>
+      <span v-for="l in keyLabels" :key="l.code" class="p3d-key" :class="{ active: activeInput.includes(l.midi) }">{{ l.code }}</span>
     </div>
   </div>
 </template>
@@ -274,6 +274,7 @@ onBeforeUnmount(() => {
 .p3d-score { position:absolute; right:14px; bottom:48px; z-index:4; display:flex; align-items:center; gap:9px; padding:7px 11px; border-radius:10px; background:rgba(4,10,18,.76); border:1px solid rgba(120,210,255,.2); color:#dff1ff; font-size:11px; }
 .p3d-score b { font-size:19px; color:#8fd6ff; } .p3d-grade { font-weight:800; color:#ffd166; min-width:50px; } .p3d-grade.miss { color:#ff7b7b; }
 .p3d-labels { position:absolute; left:20px; right:20px; bottom:10px; z-index:4; display:flex; justify-content:center; gap:5px; pointer-events:none; flex-wrap:wrap; }
-.p3d-key { padding:2px 5px; border-radius:4px; border:1px solid rgba(120,210,255,.45); background:rgba(4,10,18,.62); color:#dff1ff; font:600 10px/1.1 Consolas, monospace; }
+.p3d-key.active { background:#66d9ff !important; border-color:#e9fbff !important; color:#03111e !important; box-shadow:0 0 16px rgba(90,210,255,.95), 0 0 32px rgba(90,210,255,.45); transform:translateY(2px) scale(1.12); }
+.p3d-key { padding:2px 5px; transition:all .08s ease; border-radius:4px; border:1px solid rgba(120,210,255,.45); background:rgba(4,10,18,.62); color:#dff1ff; font:600 10px/1.1 Consolas, monospace; }
 .p3d-hint { position:absolute; left:16px; bottom:42px; z-index:4; color:#75a3bd; font-size:11px; pointer-events:none; }
 </style>
