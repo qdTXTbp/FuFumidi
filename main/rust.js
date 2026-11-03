@@ -7,18 +7,31 @@
 const { execFile } = require('child_process');
 
 function createRustService({ app, path, fs }) {
-  const EXE = process.platform === 'win32' ? 'fufumidi-core.exe' : 'fufumidi-core';
+  // 两代二进制并存：fufumidi-engine（crates/ workspace，新内核）优先，
+  // fufumidi-core（旧 rust-core/ CLI）兜底；FUFUMIDI_RUST_BIN 供开发/测试显式指定。
+  const EXE_ENGINE = process.platform === 'win32' ? 'fufumidi-engine.exe' : 'fufumidi-engine';
+  const EXE_LEGACY = process.platform === 'win32' ? 'fufumidi-core.exe' : 'fufumidi-core';
+  const EXPLICIT = process.env.FUFUMIDI_RUST_BIN || null;
   // 版本探测结果缓存：二进制不会在运行期变化，探一次即可
   let _probe = null;
   let _probing = null;
 
   function binaryPath() {
+    // process.resourcesPath 只在 Electron 里存在；纯 Node 测试/脚本下回退到 app 路径，
+    // 否则 path.join(undefined, ...) 会直接抛 ERR_INVALID_ARG_TYPE。
+    const resourcesPath = process.resourcesPath || (() => { try { return app.getAppPath(); } catch (e) { return null; } })();
     const candidates = [
-      path.join(process.resourcesPath, 'rust-core', EXE),
-      path.join(process.resourcesPath, 'bin', EXE),
-      path.join(app.getAppPath(), 'rust-core', EXE),
-      path.join(app.getAppPath(), '..', 'resources', 'rust-core', EXE),
-      path.join(__dirname, '..', 'resources', 'rust-core', EXE),
+      EXPLICIT,
+      resourcesPath ? path.join(resourcesPath, 'rust-core', EXE_ENGINE) : null,
+      resourcesPath ? path.join(resourcesPath, 'rust-core', EXE_LEGACY) : null,
+      resourcesPath ? path.join(resourcesPath, 'bin', EXE_ENGINE) : null,
+      resourcesPath ? path.join(resourcesPath, 'bin', EXE_LEGACY) : null,
+      path.join(app.getAppPath(), 'rust-core', EXE_ENGINE),
+      path.join(app.getAppPath(), 'rust-core', EXE_LEGACY),
+      path.join(app.getAppPath(), '..', 'resources', 'rust-core', EXE_ENGINE),
+      path.join(app.getAppPath(), '..', 'resources', 'rust-core', EXE_LEGACY),
+      path.join(__dirname, '..', 'resources', 'rust-core', EXE_ENGINE),
+      path.join(__dirname, '..', 'resources', 'rust-core', EXE_LEGACY),
     ];
     for (const p of candidates) {
       try { if (p && fs.existsSync(p)) return p; } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }

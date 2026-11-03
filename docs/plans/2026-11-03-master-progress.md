@@ -63,3 +63,24 @@
 3. 6.7 第一组：轨道 CRUD（P-009）、拍号编辑（P-010）、快捷键可配置（P-012）。
 4. 数据模型 v2 的 JS 侧落地：Note.id/Clip/命令接口（先把「命令可序列化」做出来）。
 5. perf gate：在有 GUI 的会话跑 node scripts/perf-baseline.mjs --update-baseline，更新 6.4.2 基线。
+
+### 5. 本轮追加（运行时轨道，23:1x–23:4x）
+
+| 事项 | 结果 | 证据 |
+|---|---|---|
+| Rust workspace 可构建 | crates/ 下 fufumidi-core（零依赖）+ fufumidi-engine（CLI + JSON 行协议），cargo test / build 绿 | crates/target/debug/fufumidi-engine.exe |
+| 测试数 | 68 个 Rust 测试全绿（core 38 + engine 25 + Lead 补的 core 8 / protocol 7，去重后 68） | cargo test 输出 |
+| 新引擎实测 | ping/version/midi-stats/batch-stats 与旧契约兼容，且多出 avg_dur_ticks | 手动执行 |
+| JS↔Rust 双跑 | 6 个真实 fixture + 12 个合成 MIDI，0 差异（含 avg_dur_ticks） | node scripts/dualrun/compare-midi.mjs --gen --rust-bin ... |
+| 引擎参数契约 | 57 params / 43 worker keys / 27 engine map / 15 flags，已知漂移 0 | docs/contracts/engine-params.schema.json |
+| 主进程接入新引擎 | main/rust.js 优先 fufumidi-engine.exe（FUFUMIDI_RUST_BIN 可覆盖），3 个桥测试通过 | scripts/test-rust-bridge.mjs |
+| CI | 新增 rust-core job（cargo test + release build + dual-run + bridge tests） | .github/workflows/ci.yml |
+| Tauri POC | 子代理仍在拉取依赖（网络慢）；结论待其报告，暂不阻塞主线 | poc/tauri-poc/ |
+
+### 6. 下一轮（修订）
+
+1. 合并子代理 A 的 docs/rust/WORKSPACE.md 与其 scripts/rust/*（若已交付），更新根 npm run build:rust。
+2. 若 Tauri POC 有结论：把 updater/printToPDF/插件三个 POC 的通过标准写成可执行验收。
+3. 6.7 第一组：轨道 CRUD（P-009）或拍号编辑（P-010）二选一，先冻结数据模型细节再动代码。
+4. 把 cargo fmt/clippy 加进 CI（当前本机工具链未装组件，CI 可装）。
+5. 全量门禁：npm run audit（含 check:contracts）在干净环境跑一遍。
