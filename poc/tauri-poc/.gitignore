@@ -1,0 +1,7 @@
+# 构建产物
+/target
+node_modules
+# dist/index.html 是 POC 的静态前端入口（frontendDist="dist"），必须入库：
+# 忽略 dist 其余生成物
+/dist/*
+!/dist/index.html

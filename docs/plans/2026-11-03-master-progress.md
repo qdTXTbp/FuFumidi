@@ -111,6 +111,11 @@
 
 ### 10. 待收口（下一轮）
 
-- Tauri POC（子代理 B）：target/Cargo.lock 已生成、日志与 research 目录存在；等其结论文档，再决定是否记录为 POC 通过/阻塞。
+- Tauri POC（子代理 B）**已收口**：docs/rust/TAURI-POC.md。结论——外壳可行（cargo check 37s / build 44s；
+  debug 12.58 MiB、release 5.87 MiB；开窗 0.73–0.86s；IPC 1.7–6.2ms；WebView2 156 已装）；
+  两个阻塞：① crates.io 直连拉 407 crate 用 580s 且多次超时 → CI/开发需镜像或 vendor 缓存；
+  ② tauri-plugin-updater 无增量、验签是 minisign 而非现有 Ed25519/Kachina → 更新链必须自研重做（P1 POC 结论）。
+  待深挖：NSIS 打包、rquickjs 插件、printToPDF、视频导出、250 IPC 代码生成。
+- 品牌/设计：docs/BRAND.md + check:brand（16 资产未变），CI 已接线；P-026/P-027/T-113/T-114 入规格。
 - 6.7 第一组（轨道 CRUD / 拍号编辑）尚未动；先按 RUST-PROJECT-MODEL v2 冻结细节。
 - 把 cargo fmt/clippy 加入 CI（本机缺组件）。

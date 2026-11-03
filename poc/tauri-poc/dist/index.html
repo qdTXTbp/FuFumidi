@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>FuFumidi Tauri POC</title>
+  <style>
+    :root { color-scheme: dark; }
+    html, body { margin: 0; height: 100%; background: #0b0d10; color: #e8eef7;
+      font-family: "Microsoft YaHei", system-ui, sans-serif; }
+    main { display: grid; gap: 14px; padding: 32px; max-width: 860px; }
+    h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: .04em; }
+    .sub { color: #8fa3bd; font-size: 13px; }
+    button { background: #1b2430; color: #cfe3ff; border: 1px solid #2c3a4c;
+      border-radius: 6px; padding: 8px 14px; font-size: 13px; cursor: pointer; width: fit-content; }
+    pre { background: #11161d; border: 1px solid #22303f; border-radius: 8px;
+      padding: 14px; font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; margin: 0; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>FuFumidi · Tauri 2 POC</h1>
+  <div class="sub">本地 dist 加载 · 双 command 往返 · 无 Node / 无 Electron</div>
+  <button id="go">重新调用 Rust command (poc_ping / poc_echo)</button>
+  <pre id="out">等待调用…</pre>
+</main>
+<script>
+  const out = document.getElementById('out');
+  const log = (s) => { out.textContent += s + '\n'; };
+
+  window.addEventListener('error', (e) => log('window.onerror: ' + e.message));
+
+  async function main() {
+    const tauri = window.__TAURI__;
+    if (!tauri) { log('FAIL: window.__TAURI__ 未注入'); return; }
+    const ua = navigator.userAgent;
+    log('userAgent = ' + ua);
+    const timings = [];
+    const calls = [
+      ['poc_ping', undefined, 'ping'],
+      ['poc_echo', { ua, dpr: devicePixelRatio, screen: screen.width + 'x' + screen.height, boot: true }, 'echo-boot'],
+      ['poc_echo', { sym: 'C4', vel: 96, tags: ['midi', 'poc'] }, 'echo-midi'],
+      ['poc_echo', { second: true, bytes: Array.from(new Uint8Array(64).map((_, i) => i)) }, 'echo-bytes64'],
+    ];
+    for (const [cmd, payload, label] of calls) {
+      const t0 = performance.now();
+      try {
+        const res = payload === undefined
+          ? await tauri.core.invoke(cmd)
+          : await tauri.core.invoke(cmd, { payload });
+        const dt = performance.now() - t0;
+        timings.push({ label, command: cmd, ms: Number(dt.toFixed(3)), ok: true });
+        log('OK   ' + cmd + '  ' + dt.toFixed(2) + ' ms  →  ' + JSON.stringify(res).slice(0, 120));
+      } catch (err) {
+        timings.push({ label, command: cmd, ok: false, error: String(err) });
+        log('FAIL ' + cmd + '  →  ' + String(err));
+      }
+    }
+    // 把测量汇总回写给 Rust（证据落盘，不依赖肉眼）
+    try {
+      await tauri.core.invoke('poc_echo', { payload: {
+        summary: true,
+        ua,
+        timings,
+        viewport: innerWidth + 'x' + innerHeight,
+        dpr: devicePixelRatio,
+      } });
+      log('已回写 timings 汇总到 Rust');
+    } catch (err) { log('summary 回写失败: ' + String(err)); }
+    log('全部调用结束');
+    document.body.dataset.pocDone = '1';
+  }
+  document.getElementById('go').addEventListener('click', main);
+  main();
+</script>
+</body>
+</html>
