@@ -15,19 +15,61 @@ function createDbService({ app, path: p, fs: f }) {
   let db = null;
   let mode = 'none';
   let jsonData = { kv: {}, songs: {}, playlists: {} };
-  // 写入队列：串行化 SQLite 写入 + persist 导出，close() 前先冲刷，避免退出丢数据
+  // 写入队列：串行化 SQLite 写入；持久化与写入解耦（见下方去抖）。
   let writeQ = Promise.resolve();
   function enqueueWrite(fn) {
     writeQ = writeQ.then(fn).catch(() => {});
     return writeQ;
   }
 
-  function saveJson() {
+  /* ---------------- 持久化：去抖 + 异步落盘 ----------------
+     sql.js 的持久化是「导出整个数据库再写盘」：60 MiB 级的库每次约 70 ms，而改一个设置、
+     存一次草稿都会触发 persist()。原来每次写都同步 export + writeFileSync，等于把主线程
+     按库大小反复冻结。这里改成：
+       · 800 ms 合并一次（同一批写只落一次盘）；
+       · export 仍在内存里同步完成（快，约 10 ms），写盘走 fs.promises，不阻塞主线程；
+       · close() 前必须 flush，保证退出不丢数据。
+     注：旧实现 close() 引用了从未声明的 persistTimer/persistPromise/persistNow，
+     会抛 ReferenceError 被上层吞掉 —— 退出冲刷实际从未执行（本文件 2026-11-03 修复）。 */
+  const PERSIST_DEBOUNCE_MS = 800;
+  let persistTimer = null;
+  let persistPromise = Promise.resolve();
+  let persistNow = null;
+
+  function writeFileAsync(file, data, enc) {
     try {
-      f.mkdirSync(dbDir, { recursive: true });
-      f.writeFileSync(jsonPath, JSON.stringify(jsonData), 'utf8');
-    } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
+      if (f.promises && typeof f.promises.writeFile === 'function') return f.promises.writeFile(file, data, enc);
+    } catch (e) { /* fallthrough */ }
+    return new Promise((resolve, reject) => {
+      try { f.writeFile(file, data, enc, (e) => (e ? reject(e) : resolve())); } catch (e) { reject(e); }
+    });
   }
+
+  function flushPersist() {
+    const run = async () => {
+      try {
+        if (mode === 'sqlite' && db) {
+          const data = db.export();
+          await writeFileAsync(dbPath, Buffer.from(data));
+        } else if (mode === 'json') {
+          await writeFileAsync(jsonPath, JSON.stringify(jsonData), 'utf8');
+        }
+      } catch (e) {
+        try { require('./log').write('WARN', 'db persist failed', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ }
+      }
+    };
+    persistPromise = persistPromise.then(run, run);
+    return persistPromise;
+  }
+
+  function schedulePersist() {
+    if (persistTimer) return;
+    persistTimer = setTimeout(() => { persistTimer = null; flushPersist(); }, PERSIST_DEBOUNCE_MS);
+    // 测试/脚本里不要让计时器拖住进程退出；close() 会显式 flush。
+    try { if (persistTimer && typeof persistTimer.unref === 'function') persistTimer.unref(); } catch (e) { /* ignore */ }
+  }
+
+  persistNow = flushPersist;
 
   async function init() {
     if (db || mode !== 'none') return db;
@@ -51,14 +93,8 @@ function createDbService({ app, path: p, fs: f }) {
     }
   }
 
-  function persist() {
-    if (mode === 'sqlite' && db) {
-      const data = db.export();
-      try { f.writeFileSync(dbPath, Buffer.from(data)); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
-    } else if (mode === 'json') {
-      saveJson();
-    }
-  }
+  /* 旧名保留为兼容入口：真正的落盘走去抖队列（flushPersist）。 */
+  function persist() { schedulePersist(); }
 
   async function kvGet(key) {
     await init();
@@ -79,7 +115,7 @@ function createDbService({ app, path: p, fs: f }) {
       } else {
         jsonData.kv[key] = value;
       }
-      persist();
+      schedulePersist();
     });
     return true;
   }
@@ -94,7 +130,7 @@ function createDbService({ app, path: p, fs: f }) {
       } else {
         jsonData.songs[item.id] = item;
       }
-      persist();
+      schedulePersist();
     });
     return true;
   }
@@ -117,7 +153,7 @@ function createDbService({ app, path: p, fs: f }) {
       } else {
         delete jsonData.songs[id];
       }
-      persist();
+      schedulePersist();
     });
     return true;
   }
@@ -131,7 +167,7 @@ function createDbService({ app, path: p, fs: f }) {
       } else {
         jsonData.playlists[item.id] = item;
       }
-      persist();
+      schedulePersist();
     });
     return true;
   }
@@ -155,7 +191,7 @@ function createDbService({ app, path: p, fs: f }) {
       } else {
         delete jsonData.playlists[id];
       }
-      persist();
+      schedulePersist();
     });
     return true;
   }
@@ -198,16 +234,16 @@ function createDbService({ app, path: p, fs: f }) {
   }
 
   async function close() {
-    if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; persistNow(); }
-    try { await persistPromise; } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
+    // 退出顺序：取消待触发的去抖计时器 → 等所有内存写完成 → 强制 flush 一次 → 关库。
+    if (persistTimer) { try { clearTimeout(persistTimer); } catch (e) { /* ignore */ } persistTimer = null; }
     try { await writeQ; } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
-    // 先等待写入队列落盘，再关闭数据库（避免退出时歌单/收藏写丢失）
-    return writeQ.then(() => {
-      try { if (db) { db.close(); db = null; } } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
-    });
+    try { await flushPersist(); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
+    try { await persistPromise; } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
+    try { if (db) { db.close(); db = null; } } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
+    return true;
   }
 
-  return { init, status, kvGet, kvSet, songPut, songsAll, songDelete, playlistPut, playlistsAll, registerDbIpc, close, cloudSongPut, cloudSongsDirPath };
+  return { init, status, kvGet, kvSet, songPut, songsAll, songDelete, playlistPut, playlistsAll, registerDbIpc, close, flushPersist, cloudSongPut, cloudSongsDirPath };
 }
 
 module.exports = { createDbService };

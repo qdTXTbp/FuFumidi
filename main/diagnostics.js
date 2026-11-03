@@ -2,20 +2,26 @@
 // 主进程诊断服务：运行期依赖检查/安装、诊断包导出
 // ============================================================
 'use strict';
+const { createProbeCache } = require('./engine-probe-cache');
 
 function registerDiagnosticsIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, spawnEngine }) {
-  // 运行期依赖检测 / 自动补全（基础包缺依赖时一键修复；国内镜像优先）
-  ipcMain.handle('dep:check', () => new Promise((resolve) => {
-    spawnEngine(['check'], {
-      script: 'deps.py',
-      onDone: (code, r) => resolve({ ok: code === 0, result: r.result, raw: r.out || r.err }),
-      onError: (e) => resolve({ ok: false, error: String(e) }),
-    });
-  }));
+  // 运行期依赖检测：deps.py check 会真 import torch/scipy（实测 5.5 s），结果 10 分钟有效。
+  // 安装依赖成功后主动清缓存，避免「刚装完仍显示缺依赖」。
+  const depCache = createProbeCache({ ttlMs: 10 * 60 * 1000 });
+  ipcMain.handle('dep:check', (_e, opts) => {
+    if (opts && opts.fresh) depCache.clear();
+    return depCache.run('deps', () => new Promise((resolve) => {
+      spawnEngine(['check'], {
+        script: 'deps.py',
+        onDone: (code, r) => resolve({ ok: code === 0, result: r.result, raw: r.out || r.err }),
+        onError: (e) => resolve({ ok: false, error: String(e) }),
+      });
+    }), { shouldCache: (v) => !!(v && v.ok) });
+  });
   ipcMain.handle('dep:install', (_e, group) => new Promise((resolve) => {
     spawnEngine(['install', '--group', group || 'all'], {
       script: 'deps.py',
-      onDone: (code, r) => resolve({ ok: code === 0, result: r.result, raw: r.out || r.err }),
+      onDone: (code, r) => { if (code === 0) depCache.clear(); resolve({ ok: code === 0, result: r.result, raw: r.out || r.err }); },
       onError: (e) => resolve({ ok: false, error: String(e) }),
     });
   }));

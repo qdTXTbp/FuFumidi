@@ -62,6 +62,12 @@ jobs:
       - name: Empty catch gate
         run: npm run check:empty-catch
 
+      - name: IPC contract drift gate
+        run: npm run check:contracts
+
+      - name: M0 unit tests (probe cache / db persist / storage cache)
+        run: node --test scripts/test-engine-probe-cache.mjs scripts/test-db-persist.mjs scripts/test-storage-cache.mjs
+
       - name: Pack full asar
         run: node build.js full
 

@@ -3866,6 +3866,8 @@ export const I18N_MAP = {
   "音符判定阈值": "Note frame threshold",
   "最短音符": "Shortest note",
   "音符合并间隔": "Note merge gap",
+  "合并同音高碎片": "Merge same-pitch fragments",
+  "关闭可保留轮指/颤音等快速重复音": "Turn off to keep fast repeated notes (trills, tremolo)",
   "包含踏板事件": "Include pedal events",
   "还原延音踏板": "Restore sustain pedal",
   "输出鼓组节奏轨": "Output drum rhythm track",

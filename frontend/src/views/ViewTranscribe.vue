@@ -495,7 +495,10 @@ function delMsPreset() {
   persistMsPresets(); msPresetSel.value = ''; toast(t('预设已删除'), 'ok');
 }
 const minNote = ref(128);
-const mergeGap = ref(30);
+// 合并间隔默认 0：Merge overlap 会把「同音高、间隔 ≤ gap」的音并成长音，轮指/颤音/双跳
+// 在 30ms 默认值下会被吃掉。0 只合并真正重叠/相接的碎片，需要更激进的清理时再调大。
+const mergeGap = ref(0);
+const mergeOn = ref(true);   // 合并同音高碎片（关闭 = 保留所有快速重复音）
 const pedal = ref(true);
 const drums = ref(false);
 const stemExport = ref(false);
@@ -609,7 +612,7 @@ const WEB_BUILTIN_PRESETS = () => {
     auto_bpm: true, denoise_mode: 'off',
   };
   const piano = {
-    onset_threshold: 0.3, frame_threshold: 0.1, min_note_ms: 60, merge_gap_ms: 30,
+    onset_threshold: 0.3, frame_threshold: 0.1, min_note_ms: 60, merge_gap_ms: 0,
     include_pedal: true, perf: 'quality',
     auto_bpm: true, denoise_mode: 'off',
   };
@@ -1340,6 +1343,8 @@ function collectPresetParams() {
       include_drums: drums.value, stem_format: stemFormat.value || 'wav',
     });
   }
+  // 关闭合并：显式发 no_merge（引擎侧 p[\"merge_overlap\"]=False），保留轮指/颤音。
+  if (!mergeOn.value) p.no_merge = true;
   return p;
 }
 
@@ -1368,6 +1373,7 @@ function applyPresetParams(p, opts) {
   const mn = has('minimum_note_length') ? num('minimum_note_length') : (has('min_note_ms') ? num('min_note_ms') : null);
   if (mn !== null && !isNaN(mn)) minNote.value = clamp(Math.round(mn), 10, 300);
   if (has('merge_gap_ms')) mergeGap.value = clamp(Math.round(num('merge_gap_ms')) || 0, 0, 200);
+  if (has('no_merge')) mergeOn.value = pr.no_merge !== true;
   if (has('include_pedal')) pedal.value = pr.include_pedal !== false;
   // 鼓组：历史预设写 include_drums，界面 cfg 用 with_drums —— 两个都认
   const dr = has('include_drums') ? pr.include_drums : (has('with_drums') ? pr.with_drums : null);
@@ -1629,6 +1635,7 @@ function collectParams() {
     cfg.stem_format = stemFormat.value || 'wav';
     cfg.sep_model = sepModel.value;
   }
+  if (!mergeOn.value) cfg.no_merge = true;
   return cfg;
 }
 
@@ -2500,6 +2507,9 @@ onBeforeUnmount(() => {
           <div class="tr-slider" v-if="mode === 'piano'">
             <label>{{ t('音符合并间隔') }}<b>{{ mergeGap }}ms</b></label>
             <NumSlider v-model="mergeGap" :min="0" :max="200" :step="1" />
+          </div>
+          <div class="tr-switch" v-if="mode !== 'separate'">
+            <label><span><b>{{ t('合并同音高碎片') }}</b><small>{{ t('关闭可保留轮指/颤音等快速重复音') }}</small></span><input type="checkbox" v-model="mergeOn"></label>
           </div>
           <div class="tr-switch" v-if="mode === 'piano'">
             <label><span><b>{{ t('包含踏板事件') }}</b></span><input type="checkbox" v-model="pedal"></label>
