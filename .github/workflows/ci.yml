@@ -74,6 +74,27 @@ jobs:
       - name: Verify asar contents
         run: npx --yes @electron/asar list dist/fufumidi-full.asar | findstr /C:"main.js" /C:"engine\music2midi.py" /C:"frontend\src\views\ViewResources.vue"
 
+  rust-core:
+    # 运行时轨道 M0/M1：crates/ workspace 是新的 Rust 内核（SMF 解析/统计/量化/移调 + JSON 协议）。
+    # 与老 rust-core/ 并存；这里只跑新 workspace，并用 JS↔Rust 双跑对拍守住解析一致性。
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - name: Rust tests (crates workspace)
+        run: cargo test --manifest-path crates/Cargo.toml
+      - name: Build Rust engine (release)
+        run: cargo build --manifest-path crates/Cargo.toml --release
+      - name: MIDI dual-run (JS vs Rust)
+        run: node scripts/dualrun/compare-midi.mjs --gen --rust-bin crates/target/release/fufumidi-engine.exe
+      - name: Rust bridge tests (main/rust.js ↔ new engine)
+        env:
+          FUFUMIDI_RUST_BIN: crates\target\release\fufumidi-engine.exe
+        run: node --test scripts/test-rust-bridge.mjs
+
   pytest:
     # 6.4：引擎测试已在本机全量跑通（含 ref 缺失时自动 skip），作为 required 门禁。
     runs-on: windows-latest
