@@ -3,7 +3,7 @@ import { themeColor, TRACK_FALLBACK } from '../core/palette.js';
 // 可编辑钢琴卷帘：选择 / 画笔 / 橡皮 · 拖拽移动 · 缩放平移 · 撤销重做
 import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, onActivated, onDeactivated, nextTick } from 'vue';
 import { useAppStore } from '../stores/app';
-import { ensureAudio } from '../audio.js';
+import { ensureAudio, getPlayer } from '../audio.js';
 
 const app = useAppStore();
 const state = app;
@@ -20,7 +20,7 @@ import { bendToUnit, unitToBend } from '../core/curve_engine.js';
 // P1-13 B4：跟随播放的视口滚动（策略在 core/editor_nav.js，纯逻辑可测）
 import { followViewTick } from '../core/editor_nav.js';
 // P0-6b：变拍号的网格/谱面分段布局（C4 TimelineModel）
-import { timelineOfSong, iterBars } from '../core/timeline.js';
+import { timelineOfSong, iterBars, secOfTick } from '../core/timeline.js';
 /* 手写笔 / 触控（M9 收尾）：掌侧误触、第二根手指、长按=右键、笔压当力度 */
 import { claimPointer, isPrimaryPointer, releasePointer, penPressure, makeLongPress } from '../core/pointer.js';
 
@@ -77,11 +77,16 @@ function auditionNote(midi, vel) {
 }
 
 const wrap = ref(null);
+const ruler = ref(null);
 const canvas = ref(null);
 const ccCanvas = ref(null);
 const ccCanvas2 = ref(null);
 let ctx2d = null;
 const CC_LANE_H = 96;
+/** 标尺高度（px）：位于卷帘上方，显示小节号/拍线/循环区间/播放头，点击定位。 */
+const RULER_H = 22;
+/** 标尺 pointer capture 状态：seek=点击/拖动定位；loop=Shift 拖动设循环 */
+const rulerDrag = ref(null);
 const CC_NAMES = { 1: 'Modulation', 2: 'Breath', 4: 'Foot', 5: 'Portamento', 7: 'Volume', 8: 'Balance', 10: 'Pan', 11: 'Expression', 64: 'Sustain', 65: 'Sostenuto', 66: 'Sostenuto2', 67: 'Soft', 68: 'Legato', 71: 'Resonance', 74: 'Brightness', 91: 'Reverb', 93: 'Chorus' };
 
 /* ---------------- 视图状态 ---------------- */
@@ -98,7 +103,7 @@ const H = ref(420);
 function availH() {
   const el = wrap.value;
   const lanes = (props.ccEnabled ? CC_LANE_H : 0) + (props.ccEnabled && props.cc2Enabled ? CC_LANE_H : 0);
-  const avail = (el ? el.clientHeight : 0) - lanes;
+  const avail = (el ? el.clientHeight : 0) - lanes - RULER_H;
   return avail > 180 ? Math.round(avail) : 420;
 }
 
@@ -720,6 +725,134 @@ function drawScoreNote(g, lay, n, x, y, midY, top, bottom, ctxInfo) {
 }
 function pal_canvas(g) { const p = themeColors(); return p.canvas || '#fff'; }
 function pal_stone(g) { const p = themeColors(); return p.stone || '#888'; }
+/* ---------------- 标尺（P-007） ----------------
+   卷帘上方 22px 的导航带：小节号/拍线/循环区间/播放头。
+   交互：点击或拖动=定位播放头；Shift+拖动=设循环区间；双击=清除循环。
+   为什么不画在主画布上：主画布的 y 与音高/行高绑定，叠一层会挡住高音区；
+   独立画布既不影响命中测试，也不用改 draw() 的音高换算。 */
+function rulerTickAt(e) {
+  const cv = ruler.value; if (!cv) return 0;
+  const rect = cv.getBoundingClientRect();
+  return Math.max(0, xToTick(e.clientX - rect.left));
+}
+function rulerSeek(tick) {
+  const s = song(); if (!s) return;
+  const t = Math.max(0, Math.min(s.totalTicks, Math.round(tick)));
+  try { app.seekSec(secOfTick(timelineOfSong(s), t)); } catch (err) { /* 时间轴未就绪时忽略 */ }
+}
+function rulerDown(e) {
+  const s = song(), cv = ruler.value;
+  if (!s || !cv) return;
+  if (e.button != null && e.button !== 0) return;
+  try { cv.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+  const tick = Math.max(0, Math.min(s.totalTicks, rulerTickAt(e)));
+  if (e.shiftKey) {
+    rulerDrag.value = { type: 'loop', anchor: tick, moved: false };
+    const pl = getPlayer();
+    if (pl) { try { pl.setLoop(true, tick, Math.min(s.totalTicks, tick + s.tpb)); } catch (err) { /* ignore */ } }
+    state.loop = true;
+  } else {
+    rulerDrag.value = { type: 'seek' };
+    rulerSeek(tick);
+  }
+  draw();
+}
+function rulerMove(e) {
+  const d = rulerDrag.value, s = song();
+  if (!d || !s) return;
+  const tick = Math.max(0, Math.min(s.totalTicks, rulerTickAt(e)));
+  if (d.type === 'seek') { rulerSeek(tick); draw(); return; }
+  const a = Math.max(0, Math.min(d.anchor, tick));
+  let b = Math.min(s.totalTicks, Math.max(d.anchor, tick));
+  const minLen = Math.max(1, Math.round(s.tpb / 4));
+  if (b - a < minLen) b = Math.min(s.totalTicks, a + minLen);
+  if (b > a) {
+    const pl = getPlayer();
+    if (pl) { try { pl.setLoop(true, a, b); } catch (err) { /* ignore */ } }
+    state.loop = true;
+    d.moved = true;
+  }
+  draw();
+}
+function rulerUp(e) {
+  const cv = ruler.value;
+  if (cv) { try { if (cv.hasPointerCapture && cv.hasPointerCapture(e.pointerId)) cv.releasePointerCapture(e.pointerId); } catch (err) { /* ignore */ } }
+  rulerDrag.value = null;
+  draw();
+}
+function rulerClearLoop() {
+  const s = song(); const pl = getPlayer();
+  if (pl) { try { pl.setLoop(false, 0, s ? s.totalTicks : 0); } catch (err) { /* ignore */ } }
+  state.loop = false;
+  draw();
+}
+function drawRuler() {
+  const cv = ruler.value;
+  if (!cv) return;
+  const dpr = window.devicePixelRatio || 1;
+  const W = (wrap.value ? wrap.value.clientWidth : 600) || 600;
+  const hpx = RULER_H;
+  if (cv.width !== Math.floor(W * dpr) || cv.height !== Math.floor(hpx * dpr)) {
+    cv.width = Math.floor(W * dpr); cv.height = Math.floor(hpx * dpr);
+  }
+  const g = cv.getContext('2d');
+  if (!g) return;
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const pal = themeColors();
+  g.clearRect(0, 0, W, hpx);
+  g.fillStyle = pal.laneBg || pal.surface || '#111';
+  g.fillRect(0, 0, W, hpx);
+  const s = song();
+  if (!s) return;
+  const tpb = s.tpb || 480;
+  const viewT0 = xToTick(0);
+  const viewT1 = viewT0 + W / Math.max(1e-9, pxPerTick.value);
+  // 循环区间底色（先画，压在小节线下面）
+  const pl = getPlayer();
+  if (pl && pl.loop && pl.loopEnd > pl.loopStart) {
+    const x0 = Math.max(0, tickToX(pl.loopStart));
+    const x1 = Math.min(W, tickToX(pl.loopEnd));
+    if (x1 > x0) {
+      g.fillStyle = pal.tintStrong || 'rgba(255,255,255,0.08)';
+      g.fillRect(x0, 0, Math.max(1, x1 - x0), hpx);
+      g.fillStyle = pal.curve || '#8ab4f8';
+      g.fillRect(x0, 0, 1, hpx);
+      g.fillRect(Math.max(0, x1 - 1), 0, 1, hpx);
+    }
+  }
+  // 小节线 + 小节号 + 拍线
+  let bars = [];
+  try { bars = iterBars(timelineOfSong(s), Math.max(0, Math.floor(viewT0 / tpb) * tpb), viewT1 + tpb); }
+  catch (err) { bars = []; }
+  g.textBaseline = 'middle';
+  g.textAlign = 'left';
+  g.font = '10px monospace';
+  for (const bar of bars) {
+    const x = tickToX(bar.tick);
+    if (x < -40 || x > W + 4) continue;
+    if (x >= 0) { g.fillStyle = pal.border2 || '#444'; g.fillRect(Math.round(x), 0, 1, hpx); }
+    if (bar.ticks * pxPerTick.value >= 26) {
+      g.fillStyle = pal.stone || '#888';
+      g.fillText(String(bar.bar + 1), Math.max(2, Math.round(x) + 3), hpx / 2 + 0.5);
+    }
+    const beatTicks = bar.ticks / Math.max(1, bar.num);
+    for (let k = 1; k < bar.num; k++) {
+      const bx = tickToX(bar.tick + k * beatTicks);
+      if (bx < 0 || bx > W) continue;
+      g.fillStyle = pal.hair || '#2a2a2a';
+      g.fillRect(Math.round(bx), hpx - 5, 1, 5);
+    }
+  }
+  // 播放头（与主画布同源：state.curSec / tempo）
+  const curTick = s.secToTick((state.curSec || 0) / (state.tempo || 1));
+  const px = tickToX(curTick);
+  if (px >= -2 && px <= W + 2) {
+    g.fillStyle = pal.playhead || '#ff5530';
+    g.fillRect(Math.round(px) - 1, 0, 2, hpx);
+    g.beginPath();
+    g.moveTo(px - 4, 0); g.lineTo(px + 4, 0); g.lineTo(px, 6); g.closePath(); g.fill();
+  }
+}
 function draw() {
   const cv = canvas.value, wEl = wrap.value;
   if (!cv || !wEl) return;
@@ -732,6 +865,8 @@ function draw() {
   }
   ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx2d.clearRect(0, 0, W, HK);
+  // 标尺独立画布：放在清除主画布之后统一重绘，保证滚动/缩放/播放头同步。
+  try { drawRuler(); } catch (e) { /* 标尺不能拖垮主绘制 */ }
   const pal = themeColors();
   const bgTop = pal.canvas;
   const bgBottom = pal.surface;
@@ -2137,6 +2272,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="ed-canvas-wrap" ref="wrap" data-guide="edit-canvas" @wheel.prevent="onWheel" @contextmenu.prevent="onCtxMenu">
+    <canvas ref="ruler" class="ec-ruler" :style="{ height: RULER_H + 'px' }" @pointerdown="rulerDown" @pointermove="rulerMove" @pointerup="rulerUp" @pointercancel="rulerUp" @pointerleave="rulerUp" @dblclick="rulerClearLoop"></canvas>
     <canvas ref="canvas" :style="{ height: H + 'px' }" @pointerdown="onDown" @pointermove="onMove($event); onHoverMove($event)" @pointerup="onUp" @pointercancel="onUp" @pointerleave="onUp(); onHoverLeave()"></canvas>
     <div v-if="ccEnabled" class="cc-lane" :style="{ height: CC_LANE_H + 'px' }">
       <canvas ref="ccCanvas" class="cc-lane-canvas" @pointerdown="ccDown" @pointermove="ccMove" @pointerup="ccUp" @pointerleave="ccUp"></canvas>
@@ -2151,5 +2287,6 @@ onBeforeUnmount(() => {
 .ed-canvas-wrap { position: relative; width: 100%; height: 100%; overflow: hidden; }
 .ed-canvas-wrap canvas { display: block; width: 100%; cursor: crosshair; touch-action: none; }
 .cc-lane { border-top: 1px solid var(--hairline); background: var(--surface); }
+.ed-canvas-wrap .ec-ruler { cursor: ew-resize; border-bottom: 1px solid var(--hairline); background: var(--surface); }
 .cc-lane-canvas { display: block; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
 </style>

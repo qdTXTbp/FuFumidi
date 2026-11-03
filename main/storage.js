@@ -62,25 +62,57 @@ async function statTreeAsync(dir, depth = 0) {
   return { bytes, files };
 }
 
+/* 报表缓存：遍历 6 万文件实测 5.78 s，而存储面板/概览会重复调用。
+   60 s 内同一组目录直接返回上次结果；清理前用 fresh:true 取实时值，避免按旧报表删文件。 */
+const REPORT_TTL_MS = 60 * 1000;
+let reportCache = null;      // { key, value, at }
+let reportInflight = null;   // { key, promise }
+
+function areasKey(areas) {
+  return JSON.stringify((areas || []).map((a) => [a.id, a.dir || '']));
+}
+function clearStorageCache() { reportCache = null; reportInflight = null; }
+function peekStorageCache() { return reportCache ? { ageMs: Math.max(0, Date.now() - reportCache.at), key: reportCache.key } : null; }
+
 /**
  * @param {Array<{id:string,label?:string,dir:string}>} areas
+ * @param {{fresh?:boolean}} [opts] fresh=true 时跳过缓存（清理前必须用）
  * @returns {Promise<{areas:Array, totalBytes:number, updatedAt:number}>}
  */
-async function reportStorage(areas) {
-  const out = [];
-  let total = 0;
-  for (const a of areas || []) {
-    const meta = CATEGORY_META[a.id] || { label: a.id, kind: 'safe' };
-    const exists = !!(a.dir && fs.existsSync(a.dir));
-    const stat = exists ? await statTreeAsync(a.dir) : { bytes: 0, files: 0 };
-    total += stat.bytes;
-    out.push({
-      id: a.id, label: meta.label, path: a.dir || '', kind: meta.kind,
-      safe: meta.kind === 'safe', protected: meta.kind === 'protected',
-      exists: exists, bytes: stat.bytes, files: stat.files,
-    });
+async function reportStorage(areas, opts = {}) {
+  const fresh = !!opts.fresh;
+  const key = areasKey(areas);
+  if (!fresh && reportCache && reportCache.key === key && (Date.now() - reportCache.at) < REPORT_TTL_MS) {
+    return reportCache.value;
   }
-  return { areas: out, totalBytes: total, updatedAt: Date.now() };
+  if (!fresh && reportInflight && reportInflight.key === key) return reportInflight.promise;
+
+  const compute = (async () => {
+    const out = [];
+    let total = 0;
+    for (const a of areas || []) {
+      const meta = CATEGORY_META[a.id] || { label: a.id, kind: 'safe' };
+      const exists = !!(a.dir && fs.existsSync(a.dir));
+      const stat = exists ? await statTreeAsync(a.dir) : { bytes: 0, files: 0 };
+      total += stat.bytes;
+      out.push({
+        id: a.id, label: meta.label, path: a.dir || '', kind: meta.kind,
+        safe: meta.kind === 'safe', protected: meta.kind === 'protected',
+        exists: exists, bytes: stat.bytes, files: stat.files,
+      });
+    }
+    return { areas: out, totalBytes: total, updatedAt: Date.now() };
+  })();
+
+  if (!fresh) {
+    const promise = compute.then((value) => {
+      reportCache = { key, value, at: Date.now() };
+      return value;
+    }).finally(() => { if (reportInflight && reportInflight.promise === promise) reportInflight = null; });
+    reportInflight = { key, promise };
+    return promise;
+  }
+  return compute;
 }
 
 /** 清理计划：哪些 area 会被删、为什么；默认只含 safe，资产需 includeAssets */
@@ -165,7 +197,8 @@ function registerStorageIpc({ ipcMain, areas }) {
     const p = payload || {};
     try {
       const list = areas();
-      const rep = await reportStorage(list);
+      // 清理必须基于实时报表：缓存里的 bytes 可能已经过期，按旧值删会误导用户。
+      const rep = await reportStorage(list, { fresh: true });
       return runCleanup(list, rep, { includeAssets: !!p.includeAssets });
     } catch (e) {
       return { ok: false, freedBytes: 0, removed: [], errors: [String((e && e.message) || e)] };
@@ -173,4 +206,4 @@ function registerStorageIpc({ ipcMain, areas }) {
   });
 }
 
-module.exports = { CATEGORY_META, reportStorage, cleanupPlan, runCleanup, pruneLogs, emptyDir, statTree, registerStorageIpc };
+module.exports = { CATEGORY_META, reportStorage, clearStorageCache, peekStorageCache, cleanupPlan, runCleanup, pruneLogs, emptyDir, statTree, registerStorageIpc };

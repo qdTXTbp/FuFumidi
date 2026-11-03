@@ -3,23 +3,29 @@
 // ============================================================
 'use strict';
 const Paths = require('./paths');
+const { createProbeCache } = require('./engine-probe-cache');
 
 function registerSystemIpc({ ipcMain, integrity, BrowserWindow, path, shell, app, fs, spawnEngine }) {
-  // 环境探针
-  ipcMain.handle('engine:probe', () => new Promise((resolve) => {
-    let acc = '';
-    try {
-      spawnEngine(['probe'], {
-        onLog: (l) => { acc += '\n' + l; },
-        onDone: () => {
-          const m = acc.match(/\{[\s\S]*\}/);
-          try { resolve(m ? JSON.parse(m[0]) : { ok: false, raw: acc }); }
-          catch { resolve({ ok: false, raw: acc }); }
-        },
-        onError: (e) => resolve({ ok: false, error: e }),
-      });
-    } catch (e) { resolve({ ok: false, error: String(e) }); }
-  }));
+  // 环境探针：结果 10 分钟有效 + 并发单飞。资源中心一次 onMounted 会同时打 probe 与 depCheck，
+  // 缓存后二次进入不再启动 Python（实测原本 11.6 s CPU / 两个进程）。
+  const probeCache = createProbeCache({ ttlMs: 10 * 60 * 1000 });
+  ipcMain.handle('engine:probe', (_e, opts) => {
+    if (opts && opts.fresh) probeCache.clear();
+    return probeCache.run('probe', () => new Promise((resolve) => {
+      let acc = '';
+      try {
+        spawnEngine(['probe'], {
+          onLog: (l) => { acc += '\n' + l; },
+          onDone: () => {
+            const m = acc.match(/\{[\s\S]*\}/);
+            try { resolve(m ? JSON.parse(m[0]) : { ok: false, raw: acc }); }
+            catch { resolve({ ok: false, raw: acc }); }
+          },
+          onError: (e) => resolve({ ok: false, error: e }),
+        });
+      } catch (e) { resolve({ ok: false, error: String(e) }); }
+    }), { shouldCache: (v) => !!(v && v.ok) });
+  });
 
   // CUDA 统一内存（cudaMallocManaged）可行性实验：独立脚本，不改变转录主流程
   ipcMain.handle('gpu:unifiedMemoryExperiment', () => new Promise((resolve) => {
