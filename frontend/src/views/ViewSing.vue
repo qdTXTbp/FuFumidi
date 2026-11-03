@@ -3637,6 +3637,20 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
 .trk { border-right-color: var(--hairline); background: color-mix(in srgb, var(--canvas) 46%, transparent); }
 .trk-head { border-bottom-color: var(--hairline); }
 .sing-banks, .sing-maker { border: 1px solid var(--hairline); border-radius: var(--r-lg); overflow: hidden; background: color-mix(in srgb, var(--surface) 58%, transparent); }
+/* 980 是设计回归的第一档窗口：页头/页签先换行，工作台从左右两栏改为上下两段，
+   否则轨道栏 264px + 编辑器会把时间线/属性面板挤出可视区（2026-11-04 截图实测）。 */
+@media (max-width: 1120px) {
+  .sing-head { flex-wrap: wrap; gap: var(--sp-3); }
+  .sing-head-actions { flex-wrap: wrap; margin-left: 0; }
+  .sing-nav { flex-wrap: wrap; }
+  .sing { flex-direction: column; }
+  .trk { width: auto; max-height: 232px; border-right: 0; border-bottom: 1px solid var(--hairline); }
+  .trk-list { display: flex; flex-wrap: wrap; align-content: flex-start; gap: var(--sp-2); }
+  .trk-item { flex: 1 1 240px; max-width: 360px; }
+  .trk-import { flex-wrap: wrap; }
+  .proj { align-items: flex-start; }
+  .roll-strip { overflow-x: auto; flex-wrap: nowrap; }
+}
 @media (max-width: 900px) { .sing-head { flex-wrap: wrap; } .sing-head-actions { margin-left: 0; } .sing-nav { flex-wrap: wrap; } }
 
 </style>

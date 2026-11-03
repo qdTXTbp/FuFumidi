@@ -68,7 +68,7 @@ frontend/.tmp/
 # Local Netlify folder
 .netlify
 
-# scratch/cache һ�ɷŲֿ��� (E:\Midi\_attic)������
+# scratch/cache һ�ɷŲֿ��� (E:\Midi\_attic)������
 _attic/
 
 # 前端源码目录例外：components/models 是 Vue 组件，不是模型权重（曾被全局 models/ 规则误伤，
@@ -87,3 +87,5 @@ docs/quality-last-run.json
 # 专用音频标签模型（方案 B，27MB）：随安装包分发，源码仓库也需要
 !resources/models/audio-tagger/
 !resources/models/audio-tagger/**
+# 设计回归截图/报告（本地产物，node scripts/design/shoot.mjs 重新生成）
+scripts/design/artifacts/

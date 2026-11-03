@@ -2268,7 +2268,7 @@ onBeforeUnmount(() => {
         <div class="tr-perf-hint" v-if="umodel === 'miros'">{{ t('MIROS 需先到资源中心下载运行时+权重（约 6 GB）') }}</div>
         <div class="tr-stem-row">
           <label class="tr-stem-toggle"><input type="checkbox" v-model="stemEnhance"> {{ t('智能分轨（推荐）') }}</label>
-          <span class="muted small">{{ t('自动分轨 + 固定音色；需先在资源中心安装 HTDemucs4_6stems，未安装会自动回退整曲') }}</span>
+          <span class="muted small tr-stem-hint">{{ t('自动分轨 + 固定音色；需先在资源中心安装 HTDemucs4_6stems，未安装会自动回退整曲') }}</span>
           <span style="flex:1"></span>
           <span class="muted small">{{ t('保留轨道') }}</span>
           <select class="select-input" v-model="trackBudget" style="width:132px" :disabled="!stemEnhance">
@@ -3011,4 +3011,12 @@ onBeforeUnmount(() => {
   .tr-view > .tr-run-panel .btn { max-width: 100%; white-space: normal; }
 }
 .tr-run-panel { position: static; margin-top: 0; }
+
+/* 6.5.0 智能分轨行：提示文字很长，必须换行而不是把「保留轨道」挤出可视区。
+   hint 独占一行（order 4 + flex-basis 100%），第一行只留开关 + 预算选择。 */
+.tr-stem-row { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; margin-top: var(--sp-2); }
+.tr-stem-toggle { display: inline-flex; align-items: center; gap: var(--sp-1); flex: none; font-size: var(--fs-sm); color: var(--text); }
+.tr-stem-hint { flex: 1 1 100%; order: 4; min-width: 0; color: var(--text3); line-height: 1.45; }
+.tr-stem-row .select-input { flex: none; }
+.tr-stem-row > span[style*="flex:1"] { flex: 1 1 40px; }
 </style>

@@ -126,7 +126,18 @@
 - 用户进场前的未提交 WIP（README 版本号 + MIROS CUDA 修复）保存在 stash@{0}，未混入本次提交。
 - 门禁：build 8.47s / typecheck 0 / test:ui **561** / audit 全绿 / cargo 64 / dualrun 18 文件 0 差异。
 
-## 11. 待收口（下一轮）
+## 11. 前端设计回归基线（2026-11-04）
+
+- 新增 `scripts/design/shoot.mjs`（npm run design:shoot）：三大视图 × 980/1280/1585 三档宽度截图，
+  自动统计横向溢出与越界元素；实测三档均无页面级横向溢出。
+- 首轮截图发现并修复两处真实布局病（980 档）：
+  · 调教页（ViewSing）：页头/页签不换行、左右两栏把时间线与属性面板挤出可视区 →
+    ≤1120px 改上下布局（轨道栏限高 + 编辑区全宽）、页头/页签换行、轨道卡横向排布；
+  · 转录页（ViewTranscribe）：智能分轨的超长提示把「保留轨道」预算选择挤出 →
+    提示独占第二行（flex-basis 100% + order），第一行只留开关与预算。
+- 视觉证据：scripts/design/artifacts/{edit,sing,transcribe}-{980,1280,1585}.png（本地产物，gitignored）。
+
+## 12. 待收口（下一轮）
 
 - Tauri POC（子代理 B）**已收口**：docs/rust/TAURI-POC.md。结论——外壳可行（cargo check 37s / build 44s；
   debug 12.58 MiB、release 5.87 MiB；开窗 0.73–0.86s；IPC 1.7–6.2ms；WebView2 156 已装）；
