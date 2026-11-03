@@ -98,6 +98,10 @@
 | **C 编排与混音** | clip→事件流成为播放真源/框选复制/24 轨上限解除/rAF 播放头/clip 淡化循环 gain/自动化/每轨混音/音频轨录音（延后决策） | 编排操作直接影响声音与导出；分轨导出电平正确 |
 | **D 校对闭环** | 公共节拍层（beat_this 全模型）/转录质量面板/音频-MIDI 双视图/refine 进编辑页/OMR 双栏对照/谱面校对/MusicXML 单解析器/调教曲线归属与 A/B 局部重渲 | 3 分钟音频 ≤30 分钟校对完；识谱可逐音核对；调教单次迭代 <10 s |
 
+**横向要求（贯穿全部里程碑）**：
+- **前端设计完善**：以 docs/DESIGN.md 的 token 表与 styles/controls.css 契约层为准，三大视图逐视图收口；980/1280/1585 三档布局回归；a11y/空状态/错误反馈随版本修，不一次性大改。
+- **品牌与 logo 保持**：图标=透明底头像特写、立绘进应用、安装器/splash/官网同源；Electron→Tauri 迁移必须复用同一套品牌图，禁止“顺手换 logo”。门禁 npm run check:brand（docs/BRAND.md + scripts/brand/brand-manifest.json）。
+
 **明确不做**：完整排版引擎（Dorico 级）、实时 VST 宿主、音频时间伸缩、MIDI 2.0/UMP、云协作（本阶段）。理由见 midi-workflow.md §7 与本方案 §8。
 
 ---
@@ -115,6 +119,7 @@
 | 产品止血（6.6） | F-01 试听、F-02 多选拖动、F-03 走带/循环、F-08 全局键让位、F-04 撤销时机/标签、A2 标尺、A1 吸附、F-06 内置 CC 最小集、M3 重复音合并开关、H1–H3/H6 性能与门禁 | 0.2 节 G1 第一条成立；perf gate 进 CI |
 | 运行时 POC（Gate G-A） | P1 更新链+签名+迁移桥；P2 插件 rquickjs；P3 printToPDF（WebView2 ICoreWebView2_16）；P4 视频/壁纸 WebCodecs | 四个 POC 通过或有可接受替代；否则回退 v2 |
 | 准备 | 代码签名证书采购；安装器身份；Tauri 骨架仓库 | 证书有排期；骨架能启动 |
+| 品牌/设计基线 | docs/BRAND.md + 品牌资产哈希门禁；前端设计 token/控件契约现状复核 | check:brand 绿；设计欠账清单进 6.7 |
 
 **Gate G-M0**：数据模型 v2 通过 + 契约生成 0 漂移 + 6.6 验收 + 四 POC 通过 → 进入 M1。
 

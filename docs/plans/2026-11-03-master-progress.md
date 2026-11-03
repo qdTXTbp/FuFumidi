@@ -100,7 +100,16 @@
 - 测试：core 38 + engine 26 = **64 个全绿**；cargo fmt / clippy -D warnings 均 clean（子代理已安装组件，Lead 复核）。
 - 与 Lead 的工作无冲突：main/rust.js 候选顺序、CI rust job、双跑脚本均按此接入。
 
-### 9. 待收口（下一轮）
+### 9. 前端设计与品牌（用户 2026-11-03 追加要求）
+
+- 新增 docs/BRAND.md：品牌规则/16 个资产清单/变更流程/迁移检查（Tauri 必须复用同一套 logo）。
+- 新增 npm run check:brand：SHA-256 manifest 门禁（scripts/brand/brand-manifest.json），CI 已接线；
+  品牌资产当前 **16/16 未变**。
+- 前端设计完善进入 P-026 / T-113：三大视图样式换 controls.css 契约类、980/1280/1585 三档回归、
+  a11y/空状态/错误反馈收口；原则是「不借重写顺手改视觉语言」。
+- 品牌迁移校验 T-114：Tauri 图标/安装器/splash 复用 build/icon.* 与 installer*.bmp，截图对比。
+
+### 10. 待收口（下一轮）
 
 - Tauri POC（子代理 B）：target/Cargo.lock 已生成、日志与 research 目录存在；等其结论文档，再决定是否记录为 POC 通过/阻塞。
 - 6.7 第一组（轨道 CRUD / 拍号编辑）尚未动；先按 RUST-PROJECT-MODEL v2 冻结细节。

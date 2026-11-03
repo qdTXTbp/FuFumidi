@@ -149,6 +149,8 @@ non_goals:
 | P-023 | 调教音高曲线挂到音符、随音符移动 | 移动音符颤音跟随 |
 | P-024 | 调教局部重渲 + A/B 对比 | 单次迭代 <10 秒 |
 | P-025 | 导出 FLAC/MP3/OGG；导出选区/循环；MIDI 带 marker | 三种格式可播放；选区导出正确 |
+| P-026 | 前端设计完善：三大视图样式换控件契约类；980/1280/1585 三档布局回归；a11y/空状态/错误反馈收口 | audit:ui-tokens 绿 + 三档截图通过；不改变品牌视觉语言 |
+| P-027 | 品牌与 logo 保持：图标/立绘/安装器图/splash/官网 logo 不因重写而变化 | npm run check:brand 绿；迁移前后截图一致 |
 
 ### 5.2 运行时（R-xxx）
 
@@ -177,6 +179,7 @@ non_goals:
 | S-004 | perf gate 进 CI（6.4.2 基线） | 超基线 +25% 失败 |
 | S-005 | 日志/崩溃/诊断包含 Rust 与回退信息 | diag:export 可见 |
 | S-006 | 许可证清单更新（verovio LGPL、GPL 音色库、AAC、kachina 风险） | 文档与 CI 检查通过 |
+| S-007 | 品牌资产守恒门禁：scripts/brand/manifest + docs/BRAND.md | check:brand 绿；任何 logo/图标变更必须 --update + 用户确认 |
 
 ## 6. 任务清单（T-xxx）
 
@@ -210,6 +213,7 @@ non_goals:
 | T-022 | POC 视频/壁纸 WebCodecs | — | docs/、临时分支 | 30 s 导出对比 | 3–5 |
 | T-023 | Rust workspace + Tauri 骨架 | — | crates/、src-tauri-new/、scripts/rust/ | 空壳启动 | 3–5 |
 | T-024 | 金标语料首批 + 对拍基线 | T-005 | test/fixtures/ | 数量与对拍通过 | 2–3 |
+| T-025 | 品牌资产门禁 + docs/BRAND.md（本轮已完成） | — | scripts/brand/、package.json、docs/BRAND.md | npm run check:brand 绿；16 个资产哈希入库 | 1–2 |
 
 ### M1（第 2–4 月）
 
@@ -227,6 +231,8 @@ non_goals:
 | T-110 | Rust core：SF2/SF3/MusicXML/ustx | T-109 | crates/core/ | cargo test + 对拍 | 5–8 |
 | T-111 | 原生 probe/deps R-011 | T-023 | crates/shell/ | 手测 <100 ms | 2–3 |
 | T-112 | 双构建流水线 | T-107 | scripts/、.github/ | 两个壳都能出内部包 | 2–3 |
+| T-113 | 前端设计完善第一批：ViewSing/ViewEdit/ViewTranscribe 换控件契约类（逐视图） | T-025 | frontend/src/views/*、styles/controls.css | audit:ui-tokens 绿 + 三档窗口截图 | 5–8 |
+| T-114 | 品牌一致性迁移校验：Tauri 图标/安装器/splash 复用同一套品牌图 | T-107、T-025 | build/、poc/tauri-poc 或 crates/shell/ | check:brand 绿 + 截图对比 | 1–2 |
 
 ### M2（第 4–7 月）
 

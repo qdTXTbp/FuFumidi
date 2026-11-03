@@ -65,6 +65,9 @@ jobs:
       - name: IPC contract drift gate
         run: npm run check:contracts
 
+      - name: Brand asset gate (logo must not change)
+        run: npm run check:brand
+
       - name: M0 unit tests (probe cache / db persist / storage cache)
         run: node --test scripts/test-engine-probe-cache.mjs scripts/test-db-persist.mjs scripts/test-storage-cache.mjs
 
@@ -84,6 +87,10 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '24'
+      - name: Rust fmt check
+        run: cargo fmt --manifest-path crates/Cargo.toml --all -- --check
+      - name: Rust clippy (deny warnings)
+        run: cargo clippy --manifest-path crates/Cargo.toml --all-targets -- -D warnings
       - name: Rust tests (crates workspace)
         run: cargo test --manifest-path crates/Cargo.toml
       - name: Build Rust engine (release)
