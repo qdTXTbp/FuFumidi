@@ -1,0 +1,765 @@
+{
+  "format": "fufumidi-engine-params-schema",
+  "version": 1,
+  "sources": {
+    "argparse": "engine/music2midi.py build_parser()",
+    "worker": "engine/music2midi.py cmd_worker() Namespace",
+    "engineMap": "main/engine.js worker request map",
+    "taskQueue": "main/task-queue.js spawn fallback flags"
+  },
+  "counts": {
+    "argparseParams": 56,
+    "workerKeys": 43,
+    "engineMapKeys": 27,
+    "taskQueueFlags": 15,
+    "params": 57
+  },
+  "params": [
+    {
+      "dest": "arch",
+      "flags": [
+        "--arch"
+      ],
+      "type": "str",
+      "default": "None",
+      "choices": null,
+      "workerKey": null,
+      "engineMapKey": null,
+      "taskQueueFlag": "--arch"
+    },
+    {
+      "dest": "audio_tagger",
+      "flags": [
+        "--audio-tagger"
+      ],
+      "type": "str",
+      "default": "None",
+      "choices": null,
+      "workerKey": "audio_tagger",
+      "engineMapKey": "audio_tagger",
+      "taskQueueFlag": "--audio-tagger"
+    },
+    {
+      "dest": "audio_tagger_whole_song",
+      "flags": [
+        "--audio-tagger-whole-song"
+      ],
+      "type": "bool(true)",
+      "default": null,
+      "choices": null,
+      "workerKey": "audio_tagger_whole_song",
+      "engineMapKey": "audio_tagger_whole_song",
+      "taskQueueFlag": "--audio-tagger-whole-song"
+    },
+    {
+      "dest": "audio_tagger_window_sec",
+      "flags": [
+        "--audio-tagger-window-sec"
+      ],
+      "type": "float",
+      "default": "None",
+      "choices": null,
+      "workerKey": "audio_tagger_window_sec",
+      "engineMapKey": "audio_tagger_window_sec",
+      "taskQueueFlag": "--audio-tagger-window-sec"
+    },
+    {
+      "dest": "auto_bpm",
+      "flags": [
+        "--auto-bpm"
+      ],
+      "type": "bool(true)",
+      "default": null,
+      "choices": null,
+      "workerKey": "auto_bpm",
+      "engineMapKey": null,
+      "taskQueueFlag": "--auto-bpm"
+    },
+    {
+      "dest": "batch_size",
+      "flags": [
+        "--batch-size"
+      ],
+      "type": "int",
+      "default": "None",
+      "choices": null,
+      "workerKey": null,
+      "engineMapKey": null,
+      "taskQueueFlag": "--batch-size"
+    },
+    {
+      "dest": "beam_size",
+      "flags": [
+        "--beam-size"
+      ],
+      "type": "int",
+      "default": "None",
+      "choices": null,
+      "workerKey": "beam_size",
+      "engineMapKey": "beam_size",
+      "taskQueueFlag": "--beam-size"
+    },
+    {
+      "dest": "beat_grid",
+      "flags": [
+        "--beat-grid"
+      ],
+      "type": "bool(true)",
+      "default": null,
+      "choices": null,
+      "workerKey": "beat_grid",
+      "engineMapKey": "beat_grid",
+      "taskQueueFlag": "--beat-grid"
+    },
+    {
+      "dest": "cfg_coef",
+      "flags": [
+        "--cfg-coef"
+      ],
+      "type": "float",
+      "default": "None",
+      "choices": null,
+      "workerKey": "cfg_coef",
+      "engineMapKey": "cfg_coef",
+      "taskQueueFlag": "--cfg-coef"
+    },
+    {
+      "dest": "chunk_size",
+      "flags": [
+        "--chunk-size"
+      ],
+      "type": "int",
+      "default": "None",
+      "choices": null,
+      "workerKey": null,
+      "engineMapKey": null,
+      "taskQueueFlag": "--chunk-size"
+    },
+    {
+      "dest": "config",
+      "flags": [
+        "--config"
+      ],
+      "type": "str",
+      "default": "None",
+      "choices": null,
+      "workerKey": null,
+      "engineMapKey": null,
+      "taskQueueFlag": "--config"
+    },
+    {
+      "dest": "denoise",
+      "flags": [
+        "--denoise"
+      ],
+      "type": "bool(true)",
+      "default": null,
+      "choices": null,
+      "workerKey": "denoise",
+      "engineMapKey": null,
+      "taskQueueFlag": "--denoise"
+    },
+    {
+      "dest": "denoise_mode",
+      "flags": [
+        "--denoise-mode"
+      ],
+      "type": "str",
+      "default": "None",
+      "choices": [
+        "off"
+      ],
+      "workerKey": "denoise_mode",
+      "engineMapKey": "denoise_mode",
+      "taskQueueFlag": "--denoise-mode"
+    },
+    {
+      "dest": "dump_tokens",
+      "flags": [
+        "--dump-tokens"
+      ],
+      "type": "str",
+      "default": "None",
+      "choices": null,
+      "workerKey": null,
+      "engineMapKey": null,
+      "taskQueueFlag": "--dump-tokens"
+    },
+    {
+      "dest": "engine_mode",
+      "flags": [
+        "--mode",
+        "--engine"
+      ],
+      "type": "str",
+      "default": "\"universal\"",
+      "choices": null,
+      "workerKey": "mode",
+      "engineMapKey": null,
+      "taskQueueFlag": "--mode"
+    },
+    {
+      "dest": "export_stems",
+      "flags": [
+        "--export-stems"
+      ],
+      "type": "bool(true)",
+      "default": null,
+      "choices": null,
+      "workerKey": "export_stems",
+      "engineMapKey": null,
+      "taskQueueFlag": "--export-stems"
+    },
+    {
+      "dest": "format",
+      "flags": [
+        "--format"
+      ],
+      "type": "str",
+      "default": "None",
+      "choices": null,
+      "workerKey": null,
+      "engineMapKey": null,
+      "taskQueueFlag": "--format"
+    },
+    {
+      "dest": "frame_threshold",
+      "flags": [
+        "--frame-threshold"
+      ],
+      "type": "float",
+      "default": "None",
+      "choices": null,
+      "workerKey": "frame_threshold",
+      "engineMapKey": "frame_threshold",
+      "taskQueueFlag": "--frame-threshold"
+    },
+    {
+      "dest": "input",
+      "flags": [],
+      "type": "str",
+      "default": null,
+      "choices": null,
+      "workerKey": "audio",
+      "engineMapKey": null,
+      "taskQueueFlag": null
+    },
+    {
+      "dest": "input_dir",
+      "flags": [
+        "-i",
+        "--input-dir"
+      ],
+      "type": "str",
+      "default": "DEFAULT_INPUT_DIR",
+      "choices": null,
+      "workerKey": null,
+      "engineMapKey": null,
+      "taskQueueFlag": "--input-dir"
+    },
+    {
+      "dest": "max_note_hold",
+      "flags": [
+        "--max-note-hold"
+      ],
+      "type": "float",
+      "default": "None",
+      "choices": null,
+      "workerKey": "max_note_hold",
+      "engineMapKey": "max_note_hold",
+      "taskQueueFlag": "--max-note-hold"
+    },
+    {
+      "dest": "maximum_frequency",
+      "flags": [
+        "--max-freq",
+        "--maximum-frequency"
+      ],
+      "type": "float",
+      "default": "None",
+      "choices": null,
+      "workerKey": "max_freq",
+      "engineMapKey": "max_freq",
+      "taskQueueFlag": "--max-freq"
+    },
+    {
+      "dest": "memory_mode",
+      "flags": [
+        "--memory-mode"
+      ],
+      "type": "str",
+      "default": "None",
+      "choices": [
+        "auto"
+      ],
+      "workerKey": "memory_mode",
+      "engineMapKey": "memory_mode",
+      "taskQueueFlag": "--memory-mode"
+    },
+    {
+      "dest": "merge_gap_ms",
+      "flags": [
+        "--merge-gap-ms"
+      ],
+      "type": "int",
+      "default": "None",
+      "choices": null,
+      "workerKey": "merge_gap_ms",
+      "engineMapKey": "merge_gap_ms",
+      "taskQueueFlag": "--merge-gap-ms"
+    },
+    {
+      "dest": "min_note_length",
+      "flags": [
+        "--min-note-length"
+      ],
+      "type": "float",
+      "default": "None",
+      "choices": null,
+      "workerKey": "min_note_length",
+      "engineMapKey": "min_note_length",
+      "taskQueueFlag": "--min-note-length"
+    },
+    {
+      "dest": "min_note_ms",
+      "flags": [
+        "--min-note-ms"
+      ],
+      "type": "int",
+      "default": "None",
+      "choices": null,
+      "workerKey": "min_note_ms",
+      "engineMapKey": "min_note_ms",
+      "taskQueueFlag": "--min-note-ms"
+    },
+    {
+      "dest": "minimum_frequency",
+      "flags": [
+        "--min-freq",
+        "--minimum-frequency"
+      ],
+      "type": "float",
+      "default": "None",
+      "choices": null,
+      "workerKey": "min_freq",
+      "engineMapKey": "min_freq",
+      "taskQueueFlag": "--min-freq"
+    },
+    {
+      "dest": "mode",
+      "flags": [],
+      "type": "str",
+      "default": "\"gui\"",
+      "choices": [
+        "convert"
+      ],
+      "workerKey": null,
+      "engineMapKey": null,
+      "taskQueueFlag": null
+    },
+    {
+      "dest": "model",
+      "flags": [
+        "--model"
+      ],
+      "type": "str",
+      "default": "None",
+      "choices": null,
+      "workerKey": "model",
+      "engineMapKey": "model",
+      "taskQueueFlag": "--model"
+    },
+    {
+      "dest": "model_size",
+      "flags": [
+        "--model-size"
+      ],
+      "type": "str",
+      "default": "None",
+      "choices": null,
+      "workerKey": "model_size",
+      "engineMapKey": "model_size",
+      "taskQueueFlag": "--model-size"
+    },
+    {
+      "dest": "multiple_pitch_bends",
+      "flags": [
+        "--multiple-pitch-bends"
+      ],
+      "type": "bool(true)",
+      "default": null,
+      "choices": null,
+      "workerKey": "multiple_pitch_bends",
+      "engineMapKey": null,
+      "taskQueueFlag": "--multiple-pitch-bends"
+    },
+    {
+      "dest": "muscriptor_batch",
+      "flags": [],
+      "type": "unknown",
+      "default": null,
+      "choices": null,
+      "workerKey": "muscriptor_batch",
+      "engineMapKey": "muscriptor_batch",
+      "taskQueueFlag": null,
+      "workerOnly": true
+    },
+    {
+      "dest": "muscriptor_instruments",
+      "flags": [
+        "--muscriptor-instruments"
+      ],
+      "type": "str",
+      "default": "None",
+      "choices": null,
+      "workerKey": "muscriptor_instruments",
+      "engineMapKey": "muscriptor_instruments",
+      "taskQueueFlag": "--muscriptor-instruments"
+    },
+    {
+      "dest": "no_melodia",
+      "flags": [
+        "--no-melodia"
+      ],
+      "type": "bool(true)",
+      "default": null,
+      "choices": null,
+      "workerKey": "no_melodia",
+      "engineMapKey": null,
+      "taskQueueFlag": "--no-melodia"
+    },
+    {
+      "dest": "no_merge",
+      "flags": [
+        "--no-merge"
+      ],
+      "type": "bool(true)",
+      "default": null,
+      "choices": null,
+      "workerKey": "no_merge",
+      "engineMapKey": null,
+      "taskQueueFlag": "--no-merge"
+    },
+    {
+      "dest": "no_pedal",
+      "flags": [
+        "--no-pedal"
+      ],
+      "type": "bool(true)",
+      "default": null,
+      "choices": null,
+      "workerKey": "no_pedal",
+      "engineMapKey": null,
+      "taskQueueFlag": "--no-pedal"
+    },
+    {
+      "dest": "no_velnorm",
+      "flags": [
+        "--no-velnorm"
+      ],
+      "type": "bool(true)",
+      "default": null,
+      "choices": null,
+      "workerKey": "no_velnorm",
+      "engineMapKey": null,
+      "taskQueueFlag": "--no-velnorm"
+    },
+    {
+      "dest": "normalize",
+      "flags": [
+        "--normalize"
+      ],
+      "type": "bool(true)",
+      "default": null,
+      "choices": null,
+      "workerKey": "normalize",
+      "engineMapKey": null,
+      "taskQueueFlag": "--normalize"
+    },
+    {
+      "dest": "num_overlap",
+      "flags": [
+        "--num-overlap"
+      ],
+      "type": "int",
+      "default": "None",
+      "choices": null,
+      "workerKey": null,
+      "engineMapKey": null,
+      "taskQueueFlag": "--num-overlap"
+    },
+    {
+      "dest": "onset_threshold",
+      "flags": [
+        "--onset-threshold"
+      ],
+      "type": "float",
+      "default": "None",
+      "choices": null,
+      "workerKey": "onset_threshold",
+      "engineMapKey": "onset_threshold",
+      "taskQueueFlag": "--onset-threshold"
+    },
+    {
+      "dest": "output",
+      "flags": [
+        "-o",
+        "--output"
+      ],
+      "type": "str",
+      "default": null,
+      "choices": null,
+      "workerKey": "out",
+      "engineMapKey": null,
+      "taskQueueFlag": "--output"
+    },
+    {
+      "dest": "output_dir",
+      "flags": [
+        "--output-dir"
+      ],
+      "type": "str",
+      "default": "DEFAULT_OUTPUT_DIR",
+      "choices": null,
+      "workerKey": null,
+      "engineMapKey": null,
+      "taskQueueFlag": "--output-dir"
+    },
+    {
+      "dest": "perf",
+      "flags": [
+        "--perf"
+      ],
+      "type": "str",
+      "default": "\"quality\"",
+      "choices": [
+        "quality"
+      ],
+      "workerKey": "perf",
+      "engineMapKey": null,
+      "taskQueueFlag": "--perf"
+    },
+    {
+      "dest": "precision",
+      "flags": [
+        "--precision"
+      ],
+      "type": "str",
+      "default": "None",
+      "choices": [
+        "fp32"
+      ],
+      "workerKey": "precision",
+      "engineMapKey": "precision",
+      "taskQueueFlag": "--precision"
+    },
+    {
+      "dest": "prelude_forcing",
+      "flags": [
+        "--no-prelude-forcing"
+      ],
+      "type": "bool(false)",
+      "default": "None",
+      "choices": null,
+      "workerKey": "prelude_forcing",
+      "engineMapKey": "prelude_forcing",
+      "taskQueueFlag": "--no-prelude-forcing"
+    },
+    {
+      "dest": "preset",
+      "flags": [
+        "--preset"
+      ],
+      "type": "str",
+      "default": "None",
+      "choices": null,
+      "workerKey": "preset",
+      "engineMapKey": null,
+      "taskQueueFlag": "--preset"
+    },
+    {
+      "dest": "probe_segment_sec",
+      "flags": [
+        "--probe-segment-sec"
+      ],
+      "type": "float",
+      "default": "None",
+      "choices": null,
+      "workerKey": "probe_segment_sec",
+      "engineMapKey": "probe_segment_sec",
+      "taskQueueFlag": "--probe-segment-sec"
+    },
+    {
+      "dest": "replay_tokens",
+      "flags": [
+        "--replay-tokens"
+      ],
+      "type": "str",
+      "default": "None",
+      "choices": null,
+      "workerKey": null,
+      "engineMapKey": null,
+      "taskQueueFlag": "--replay-tokens"
+    },
+    {
+      "dest": "segment_sec",
+      "flags": [
+        "--segment-sec"
+      ],
+      "type": "float",
+      "default": "None",
+      "choices": null,
+      "workerKey": "segment_sec",
+      "engineMapKey": "segment_sec",
+      "taskQueueFlag": "--segment-sec"
+    },
+    {
+      "dest": "stem_format",
+      "flags": [
+        "--stem-format"
+      ],
+      "type": "str",
+      "default": "None",
+      "choices": null,
+      "workerKey": "stem_format",
+      "engineMapKey": "stem_format",
+      "taskQueueFlag": "--stem-format"
+    },
+    {
+      "dest": "stems",
+      "flags": [
+        "--stems"
+      ],
+      "type": "str",
+      "default": "None",
+      "choices": null,
+      "workerKey": null,
+      "engineMapKey": null,
+      "taskQueueFlag": "--stems"
+    },
+    {
+      "dest": "temperature",
+      "flags": [
+        "--temperature"
+      ],
+      "type": "float",
+      "default": "None",
+      "choices": null,
+      "workerKey": "temperature",
+      "engineMapKey": "temperature",
+      "taskQueueFlag": "--temperature"
+    },
+    {
+      "dest": "tempo",
+      "flags": [
+        "--tempo"
+      ],
+      "type": "int",
+      "default": "None",
+      "choices": null,
+      "workerKey": "tempo",
+      "engineMapKey": "tempo",
+      "taskQueueFlag": "--tempo"
+    },
+    {
+      "dest": "timbre_stabilize",
+      "flags": [
+        "--timbre-stabilize"
+      ],
+      "type": "bool(true)",
+      "default": null,
+      "choices": null,
+      "workerKey": "timbre_stabilize",
+      "engineMapKey": null,
+      "taskQueueFlag": "--timbre-stabilize"
+    },
+    {
+      "dest": "tta",
+      "flags": [
+        "--tta"
+      ],
+      "type": "bool(true)",
+      "default": null,
+      "choices": null,
+      "workerKey": null,
+      "engineMapKey": null,
+      "taskQueueFlag": "--tta"
+    },
+    {
+      "dest": "version",
+      "flags": [
+        "--version"
+      ],
+      "type": "str",
+      "default": null,
+      "choices": null,
+      "workerKey": null,
+      "engineMapKey": null,
+      "taskQueueFlag": "--version"
+    },
+    {
+      "dest": "with_drums",
+      "flags": [
+        "--with-drums"
+      ],
+      "type": "bool(true)",
+      "default": null,
+      "choices": null,
+      "workerKey": "with_drums",
+      "engineMapKey": null,
+      "taskQueueFlag": "--with-drums"
+    }
+  ],
+  "drift": {
+    "workerDestsWithoutArgparse": [],
+    "engineKeysNotInWorker": [],
+    "engineKeysNotInArgparse": [],
+    "taskQueueKeysWithoutEngineMap": []
+  },
+  "engineMap": {
+    "denoise_mode": "denoise_mode",
+    "onset_threshold": "onset_threshold",
+    "frame_threshold": "frame_threshold",
+    "min_note_length": "min_note_length",
+    "min_note_ms": "min_note_ms",
+    "merge_gap_ms": "merge_gap_ms",
+    "tempo": "tempo",
+    "stem_format": "stem_format",
+    "model": "model",
+    "model_size": "model_size",
+    "muscriptor_batch": "muscriptor_batch",
+    "muscriptor_instruments": "muscriptor_instruments",
+    "probe_segment_sec": "probe_segment_sec",
+    "audio_tagger": "audio_tagger",
+    "audio_tagger_whole_song": "audio_tagger_whole_song",
+    "audio_tagger_window_sec": "audio_tagger_window_sec",
+    "min_freq": "min_freq",
+    "max_freq": "max_freq",
+    "beat_grid": "beat_grid",
+    "segment_sec": "segment_sec",
+    "memory_mode": "memory_mode",
+    "max_note_hold": "max_note_hold",
+    "temperature": "temperature",
+    "cfg_coef": "cfg_coef",
+    "beam_size": "beam_size",
+    "prelude_forcing": "prelude_forcing",
+    "precision": "precision"
+  },
+  "taskQueueMap": {
+    "merge_gap_ms": "--merge-gap-ms",
+    "tempo": "--tempo",
+    "denoise_mode": "--denoise-mode",
+    "segment_sec": "--segment-sec",
+    "audio_tagger": "--audio-tagger",
+    "probe_segment_sec": "--probe-segment-sec",
+    "audio_tagger_window_sec": "--audio-tagger-window-sec",
+    "min_freq": "--min-freq",
+    "max_freq": "--max-freq",
+    "temperature": "--temperature",
+    "cfg_coef": "--cfg-coef",
+    "beam_size": "--beam-size",
+    "precision": "--precision",
+    "memory_mode": "--memory-mode",
+    "muscriptor_batch": "--batch-size"
+  }
+}
