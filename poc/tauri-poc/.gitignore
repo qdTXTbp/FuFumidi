@@ -1,7 +1,12 @@
 # 构建产物
 /target
 node_modules
-# dist/index.html 是 POC 的静态前端入口（frontendDist="dist"），必须入库：
-# 忽略 dist 其余生成物
+# dist/index.html 是最小自测入口（把 frontendDist 改成 "dist" 时使用），必须入库
 /dist/*
 !/dist/index.html
+# 第三方源码快照与 tauri 生成物：可按报告 §4 的版本重取，不必入库
+/research/
+/gen/
+# 计时/构建日志：只保留 ipc-smoke.log（Rust 侧写盘的 IPC 证据）
+*.log
+!ipc-smoke.log

@@ -62,9 +62,17 @@ fn main() {
                 std::thread::spawn(move || {
                     std::thread::sleep(std::time::Duration::from_millis(2500));
                     if let Some(w) = handle.get_webview_window("main") {
-                        let js = "document.title = 'fuBridge=' + (typeof window.fuBridge) \
-                                  + ' appChildren=' + ((document.getElementById('app')||{childElementCount:-1}).childElementCount) \
-                                  + ' ta=' + (typeof window.__TAURI__)";
+                        // 把测量结果通过我们自己的 command 写回 ipc-smoke.log（document.title 不会同步到原生标题栏）
+                        let js = r#"try {
+                            window.__TAURI__.core.invoke('poc_echo', { payload: {
+                              probe: 'renderer-dist',
+                              fuBridge: typeof window.fuBridge,
+                              tauriGlobal: typeof window.__TAURI__,
+                              appChildren: (document.getElementById('app') || { childElementCount: -1 }).childElementCount,
+                              title: document.title,
+                              href: location.href
+                            }});
+                          } catch (e) { console.error(e); }"#;
                         let _ = w.eval(js);
                     }
                 });

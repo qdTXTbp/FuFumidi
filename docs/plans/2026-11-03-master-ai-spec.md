@@ -168,6 +168,7 @@ non_goals:
 | R-010 | 去 Python：base 无 Python 全功能可用 | 安装包 ≤250 MiB；首任务 ≤1.5 s |
 | R-011 | 原生 probe/deps | 资源中心 <100 ms；0 Python 进程 |
 | R-012 | 包体/启动/内存达标 | 见 human_doc §0.3 |
+| R-013 | Tauri 壳可加载现有 renderer/dist 并渲染（POC 已验证；正式化） | 开窗后 #app 挂载、Vue Router #/home、window.fuBridge 为 object；无业务 command 时明确提示 |
 
 ### 5.3 共享（S-xxx）
 
@@ -180,6 +181,7 @@ non_goals:
 | S-005 | 日志/崩溃/诊断包含 Rust 与回退信息 | diag:export 可见 |
 | S-006 | 许可证清单更新（verovio LGPL、GPL 音色库、AAC、kachina 风险） | 文档与 CI 检查通过 |
 | S-007 | 品牌资产守恒门禁：scripts/brand/manifest + docs/BRAND.md | check:brand 绿；任何 logo/图标变更必须 --update + 用户确认 |
+| S-008 | Cargo 依赖可获取性：镜像/vendor + CI 缓存 | 冷环境首次 cargo fetch ≤120 s（当前直连 580 s，不可接受）；CI 有 cache |
 
 ## 6. 任务清单（T-xxx）
 
@@ -214,6 +216,7 @@ non_goals:
 | T-023 | Rust workspace + Tauri 骨架 | — | crates/、src-tauri-new/、scripts/rust/ | 空壳启动 | 3–5 |
 | T-024 | 金标语料首批 + 对拍基线 | T-005 | test/fixtures/ | 数量与对拍通过 | 2–3 |
 | T-025 | 品牌资产门禁 + docs/BRAND.md（本轮已完成） | — | scripts/brand/、package.json、docs/BRAND.md | npm run check:brand 绿；16 个资产哈希入库 | 1–2 |
+| T-026 | Cargo 镜像/vendor + CI 缓存（S-008） | — | .cargo/config.toml、.github/workflows/ci.yml | 冷环境 fetch ≤120 s；CI cache 命中 | 2–3 |
 
 ### M1（第 2–4 月）
 
@@ -233,6 +236,8 @@ non_goals:
 | T-112 | 双构建流水线 | T-107 | scripts/、.github/ | 两个壳都能出内部包 | 2–3 |
 | T-113 | 前端设计完善第一批：ViewSing/ViewEdit/ViewTranscribe 换控件契约类（逐视图） | T-025 | frontend/src/views/*、styles/controls.css | audit:ui-tokens 绿 + 三档窗口截图 | 5–8 |
 | T-114 | 品牌一致性迁移校验：Tauri 图标/安装器/splash 复用同一套品牌图 | T-107、T-025 | build/、poc/tauri-poc 或 crates/shell/ | check:brand 绿 + 截图对比 | 1–2 |
+| T-115 | IPC 代码生成纵切：从 ipc.schema.json 生成 10 条真实 command + 桥映射（含事件退订） | T-003、T-107 | crates/shell/ipc/、frontend/src/bridge/ | 10 通道端到端通过；手写映射减少 | 5–8 |
+| T-116 | Tauri 壳渲染冒烟：加载 renderer/dist，验证 #app/Router/fuBridge/标题 | T-107 | crates/shell/、scripts/ | 与 POC §3.4 同等断言；失败即红 | 1–2 |
 
 ### M2（第 4–7 月）
 
