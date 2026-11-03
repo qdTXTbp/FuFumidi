@@ -2,7 +2,7 @@
 
 > A 口径 = Tauri 2 外壳 + Rust 引擎，UI 继续用 Vue 3 跑在 WebView2 里。
 > 本文件只记录 **独立原型** 的实测结论，不改主应用一行代码。
-> 原型位置：`poc/tauri-poc/`（`main/`、`frontend/`、`engine/`、`package.json` 均未改动，无 commit）。
+> 原型位置：`poc/tauri-poc/`（`main/`、`frontend/`、`engine/`、`package.json` 均未改动；本 POC 未执行 git commit）。
 > 测量时间 2026-11-03 23:17–23:5x（+08:00）· 机器见 §1。
 
 ---
@@ -18,6 +18,7 @@
 | 能否打开窗口 | ✅ 能 | 从进程启动到窗口句柄可用 **0.73–0.86 s**（3 次），截图 `poc/tauri-poc/artifacts/window.png` |
 | WebView2 运行时版本 | ✅ 已装 | 磁盘 **156.0.4314.58**；运行时 UA `Chrome/156.0.0.0 Edg/156.0.0.0` |
 | 本地 HTML 加载 + IPC 往返 | ✅ 能 | JS → Rust → JS，首次 26–31 ms（含预热），后续 **1.7–6.2 ms** |
+| 现有 Vue 产物能否在 Tauri 里渲染 | ✅ **能**（已有桥接层） | `renderer/dist` 直接指向后：`#/home` 路由生效、`#app` 已挂载、`window.fuBridge` 为 object（见 §3.4） |
 | Tauri 2 updater 支持「多源」 | ✅ 支持（仅**顺序 failover**，无测速） | `config.rs` `endpoints: Vec<Url>`；`updater.rs` `for url in &self.endpoints` |
 | Tauri 2 updater 支持「增量」 | ❌ **不支持** | 官方源码全文无 delta/patch/bsdiff/Range/续传；`download()` 整包读进内存 `Vec<u8>` |
 
@@ -26,7 +27,7 @@
 - **可行**：Tauri 2 在本机可构建、可开窗、可跑 IPC；壳体积相比 Electron 有量级优势（WebView2 由系统提供，不打进包）。
 - **阻塞（流程级，不是技术级）**：crates.io 直连拉 407 个 crate 用了 **580 s（9.7 min）**，且期间出现 3 次 `spurious network error: transfer too slow`。首次构建体验与 CI 必须换镜像或预热 vendor 缓存，否则「随便改一行试试」的成本会高到没人愿意试。
 - **阻塞（产品级）**：`tauri-plugin-updater` **没有增量更新**，且验签格式是 **minisign + JSON manifest**，与 FuFumidi 现有的 **Ed25519 + `update-manifest.json` + Kachina + CNB/GitHub 多源 + `.part` 原子下载** 不是一回事（见 §4.3）。迁移更新链 = 重做发布管线，不是换个插件。
-- **待深挖**：NSIS 打包（本次 `bundle.active=false`，未测）、release 体积（§3.2）、插件宿主（rquickjs）、printToPDF、视频导出、以及 250 条 IPC 的代码生成。
+- **待深挖**：NSIS 打包/安装/覆盖升级（本次 `bundle.active=false`，未测）、插件宿主（rquickjs）、printToPDF、视频导出、以及 250 条 IPC 的代码生成。
 
 ---
 
@@ -56,7 +57,7 @@
 poc/tauri-poc/
 ├── Cargo.toml                 # tauri 2 + serde，无 tauri-cli、无 npm 依赖
 ├── build.rs                   # tauri_build::build()
-├── tauri.conf.json            # frontendDist = "dist"，withGlobalTauri = true
+├── tauri.conf.json            # frontendDist = "../../renderer/dist"（默认：真实 UI）；withGlobalTauri = true
 ├── capabilities/default.json  # 最小能力集：core:default
 ├── src/main.rs                # 2 个 command：poc_ping / poc_echo（证据写盘）
 ├── dist/index.html            # 自带静态页，开窗即自动跑 IPC 往返
@@ -67,6 +68,10 @@ poc/tauri-poc/
 ```
 
 **关键点：不依赖 `tauri-cli`、不依赖 npm。** `cargo build` 直接出 exe，`tauri.conf.json` 由 `tauri-build` + `generate_context!` 在编译期读取。这让 POC 的依赖面只有 crates.io。
+
+**两种前端模式（同一份代码）**：
+- 默认 `frontendDist = "../../renderer/dist"`：加载 6.4.2 真实 Vue 产物（§3.4 的验证方式；需先 `npm --prefix frontend run build`）；
+- 最小自测：把该值改成 `"dist"`，用自带 `dist/index.html`（不依赖主应用构建，纯 IPC 往返）。
 
 复现（PowerShell / bash 均可）：
 
@@ -95,6 +100,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/window-probe.ps1 \
 | 冷构建合计（**不含下载**） | **81 s** | check + build |
 | **空跑 `cargo build`**（无改动） | **0.71–0.92 s** | fingerprint 命中，仅做 freshness 检查 |
 | **增量**（改一处 `src/main.rs` 代码） | **2.96–4.10 s** | 只重编 `tauri-poc` 自身 crate，依赖不重编 |
+| **release 构建**（`lto=true` / `codegen-units=1` / `strip=true` / `opt-level="s"`） | **129 s** | rc=0，cargo 自报 2m 08s |
 
 要点：
 
@@ -109,13 +115,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/window-probe.ps1 \
 | `target/debug/tauri-poc.exe` | **13,190,144 B = 12.58 MiB** | debug + debuginfo |
 | `target/release/tauri-poc.exe` | **6,157,824 B = 5.87 MiB** | lto + strip + opt-level="s" |
 | `target/`（debug） | 2,497 MB | 中间产物，不入包 |
-| **release 构建**（`cargo build --release`，`lto=true` / `codegen-units=1` / `strip=true` / `opt-level="s"`） | **129 s** | rc=0，cargo 自报 2m 08s；产出 **5.87 MiB** exe |
 | `target/release/` 目录 | 1,128 MB | 中间产物，不入包 |
 | **对照：现有 Electron 安装包** | **635,789,305 B = 606.3 MiB** | `release/FuFumidi Setup 6.4.2.exe` |
 
 > 12.58 MiB 只是**壳**：不含前端资源、不含引擎、不含模型。它证明的是「同样是 WebView 外壳，Tauri 侧基线只有 MB 级」；不等于 FuFumidi 成品会只有 12 MiB（Vue 产物 17 MB、音色库/模型/引擎才是大头）。真正的价值是**去掉 Electron/Node/Chromium 那一份固定开销**，不是把 606 MiB 变成 12 MiB。
-
-（release：129 s → 5.87 MiB，见 §3.2 与文末补记。）
 
 ### 3.3 运行时
 
@@ -146,6 +149,34 @@ Electron 是 `ipcRenderer.invoke('chan', a, b)`（位置参数），Tauri 是 `i
 第一版页面直接 `invoke('poc_echo', {sym:'C4'})` → Rust 侧报 `missing required key payload`，只有 `poc_ping`（无参）成功（`ipc-smoke.log` 里当时只有 1 行）。改成 `{ payload }` 后 4 条全部成功。**这条必须在桥接层统一处理，否则 250 条里会错一大片。**
 
 证据文件：`poc/tauri-poc/ipc-smoke.log`（Rust 侧追加写入，JS 无法伪造）；截图 `poc/tauri-poc/artifacts/window.png`。
+
+---
+
+### 3.4 意外收获：现有 Vue 产物（`renderer/dist`）直接就能在 Tauri 里渲染
+
+把 `frontendDist` 指向仓库现有的 `renderer/dist`（17 MB，6.4.2 的真实构建产物；已设为当前默认配置）再 `cargo build`（增量 **6.53 s**；exe 从 13.2 MB 涨到 19.9 MB，因为静态资源被内嵌进二进制），开窗后实测：
+
+| 指标 | 实测 |
+|---|---|
+| 页面 URL | `http://tauri.localhost/#/home`（Vue Router 已接管） |
+| `#app` 子节点数 | 1（Vue 已挂载） |
+| `document.title` | `FuFumidi · 播放器 / 编辑 / 转录 / 乐谱` |
+| `typeof window.fuBridge` | **object** |
+| `typeof window.__TAURI__` | object |
+| 开窗耗时 | 0.70–0.84 s |
+
+截图：`poc/tauri-poc/artifacts/window-renderer-dist.png`（真实 FuFumidi 界面 + 新手引导，不是占位页）。
+
+原因：`frontend/src/bridge/tauri.js` 已经存在，并在 `frontend/src/main.ts` 里被调用 —— 检测到 `window.__TAURI_INTERNALS__` 就注入 `window.fuBridge`，把 Electron channel 映射到 Tauri command。
+
+**边界（很重要）**：这个 POC 外壳**一个业务 command 都没有注册**，所以界面上任何真正要数据的操作（读设置、列歌单、读 MIDI）都会 invoke 失败。**能渲染 ≠ 能用。** 但这条实测把「Vue UI 能不能跑在 Tauri 上」从「未知」变成了「已验证」，也说明 250 条 IPC 的迁移不是从零开始：
+
+| 层 | 现状 |
+|---|---:|
+| `preload.js` 定义的通道 | **255** 个 invoke + 29 个事件订阅（28 个事件名） |
+| `frontend/src/bridge/tauri.js` 已映射 | **83** 个 command + 11 个事件（≈1/3） |
+| 旧 `src-tauri/src/lib.rs` 已有 Rust 实现 | **76** 个 command（版本停在 3.1.x，与 6.4.2 主应用脱节） |
+| 缺 | ≈172 个通道没有 Tauri 侧实现；且现有映射是**手写**的（这正是 §6① 要解决的） |
 
 ---
 
@@ -208,6 +239,7 @@ Electron 是 `ipcRenderer.invoke('chan', a, b)`（位置参数），Tauri 是 `i
 | `ipcRenderer.on` 事件订阅 | **29**（28 个事件名） | `preload.js` grep |
 | 主进程代码量 | 17,913 行 | `main/*.js` |
 | 仓库里 Tauri 手写 command（旧骨架） | 76 | `src-tauri/src/lib.rs` |
+| 现有 Tauri 桥接已映射 command / 事件 | 83 / 11 | `frontend/src/bridge/tauri.js`（§3.4） |
 
 ### ① 一份契约源 + 代码生成（不做这一步，250 条必然写崩）
 
@@ -276,10 +308,10 @@ command 本身要 `async` + 后台线程，不能堵住 IPC；取消要走命令
 ## 附：本次未测 / 不能作为结论的部分
 
 - `tauri build`（NSIS bundle）未跑：本次 `bundle.active=false`，只验证 `cargo build`；打包体积、安装行为、覆盖升级、卸载残留都未测。
-- release profile 的最终体积见下方补记；**不带 `lto` 的 release 或 debug 体积不能直接当产品体积**。
+- release 体积已测（§3.2 / 文末补记），但那是**空壳**；**不能把这个数字当 FuFumidi 成品体积**。
 - 多窗口/托盘/单实例/全局热键/文件关联/自启均未测。
 - 大文件二进制 IPC（`ipc::Response`）只是读源码确认 API 存在，**没有实测吞吐**。
-- 现有 `renderer/dist`（17 MB Vue 产物）在 Tauri 下的加载未测：本次用的是自带静态页；已知缺口是 `window.fuBridge` 不存在，Vue 应用启动即会失败（这是预期的，正对应 §6②）。
+- 现有 `renderer/dist` 的加载**已测通**（§3.4，能渲染）；但**功能联通未测** —— POC 外壳没有注册任何业务 command，读到真实数据的路径全部会失败。
 
 ---
 
