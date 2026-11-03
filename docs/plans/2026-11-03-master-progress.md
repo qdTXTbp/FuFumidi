@@ -69,7 +69,7 @@
 | 事项 | 结果 | 证据 |
 |---|---|---|
 | Rust workspace 可构建 | crates/ 下 fufumidi-core（零依赖）+ fufumidi-engine（CLI + JSON 行协议），cargo test / build 绿 | crates/target/debug/fufumidi-engine.exe |
-| 测试数 | 68 个 Rust 测试全绿（core 38 + engine 25 + Lead 补的 core 8 / protocol 7，去重后 68） | cargo test 输出 |
+| 测试数 | **64 个 Rust 测试全绿**（core 38 = smf_parse 16 + smf_contract 8 + stats 6 + transform 8；engine 26 = cli_tests 19 + protocol 7） | cargo test 输出（2026-11-03 复核） |
 | 新引擎实测 | ping/version/midi-stats/batch-stats 与旧契约兼容，且多出 avg_dur_ticks | 手动执行 |
 | JS↔Rust 双跑 | 6 个真实 fixture + 12 个合成 MIDI，0 差异（含 avg_dur_ticks） | node scripts/dualrun/compare-midi.mjs --gen --rust-bin ... |
 | 引擎参数契约 | 57 params / 43 worker keys / 27 engine map / 15 flags，已知漂移 0 | docs/contracts/engine-params.schema.json |
@@ -84,3 +84,24 @@
 3. 6.7 第一组：轨道 CRUD（P-009）或拍号编辑（P-010）二选一，先冻结数据模型细节再动代码。
 4. 把 cargo fmt/clippy 加进 CI（当前本机工具链未装组件，CI 可装）。
 5. 全量门禁：npm run audit（含 check:contracts）在干净环境跑一遍。
+
+### 7. 门禁修复（本轮）
+
+- check:i18n：新增的 2 条中文文案已同时进 EN/JA 的**单引号词典区**（checker 只解析单引号键）；现在 EN/JA 均 0 新增缺失。
+- check:empty-catch：原门禁默认基线 0，而 HEAD 有 9 个存量空 catch → 必红（红门禁等于没有门禁）。
+  改为 scripts/empty-catch-baseline.json 棘轮（当前 9），--update-baseline 显式重记；现在通过。
+- 验证：check:i18n / check:empty-catch / check:contracts 全绿；test:ui 555/555。
+
+### 8. 子代理 A 交付（已并入）
+
+- crates/ workspace（fufumidi-core 零依赖 + fufumidi-engine CLI/协议）+ crates/Cargo.lock。
+- docs/rust/WORKSPACE.md（326 行：目录、API、协议、构建/测试、限制）。
+- scripts/rust/build.ps1（UTF-8 BOM；构建后复制到 resources/rust-core/，含兼容别名）与 test.ps1（test→fmt→clippy，缺组件跳过）。
+- 测试：core 38 + engine 26 = **64 个全绿**；cargo fmt / clippy -D warnings 均 clean（子代理已安装组件，Lead 复核）。
+- 与 Lead 的工作无冲突：main/rust.js 候选顺序、CI rust job、双跑脚本均按此接入。
+
+### 9. 待收口（下一轮）
+
+- Tauri POC（子代理 B）：target/Cargo.lock 已生成、日志与 research 目录存在；等其结论文档，再决定是否记录为 POC 通过/阻塞。
+- 6.7 第一组（轨道 CRUD / 拍号编辑）尚未动；先按 RUST-PROJECT-MODEL v2 冻结细节。
+- 把 cargo fmt/clippy 加入 CI（本机缺组件）。

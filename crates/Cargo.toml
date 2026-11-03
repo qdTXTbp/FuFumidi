@@ -1,0 +1,34 @@
+# FuFumidi Rust workspace（M0/M1 运行时轨道）
+#
+# 为什么 workspace 根放在 crates/ 而不是仓库根：
+# - 本阶段约定只允许新增/修改 crates/**、scripts/rust/**、docs/rust/**；
+#   把虚拟清单放在 crates/ 下，仓库根不被碰，整合时想上移也只需加一个根清单 + members。
+# - 既有 rust-core/ 仍保持独立包（旧构建脚本 scripts/build-rust.ps1 不动、不破坏）。
+#
+# 统一从仓库根调用：
+#   cargo test  --manifest-path crates/Cargo.toml
+#   cargo build --manifest-path crates/Cargo.toml --release
+[workspace]
+resolver = "2"
+members = [
+    "fufumidi-core",
+    "fufumidi-engine",
+]
+
+[workspace.package]
+version = "0.3.0"
+edition = "2021"
+license = "MIT"
+rust-version = "1.74"
+repository = "https://github.com/FuFumidi/FuFumidi"
+
+[workspace.dependencies]
+fufumidi-core = { path = "fufumidi-core", version = "0.3.0" }
+serde_json = "1"
+sha2 = "0.10"
+
+# 与旧 rust-core 的发布配置保持一致：体积优先（sidecar 随安装包分发）
+[profile.release]
+strip = true
+lto = true
+opt-level = "s"
