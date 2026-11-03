@@ -86,7 +86,13 @@ class Harness {
     while (Date.now() - started < timeoutMs) {
       try {
         const list = await getJson(`http://127.0.0.1:${this.port}/json/list`);
-        target = (Array.isArray(list) ? list : []).find((t) => t.type === "page" && !/devtools/i.test(t.url || ""));
+        const pages = (Array.isArray(list) ? list : []).filter((t) =>
+          t.type === "page" && !/devtools/i.test(t.url || "") && !/splash\.html/i.test(t.url || ""));
+        // 6.5.0 起启动先显示 splash，主窗口后挂载；splash 页面会关闭，连它会导致
+        // Runtime.evaluate 卡死。优先选真正的 renderer/index.html。
+        target = pages.find((t) => /renderer\/dist\/index\.html/i.test(t.url || ""))
+          || pages.find((t) => !/^about:blank/i.test(t.url || ""))
+          || null;
         if (target && target.webSocketDebuggerUrl) break;
       } catch (_) { /* 应用还没起来 */ }
       await sleep(300);
@@ -258,12 +264,16 @@ export async function launchApp(opts = {}) {
   fs.mkdirSync(userDataDir, { recursive: true });
   const args = [ROOT, `--remote-debugging-port=${port}`, `--user-data-dir=${userDataDir}`];
   if (Array.isArray(opts.args)) args.push(...opts.args);
+  const childEnv = Object.assign({}, process.env, {
+    FUFUMIDI_E2E: "1",
+    FUFUMIDI_E2E_DATA_ROOT: dataRoot,
+  }, opts.env || {});
+  // 如果 shell/CI 里带了 ELECTRON_RUN_AS_NODE=1，electron.exe 会退化成纯 Node 跑 main.js
+  // （app 为 undefined，启动即崩，CDP 永远不出现）。E2E 必须显式清掉它。
+  delete childEnv.ELECTRON_RUN_AS_NODE;
   const child = spawn(ELECTRON, args, {
     cwd: ROOT,
-    env: Object.assign({}, process.env, {
-      FUFUMIDI_E2E: "1",
-      FUFUMIDI_E2E_DATA_ROOT: dataRoot,
-    }, opts.env || {}),
+    env: childEnv,
     stdio: ["ignore", "pipe", "pipe"],
   });
   child.stdout.pipe(out);
