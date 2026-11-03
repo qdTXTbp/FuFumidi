@@ -1,0 +1,11 @@
+[package]
+name = "fufumidi-core"
+description = "FuFumidi SMF/MIDI domain core: parse, encode, stats, quantize and transpose."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+# 领域核心刻意零依赖：纯字节进 / 字节出，便于对拍、WASM 化与单测。
+[dependencies]
