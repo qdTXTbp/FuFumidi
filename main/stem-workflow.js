@@ -84,7 +84,9 @@ async function runStemWorkflow(cfg, deps) {
     fs.writeFileSync(manifestIn, JSON.stringify(built, null, 2));
     const out = cfg.out || path.join(work, 'merged.mid');
     const manifestOut = out.replace(/\.[^.]+$/, '') + '-manifest.json';
-    const mr = await spawnP(spawnEngine, ['--out', out, '--manifest-in', manifestIn, '--manifest-out', manifestOut], { script: 'stem_merge.py', timeoutMs: 120000 });
+    const budget = String(cfg.trackBudget || 'auto');
+    log('保留轨道预算：' + budget);
+    const mr = await spawnP(spawnEngine, ['--out', out, '--manifest-in', manifestIn, '--manifest-out', manifestOut, '--budget', budget], { script: 'stem_merge.py', timeoutMs: 120000 });
     if (!mr.r || !mr.r.result || !mr.r.result.ok) return { ok: false, fallback: true, error: '合并失败：' + ((mr.r && (mr.r.err || mr.r.out)) || '').slice(-300) };
     progress({ stage: 'done', text: '完成', percent: 100 });
     return { ok: true, out, tracks: built, manifest: manifestOut, fallback: false };

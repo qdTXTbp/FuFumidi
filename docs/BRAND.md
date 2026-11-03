@@ -1,6 +1,7 @@
 # 品牌资产与前端设计约束（logo 守恒）
 
-> 状态：M0 冻结（2026-11-03）。本文件是**品牌资产的唯一清单与变更规则**；
+> 状态：M0 冻结（2026-11-03）；基线切换至 **6.5.0-beta.1**（2026-11-04，base 47f6062）后复核。
+> 本文件是**品牌资产的唯一清单与变更规则**；
 > 自动化门禁：npm run check:brand（manifest: scripts/brand/brand-manifest.json）。
 > 关联：docs/DESIGN.md（界面设计语言）、scripts/gen-logo.py（品牌图生成器）、
 > docs/plans/2026-11-03-master-integrated-plan.md、master-ai-spec（P-026/P-027）。
@@ -16,20 +17,24 @@
    build/icon.*、installer 图、splash 品牌位、官网 logo；不允许「顺便换个新 logo」。
 5. 颜色/材质/字体继续以 docs/DESIGN.md 的 token 表为准；品牌图不参与主题换色（不重着色）。
 
-## 2. 资产清单（16 个，SHA-256 见 manifest）
+## 2. 资产清单（13 个，SHA-256 见 manifest）
 
 | 资产 | 角色 | 使用点 |
 |---|---|---|
-| build/icon.png / icon.ico | 应用图标（512 头像特写 + 多尺寸 ico） | exe、窗口、NSIS 安装器、托盘 |
-| build/updater-icon.png / .ico | 更新器图标 | FuFumidi.update.exe、更新提示 |
+| build/icon.png / icon.ico | 应用图标（512 头像特写 + 多尺寸 ico） | exe、窗口、NSIS 安装器、托盘、更新器 |
 | build/installerHeader.bmp / installerSidebar.bmp | NSIS 安装器头图/侧图 | electron-builder NSIS |
 | frontend/src/assets/logo.png | 侧栏徽标（38px 圆角容器，object-fit: cover） | PrimaryRail.vue |
 | frontend/src/assets/mascot.png | 首页/工作区吉祥物 | 首页工作区 |
-| docs/assets/logo.png / logo-fufumidi-download.png | 官网/下载页 | docs/pages |
+| docs/assets/logo.png | 官网/下载页 | docs/pages |
 | docs/assets/brand/FuFumidi.ico、徽记-512.png | 品牌规范件 | 文档/发布物 |
 | docs/assets/brand/立绘-*.png（4） | 母图与各底色稿 | 生成源 |
 
 > manifest 由脚本从磁盘计算，不要手写哈希。加新资产时同步更新本表与脚本 ASSETS 清单。
+>
+> **6.5.0-beta.1 基线差异（2026-11-04 复核）**：上游删除了独立的更新器图标
+> （build/updater-icon.*，更新器改用应用图标）与下载页横幅（docs/assets/logo-fufumidi-download.png，
+> 官网改用 docs/assets/logo.png），并更新了两张 NSIS 安装器图。**应用图标、侧栏徽标、首页吉祥物、
+> 品牌母图与四张立绘的哈希均未变**——「logo 保持」仍然成立；被删/更新的不是 logo 本体。
 
 ## 3. 变更流程（唯一合法路径）
 
@@ -65,3 +70,4 @@ docs/DESIGN.md 的「还没做的」+ 审计遗留，收敛为两条主线：
 | 日期 | 变更 | 原因/确认 |
 |---|---|---|
 | 2026-11-03 | 建立 manifest 与 check:brand 门禁；记录当前 16 个资产哈希 | M0 冻结，用户要求「注意前端设计的完善和工具 logo 的保持」 |
+| 2026-11-04 | 基线切换到 6.5.0-beta.1：资产清单 16 → 13；安装器图更新；移除独立的更新器图标与下载页横幅 | 用户指定「以最新预发行版 6.5.0 beta-1 为基线」；应用 logo/立绘未变，门禁重新登记 |

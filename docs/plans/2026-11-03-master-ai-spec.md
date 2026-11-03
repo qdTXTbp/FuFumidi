@@ -1,7 +1,8 @@
 ---
 spec_id: FUFUMIDI-MASTER-2026-11
 status: proposed
-baseline: 6.4.2
+baseline: 6.5.0-beta.1
+baseline_commit: 47f6062
 target: 6.6 + 6.7 + 6.8 + 7.0
 platform: win32-x64
 canonical_for_ai: true

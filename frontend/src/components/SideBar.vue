@@ -1497,7 +1497,7 @@ body.resize-col .sidebar-resizer::after {
   white-space: nowrap !important;
   border: 0 !important;
 }
-.sidebar-current-actions { display:flex; align-items:center; gap:4px; padding:8px var(--sp-4); border-top:1px solid var(--border); flex:0 0 auto; }
+.sidebar-current-actions { display:flex; align-items:center; gap:var(--sp-1); padding:8px var(--sp-4); border-top:1px solid var(--border); flex:0 0 auto; }
 .sca-label { flex:1; font-size:var(--fs-xs); color:var(--text3); }
 .sidebar-current-actions .icon-btn { width:28px; height:28px; }
 </style>

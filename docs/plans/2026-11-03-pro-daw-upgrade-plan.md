@@ -1,5 +1,6 @@
 # FuFumidi 专业化音乐制作工具升级方案（2026-11-03）
 
+> 版本基线：**6.5.0-beta.1**（2026-11-04 用户指定；base commit 47f6062）。
 > 定位：从「能转录、能改、能出片」升级为**专业化 MIDI 制作工作站**；不追 Cubase/Dorico 全域，只做「MIDI 制作 + 转录/制谱校对 + 调教」这条差异化主线。
 > 配套：[全 Rust 技术栈方案（A 口径）](./2026-11-03-rust-fullstack-plan.md)、[主方案 v2](./2026-11-03-rust-rewrite-plan.md)、**[整合总方案](./2026-11-03-master-integrated-plan.md) + [AI 实现规格](./2026-11-03-master-ai-spec.md)**（本文件保留为功能细节）。
 > 证据来源：docs/audit/2026-10-29/midi-workflow.md（559 行）、frontend-ux.md、backend-perf.md；docs/plans/2026-11-01-6.5.0-update-plan.md、stem-aware-transcription.md、3d-piano-rhythm-game.md、2026-10-29-full-audit-upgrade.md；docs/editor-upgrade-plan.md、track-clip-editor-plan.md、sing-editor-usability-plan.md。

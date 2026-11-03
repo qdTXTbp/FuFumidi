@@ -1636,6 +1636,12 @@ function collectParams() {
     cfg.sep_model = sepModel.value;
   }
   if (!mergeOn.value) cfg.no_merge = true;
+  // 6.5.0 智能分轨：这两个控件此前只绑定不读取（dead options 门禁抓到）。
+  // 现在必须真正随请求发出去，否则勾选「智能分轨 / 保留轨道」不会改变任何行为。
+  if (mode.value !== 'separate') {
+    cfg.stemEnhance = !!stemEnhance.value;
+    cfg.trackBudget = trackBudget.value || 'auto';
+  }
   return cfg;
 }
 
@@ -2262,7 +2268,7 @@ onBeforeUnmount(() => {
         <div class="tr-perf-hint" v-if="umodel === 'miros'">{{ t('MIROS 需先到资源中心下载运行时+权重（约 6 GB）') }}</div>
         <div class="tr-stem-row">
           <label class="tr-stem-toggle"><input type="checkbox" v-model="stemEnhance"> {{ t('智能分轨（推荐）') }}</label>
-          <span class="muted small">{{ t('自动分轨 + 固定音色，失败自动回退整曲') }}</span>
+          <span class="muted small">{{ t('自动分轨 + 固定音色；需先在资源中心安装 HTDemucs4_6stems，未安装会自动回退整曲') }}</span>
           <span style="flex:1"></span>
           <span class="muted small">{{ t('保留轨道') }}</span>
           <select class="select-input" v-model="trackBudget" style="width:132px" :disabled="!stemEnhance">

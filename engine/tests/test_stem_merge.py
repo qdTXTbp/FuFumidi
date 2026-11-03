@@ -4,7 +4,7 @@ import os
 
 import mido
 
-from stem_merge import merge_stem_midis, export_grouped_midi, sanitize_program_changes
+from stem_merge import merge_stem_midis, export_grouped_midi, sanitize_program_changes, apply_budget
 from stem_roles import classify_role, role_default, select_tracks, resolve_target
 
 
@@ -98,3 +98,34 @@ def test_export_grouped_more_than_16(tmp_path):
     mid.save(str(p))
     res = export_grouped_midi(str(p), str(tmp_path / "parts"))
     assert res["ok"] and len(res["files"]) >= 2
+
+
+def test_merge_budget_selects_and_merges(tmp_path):
+    """6.5.0 保留轨道预算：budget 应由 UI 传到引擎，并在合并结果里生效。"""
+    specs = []
+    for role, count in [("vocals", 5), ("drums", 40), ("piano", 30), ("other", 2)]:
+        mid = mido.MidiFile(type=0, ticks_per_beat=480)
+        tr = mido.MidiTrack()
+        mid.tracks.append(tr)
+        for _ in range(count):
+            tr.append(mido.Message("note_on", note=60, velocity=90, channel=0, time=0))
+            tr.append(mido.Message("note_off", note=60, velocity=0, channel=0, time=120))
+        p = tmp_path / (role + ".mid")
+        mid.save(str(p))
+        specs.append({"role": role, "midi": str(p), "name": role})
+
+    selected, report = apply_budget(specs, "2")
+    assert report["budget"] == "2"
+    assert len(selected) == 2, "预算 2 应只保留 2 条轨"
+
+    out = tmp_path / "merged.mid"
+    man = tmp_path / "merged-manifest.json"
+    res = merge_stem_midis(selected, str(out), str(man), budget_report=report)
+    assert res["ok"]
+    assert res["budget"]["budget"] == "2"
+    merged = mido.MidiFile(str(out))
+    assert len(merged.tracks) == 1 + len(selected)
+
+    payload = json.loads(man.read_text(encoding="utf-8"))
+    assert payload["budget"]["budget"] == "2"
+    assert len(payload["tracks"]) == len(selected)

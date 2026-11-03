@@ -109,7 +109,24 @@
   a11y/空状态/错误反馈收口；原则是「不借重写顺手改视觉语言」。
 - 品牌迁移校验 T-114：Tauri 图标/安装器/splash 复用 build/icon.* 与 installer*.bmp，截图对比。
 
-### 10. 待收口（下一轮）
+### 10. 基线切换：6.4.2 → 6.5.0-beta.1（2026-11-04）
+
+- 用户指定「以最新预发行版 6.5.0 beta-1 为基线」：代码 rebase 到 **47f6062**（chore(release): 6.5.0-beta.1），
+  备份分支 backup/pre-650-rebase；原 8 个提交中 licenses 重生成被跳过（改由 6.5.0 生成器重生成）。
+- 冲突处理：package.json 保留 beta 的 test:zip（去掉 test:zip-safe/engine-memory），合并我们的
+  storage-cache/db/probe/rust-bridge 测试；licenses 由 beta 生成器重算。
+- 基线自带欠账（切换后 audit 红）一并修复：
+  · i18n 13 条 3D/侧栏新文案 —— 采用 6.5.0 post-beta 的官方译文（与我们初稿不一致处以官方为准）；
+  · Piano3D/SideBar/ViewViz 的 19 处设计 token 字面值 → var(--sp-*/--r-*/--fs-*/语义色)；
+  · **stemEnhance / trackBudget 死控件**：真接到 renderer → task-queue → stem-workflow → stem_merge.py --budget，
+    新增 Python 测试；audit:dead-options 与 audit:params 均绿。
+- 契约：事件 28 → **29**（beta 新增 1 个）；invoke/handle 250/250、引擎参数 0 漂移。
+- 品牌：beta 删除独立更新器图标与下载页横幅、更新 NSIS 安装器图；**应用图标/侧栏徽标/首页吉祥物/母图/立绘哈希未变**，
+  manifest 16 → 13（docs/BRAND.md 记录了差异）。
+- 用户进场前的未提交 WIP（README 版本号 + MIROS CUDA 修复）保存在 stash@{0}，未混入本次提交。
+- 门禁：build 8.47s / typecheck 0 / test:ui **561** / audit 全绿 / cargo 64 / dualrun 18 文件 0 差异。
+
+## 11. 待收口（下一轮）
 
 - Tauri POC（子代理 B）**已收口**：docs/rust/TAURI-POC.md。结论——外壳可行（cargo check 37s / build 44s；
   debug 12.58 MiB、release 5.87 MiB；开窗 0.73–0.86s；IPC 1.7–6.2ms；WebView2 156 已装）；

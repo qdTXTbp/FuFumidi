@@ -98,7 +98,12 @@ const ALIASES = {
 
 // 这些键不属于「转录请求」而是别的作业（分离/翻唱），collectParams 的扫描窗口会顺手带进来 —— 明确排除，
 // 否则审计报告里永远挂着几条"看起来是洞、其实是别的功能"的噪声。
-const NOT_TRANSCRIBE_REQ = new Set(['sep_model']);
+// 不走「渲染端 → worker → 引擎」三跳的参数：
+//   · sep_model：分离作业单独走 engine_separate，不经过转录 worker；
+//   · stemEnhance / trackBudget：6.5.0 智能分轨的**主进程编排参数**，由 main/stem-workflow.js
+//     消费（分轨 → 逐 stem 转录 → merge_stem.py --budget），不传给转录引擎 CLI。
+//     放这里而不是假装它们到引擎；其余所有界面参数仍按三跳审计。
+const NOT_TRANSCRIBE_REQ = new Set(['sep_model', 'stemEnhance', 'trackBudget']);
 
 function engineConsumers() {
   const dir = path.join(ROOT, 'engine');
