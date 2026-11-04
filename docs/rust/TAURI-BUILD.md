@@ -194,3 +194,9 @@ Tauri 默认从 GitHub 下载 `nsis-3.13.zip`，本机直连超时。已把工�
 - 修复 11 条：div_ceil、redundant closure、needless borrow、lines().flatten() 无限 Err 风险、char 数组 trim、相同 if 分支、u64 自转、sort_by_key；
 - cargo test 118/118（+1 ignored），typecheck/build/smoke/audit 通过；
 - clippy 已加入 `tauri:acceptance`。
+
+## 27. 2026-11-04 158 命令 release（Clippy 清零）
+
+- release 构建 2m29s、**0 warning**；
+- host/engine self-check 通过（embedded renderer / warm=1 / 无残留）；
+- 含 clippy 修复；产物 16,848,896 bytes。
