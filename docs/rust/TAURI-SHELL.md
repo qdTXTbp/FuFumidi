@@ -243,17 +243,17 @@ GPU 环境（未设 `FUFUMIDI_DISABLE_GPU=1`）自动 −1，`FUFUMIDI_MAX_WORKE
 
 - `npm run tauri:coverage` / `node scripts/tauri/ipc-coverage.mjs --write`：
   只解析 preload 与 Tauri 桥的方法名，不启动窗口；
-- 当前：preload 265 方法 / Tauri **171** 方法 / **95 未映射**；preload invoke 250 / tauri call **166**；
+- 当前：preload 265 方法 / Tauri **178** 方法 / **88 未映射**；preload invoke 250 / tauri call **172**；
 - 缺口分类：设置杂项 28、diffsinger 19、utau/voicebank 18、模型/安装 14、导出/渲染 14、
   资源/音频 13、rvc 12、曲库/数据 11、文件/诊断 11、事件/窗口 10、GPU 8、更新/测速 6、其他 4；
 - 明细见 [IPC-COVERAGE.md](IPC-COVERAGE.md)。
 - 前端实际调用审计：`npm run tauri:call-audit`（`docs/rust/BRIDGE-CALLS.md`），
   当前 212 个去重调用 / 104 未找到实现（启发式，含动态调用误报）。
-- 参数契约审计：`npm run tauri:arg-audit`（`docs/rust/ARG-AUDIT.md`），当前 150 命令 / 23 不一致
+- 参数契约审计：`npm run tauri:arg-audit`（`docs/rust/ARG-AUDIT.md`），当前 156 命令 / 23 不一致
   （主要来自尚未实现的 bridge 命令）；已修正 readSidecarLyrics/modelImportLocal/renameMidi/
   projectOpen/autosaveRead/autosaveClear 的 JS camelCase→Rust snake_case 参数错配。
 
-## 4. 当前命令清单（150 条）
+## 4. 当前命令清单（156 条）
 
 host_info, app_version, ping, python_selfcheck, engine_probe, convert, engine_worker_status,
 load_settings, save_settings, update_sources, update_set_preferred_source, utau_list_voicebanks, voicebank_unified, utau_read_oto, utau_save_oto, utau_delete_voicebank, utau_import_voicebank_zip, utau_export_voicebank, utau_export_voicebank_zip, rvc_list, rvc_remove, rvc_pick_folder, rvc_pick_files, rvc_import_folder, rvc_import_files, rvc_pick_zip, rvc_import_zip, rvc_catalog, rvc_open_catalog_page, rvc_probe, rvc_refresh_catalog, take_pending_open_file, db_kv_get, db_kv_set, db_status, db_songs_list, db_songs_put,
@@ -266,7 +266,7 @@ wallpaper_defaults, delete_midi, rename_midi, list_audio_files, library_stats, r
 db_playlists_delete, data_root, open_data_root, clean_temp, has_midi, verify_midi, dupe_midi,
 get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear,
 read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open,
-storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, video_export_begin, video_export_write, video_export_abort, video_export_end, pick_cover, export_dawproject,
+storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, cover_singers, cover_pick_audio, cover_pick_dir, cover_open, cover_cancel, cover_run, video_export_begin, video_export_write, video_export_abort, video_export_end, pick_cover, export_dawproject,
 autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data,
 check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin,
 wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc,

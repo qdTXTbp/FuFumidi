@@ -6,19 +6,13 @@
 | 指标 | 数值 |
 |---|---:|
 | 前端调用的 bridge 方法（去重） | 213 |
-| Tauri 顶层方法 | 123 |
+| Tauri 顶层方法 | 130 |
 | Tauri 嵌套方法 | 61 |
-| **未找到实现** | **69** |
+| **未找到实现** | **62** |
 
 ## 未找到实现的方法
 
 - `appUninstall` — frontend/src/components/SettingsPanel.vue
-- `coverCancel` — frontend/src/views/ViewCover.vue
-- `coverOpen` — frontend/src/views/ViewCover.vue
-- `coverPickAudio` — frontend/src/views/ViewCover.vue
-- `coverPickDir` — frontend/src/views/ViewCover.vue
-- `coverRun` — frontend/src/views/ViewCover.vue
-- `coverSingers` — frontend/src/views/ViewCover.vue
 - `diffsingerMsCancelDownload` — frontend/src/App.vue, frontend/src/views/DiffSingerCatalog.vue
 - `diffsingerMsCatalog` — frontend/src/views/DiffSingerCatalog.vue, frontend/src/views/ViewModels.vue
 - `diffsingerMsDownload` — frontend/src/views/DiffSingerCatalog.vue
@@ -40,7 +34,6 @@
 - `omrEngine.srRemove` — frontend/src/views/ViewResources.vue
 - `omrEngine.srStatus` — frontend/src/views/ViewResources.vue
 - `omrEngine.status` — frontend/src/views/ViewResources.vue
-- `onCoverProgress` — frontend/src/views/ViewCover.vue
 - `onFolderWatch` — frontend/src/components/SettingsPanel.vue
 - `onOpenFile` — frontend/src/App.vue
 - `onSeparateLog` — frontend/src/views/ViewTranscribe.vue

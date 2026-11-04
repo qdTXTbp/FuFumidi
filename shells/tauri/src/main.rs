@@ -1392,6 +1392,130 @@ print(json.dumps({{"ok": r.returncode == 0, "err": (r.stderr or b"").decode("utf
     }
 }
 
+struct CoverJob { id: String, child: std::process::Child }
+struct CoverState(Arc<Mutex<Option<CoverJob>>>);
+static COVER_CANCELED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn cover_args(opts: &serde_json::Value) -> Result<Vec<String>, String> {
+    let audio = opts.get("audio").and_then(|v| v.as_str()).unwrap_or("");
+    if audio.is_empty() || !Path::new(audio).is_file() { return Err("请先选择源音频".into()); }
+    let outdir = opts.get("outdir").and_then(|v| v.as_str()).unwrap_or("");
+    if outdir.is_empty() { return Err("请选择输出目录".into()); }
+    let singer_id = opts.get("singer").and_then(|v| v.get("id")).and_then(|v| v.as_str()).unwrap_or("");
+    if singer_id.is_empty() { return Err("请选择一个导入的翻唱模型".into()); }
+    if opts.get("sepModel").and_then(|v| v.get("id")).and_then(|v| v.as_str()).filter(|s| !s.is_empty()).is_some() {
+        return Err("人声分离模型路径解析尚未迁移；请先在音频处理中分离，或选择不分离".into());
+    }
+    let mut a: Vec<String> = vec!["all".into(), audio.into(), "--outdir".into(), outdir.into(), "--rvc-model".into(), singer_id.into()];
+    if let Some(n) = opts.get("name").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) { a.extend(["--name".into(), n.into()]); }
+    if opts.get("sepMode").and_then(|v| v.as_str()) == Some("off") { a.push("--no-separate".into()); }
+    let num = |k: &str, d: f64| opts.get(k).and_then(|v| v.as_f64()).unwrap_or(d);
+    a.extend(["--transpose".into(), format!("{}", num("transpose", 0.0))]);
+    if let Some(f0) = opts.get("f0Method").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) { a.extend(["--f0-method".into(), f0.into()]); }
+    a.extend(["--index-rate".into(), format!("{}", num("indexRate", 0.3))]);
+    a.extend(["--rms-mix-rate".into(), format!("{}", num("rmsMixRate", 0.25))]);
+    a.extend(["--protect".into(), format!("{}", num("protect", 0.33))]);
+    a.extend(["--chunk-sec".into(), format!("{}", num("chunkSec", 60.0))]);
+    if opts.get("autoPredictF0").and_then(|v| v.as_bool()).unwrap_or(false) { a.push("--auto-predict-f0".into()); }
+    a.extend(["--device".into(), opts.get("device").and_then(|v| v.as_str()).unwrap_or("auto").into()]);
+    if let Some(c) = opts.get("clarityDb").and_then(|v| v.as_f64()).filter(|v| *v != 0.0) { a.extend(["--clarity-db".into(), format!("{c}")]); }
+    if opts.get("noResume").and_then(|v| v.as_bool()).unwrap_or(false) { a.push("--no-resume".into()); }
+    for (k, flag) in [("vocals", "--vocals"), ("instrumental", "--instrumental")] {
+        if let Some(p) = opts.get(k).and_then(|v| v.as_str()).filter(|p| !p.is_empty() && Path::new(p).is_file()) { a.extend([flag.into(), p.into()]); }
+    }
+    Ok(a)
+}
+
+#[tauri::command]
+fn cover_singers() -> serde_json::Value {
+    let list = rvc_list_at(&rvc_root());
+    serde_json::json!({ "ok": true, "rvc": list.get("models").cloned().unwrap_or_else(|| serde_json::json!([])) })
+}
+
+#[tauri::command]
+fn cover_pick_audio(app: AppHandle) -> serde_json::Value {
+    match app.dialog().file().set_title("选择要翻唱的歌曲").add_filter("音频", &["flac", "wav", "mp3", "m4a", "aac", "ogg", "opus"]).blocking_pick_file().and_then(file_path_string) {
+        Some(p) => serde_json::json!({ "ok": true, "path": p }),
+        None => serde_json::json!({ "canceled": true }),
+    }
+}
+
+#[tauri::command]
+fn cover_pick_dir(app: AppHandle) -> serde_json::Value {
+    match app.dialog().file().set_title("选择输出目录").blocking_pick_folder().and_then(file_path_string) {
+        Some(p) => serde_json::json!({ "ok": true, "path": p }),
+        None => serde_json::json!({ "canceled": true }),
+    }
+}
+
+#[tauri::command]
+fn cover_open(path: String) -> serde_json::Value {
+    let p = PathBuf::from(&path);
+    if !p.exists() { return oto_err("路径不存在"); }
+    #[cfg(target_os = "windows")]
+    {
+        match Command::new("explorer").arg(&p).spawn() { Ok(_) => serde_json::json!({ "ok": true }), Err(e) => oto_err(&e.to_string()) }
+    }
+    #[cfg(not(target_os = "windows"))]
+    { let _ = p; oto_err("not supported") }
+}
+
+#[tauri::command]
+fn cover_cancel(state: State<'_, CoverState>) -> serde_json::Value {
+    let mut g = state.0.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(mut job) = g.take() { COVER_CANCELED.store(true, Ordering::SeqCst); let _ = job.child.kill(); serde_json::json!({ "ok": true, "canceled": true }) } else { serde_json::json!({ "ok": true, "canceled": false }) }
+}
+
+#[tauri::command]
+fn cover_run(state: State<'_, CoverState>, app: AppHandle, opts: serde_json::Value) -> serde_json::Value {
+    if state.0.lock().unwrap_or_else(|e| e.into_inner()).is_some() { return oto_err("已有一个翻唱任务在跑，先取消它"); }
+    COVER_CANCELED.store(false, Ordering::SeqCst);
+    let args = match cover_args(&opts) { Ok(a) => a, Err(e) => return oto_err(&e) };
+    let outdir = opts.get("outdir").and_then(|v| v.as_str()).unwrap_or("");
+    if let Err(e) = std::fs::create_dir_all(outdir) { return oto_err(&format!("输出目录不可写：{e}")); }
+    let (Some(py), Some(engine)) = (python_path(), engine_dir()) else { return oto_err("Python/引擎目录不存在") };
+    let script = engine.join("engine_cover.py");
+    if !script.is_file() { return oto_err("engine_cover.py 不存在"); }
+    let uniq = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let id = format!("cover{}-{uniq}", std::process::id());
+    let mut child = match Command::new(&py).current_dir(&engine).arg(&script).args(&args).env("PYTHONIOENCODING", "utf-8").stdout(Stdio::piped()).stderr(Stdio::null()).creation_flags(0x08000000).spawn() {
+        Ok(c) => c, Err(e) => return oto_err(&e.to_string()),
+    };
+    let stdout = child.stdout.take();
+    *state.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(CoverJob { id: id.clone(), child });
+    let shared = state.0.clone(); let app2 = app.clone(); let id2 = id.clone();
+    std::thread::spawn(move || {
+        let mut result: Option<serde_json::Value> = None;
+        if let Some(out) = stdout {
+            for line in BufReader::new(out).lines().map_while(Result::ok) {
+                let t = line.trim();
+                if let Some(rest) = t.strip_prefix("###PROG ") {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(rest) {
+                        let pct = v.get("percent").and_then(|x| x.as_f64()).unwrap_or(-1.0);
+                        let stage = v.get("stage").and_then(|x| x.as_str()).unwrap_or("");
+                        let part = v.get("part").and_then(|x| x.as_u64());
+                        let parts = v.get("parts").and_then(|x| x.as_u64());
+                        let text = if let (Some(a), Some(b)) = (part, parts) { format!("{stage} {a}/{b}") } else { stage.to_string() };
+                        let _ = app2.emit("cover:progress", serde_json::json!({ "id": id2, "percent": pct, "text": text, "stage": stage, "done": false }));
+                    }
+                    continue;
+                }
+                if let Some(rest) = t.strip_prefix("###RESULT ") { result = serde_json::from_str::<serde_json::Value>(rest).ok(); continue; }
+                let _ = app2.emit("cover:progress", serde_json::json!({ "id": id2, "percent": -1, "log": t, "done": false }));
+            }
+        }
+        {
+            let mut g = shared.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(mut job) = g.take() { let _ = job.child.wait(); }
+        }
+        let aborted = COVER_CANCELED.load(Ordering::SeqCst);
+        let ok = !aborted && result.as_ref().and_then(|r| r.get("ok")).and_then(|v| v.as_bool()) != Some(false);
+        let err = if ok { String::new() } else { result.as_ref().and_then(|r| r.get("error")).and_then(|v| v.as_str()).unwrap_or("翻唱失败").to_string() };
+        let _ = app2.emit("cover:progress", serde_json::json!({ "id": id2, "percent": 100, "done": true, "ok": ok, "aborted": aborted, "result": result, "error": err }));
+    });
+    serde_json::json!({ "ok": true, "id": id })
+}
+
 fn data_root_overridden() -> bool {
     std::env::var("FUFUMIDI_DATA_ROOT").map(|p| !p.trim().is_empty()).unwrap_or(false)
 }
@@ -4797,6 +4921,7 @@ fn main() {
     let zoom_state = ZoomState(Arc::new(Mutex::new(1.0)));
     let update_preferred_state = UpdatePreferredState(Mutex::new(None));
     let video_export_state = VideoExportState(Arc::new(Mutex::new(HashMap::new())));
+    let cover_state = CoverState(Arc::new(Mutex::new(None)));
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(state)
@@ -4804,10 +4929,11 @@ fn main() {
         .manage(zoom_state)
         .manage(update_preferred_state)
         .manage(video_export_state)
+        .manage(cover_state)
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, update_sources, update_set_preferred_source, db_kv_get, db_kv_set,
-            tasks_list, tasks_cancel, tasks_clear_finished, db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, video_export_begin, video_export_write, video_export_abort, video_export_end, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, wallpaper_set_desktop, gpu_status, gpu_uninstall, plugins_list, plugins_rescan, plugins_set_enabled, plugins_installed_list, plugins_platform_info, plugins_catalog, plugins_open_platform, plugins_install_from_platform, plugins_confirm_install, plugins_cancel_install, plugins_open_dir, plugins_open_docs, open_edit_guide, sf_workshop_list, sf_workshop_import, sf_workshop_delete, sf_workshop_open_dir, model_list,
+            tasks_list, tasks_cancel, tasks_clear_finished, db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, cover_singers, cover_pick_audio, cover_pick_dir, cover_open, cover_cancel, cover_run, video_export_begin, video_export_write, video_export_abort, video_export_end, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, wallpaper_set_desktop, gpu_status, gpu_uninstall, plugins_list, plugins_rescan, plugins_set_enabled, plugins_installed_list, plugins_platform_info, plugins_catalog, plugins_open_platform, plugins_install_from_platform, plugins_confirm_install, plugins_cancel_install, plugins_open_dir, plugins_open_docs, open_edit_guide, sf_workshop_list, sf_workshop_import, sf_workshop_delete, sf_workshop_open_dir, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
@@ -6737,5 +6863,27 @@ mod plugin_confirm_tests {
         assert!(super::plugins_confirm_install_at(&bad, &plugins, "test-token", true).is_err());
         assert_eq!(std::fs::read(dir.join("index.js")).unwrap(), b"new");
         let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+
+#[cfg(test)]
+mod cover_args_tests {
+    #[test]
+    fn rejects_missing_and_builds_offline_sep_args() {
+        assert!(super::cover_args(&serde_json::json!({})).is_err());
+        let dir = std::env::temp_dir().join(format!("fufumidi-cover-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let audio = dir.join("a.wav"); std::fs::write(&audio, b"x").unwrap();
+        let out = dir.join("out");
+        let opts = serde_json::json!({ "audio": audio.display().to_string(), "outdir": out.display().to_string(), "singer": { "id": "m1" }, "sepMode": "off", "transpose": 2, "f0Method": "rmvpe" });
+        let args = super::cover_args(&opts).unwrap();
+        assert_eq!(args[0], "all");
+        assert!(args.contains(&"--no-separate".to_string()));
+        assert!(args.contains(&"--rvc-model".to_string()));
+        assert!(args.contains(&"2".to_string()));
+        let sep = serde_json::json!({ "audio": audio.display().to_string(), "outdir": out.display().to_string(), "singer": { "id": "m1" }, "sepModel": { "id": "htdemucs4_6stems" } });
+        assert!(super::cover_args(&sep).is_err());
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

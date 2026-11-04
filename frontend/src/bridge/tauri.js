@@ -263,6 +263,14 @@ export function installTauriBridge() {
     },
 
     // ---- 动态壁纸 ----
+    coverSingers: () => call('cover_singers'),
+    coverPickAudio: () => call('cover_pick_audio'),
+    coverPickDir: () => call('cover_pick_dir'),
+    coverOpen: (p) => call('cover_open', { path: p }),
+    coverCancel: () => call('cover_cancel'),
+    coverRun: (opts) => call('cover_run', { opts: opts || {} }),
+    onCoverProgress: (cb) => listen('cover:progress', cb),
+
     wallpaper: {
       defaults: () => call('wallpaper_defaults'),
       list: () => call('wallpaper_list'),

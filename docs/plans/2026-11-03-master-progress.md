@@ -540,3 +540,5 @@
 - **视频导出后全量 E2E**：隐藏全量 **40/40**（150 命令源码）；视频桥接不影响现有页面流程。
 
 - **WebCodecs E2E**：新增隐藏用例 `video-webcodecs`，实际创建 VideoEncoder、编码 6 帧 H.264 Annex B，确认 chunks/bytes > 0；隐藏全量 **41/41**；这验证的是 Electron/Chromium 渲染端，WebView2 内同代码仍未直接跑。
+
+- **翻唱 cover 后端**：coverSingers/PickAudio/PickDir/Open/Cancel/Run；Run 组 engine_cover.py args（默认不分离；选分离模型明确报错未迁移），spawn 读 ###PROG/###RESULT 发 cover:progress；桥补 onCoverProgress；Rust args 测试；命令 **156**，覆盖 **178/88**，call 172；真实引擎未跑。

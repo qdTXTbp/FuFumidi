@@ -5,10 +5,10 @@
 | 指标 | 数值 |
 |---|---:|
 | preload 暴露方法 | 265 |
-| Tauri 桥已映射方法 | 171 |
-| 尚未映射 | **95** |
+| Tauri 桥已映射方法 | 178 |
+| 尚未映射 | **88** |
 | preload IPC invoke 通道 | 250 |
-| Tauri call 通道 | 166 |
+| Tauri call 通道 | 172 |
 
 ## 缺口分类
 
@@ -16,12 +16,12 @@
 |---|---:|
 | diffsinger | 19 |
 | 设置/杂项 | 17 |
-| 资源/音频/扩展 | 11 |
 | utau/voicebank | 10 |
 | gpu/运行时增强 | 8 |
 | 导出/渲染 | 7 |
 | 模型/安装/平台 | 6 |
 | 事件/窗口 | 6 |
+| 资源/音频/扩展 | 4 |
 | 更新/测速 | 4 |
 | 文件/诊断 | 3 |
 | 曲库/数据 | 2 |
@@ -31,12 +31,6 @@
 
 ```text
 appUninstall
-coverCancel
-coverOpen
-coverPickAudio
-coverPickDir
-coverRun
-coverSingers
 dbCloudSongDir
 dbCloudSongPut
 demo
@@ -78,7 +72,6 @@ langInstall
 langRemove
 langStatus
 modelEnsureConfig
-onCoverProgress
 onDiffsingerMsProgress
 onDiffsingerRenderProgress
 onDiffsingerRuntimeProgress

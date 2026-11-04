@@ -8,10 +8,10 @@
 - 分支：`feat/audio-tagger-auto-probe`
 - 最新代码提交：`e24fffa`（验收文档另提交）
 - Electron 原版基线：6.5.0-beta.1（`47f6062`）
-- Tauri 命令：**150**（handler 注册审计 150/150）
-- 前端 bridge 方法：**171 / 265**
-- 未映射：**95**
-- 前端 invoke 通道：**250**，Tauri 已接 **166**
+- Tauri 命令：**156**（handler 注册审计 156/156）
+- 前端 bridge 方法：**178 / 265**
+- 未映射：**88**
+- 前端 invoke 通道：**250**，Tauri 已接 **172**
 - 参数审计不一致：**23**（均为已知/兼容项）
 - 可见窗口：**0**（自本轮起所有验证走隐藏窗口/无窗口）
 
@@ -30,6 +30,7 @@
 | UTAU 声库 | 列表/OTO 读写/删除/导入 zip/导出目录/导出 zip | Rust 单测 + bridge |
 | RVC 模型 | 列表/删除/文件夹/文件/zip 导入/内置目录/probe；通用 modelDelete 的 rvc: 前缀委托 RVC 删除 | Rust 单测；probe 真实模型未跑 |
 | 插件中心 | catalog/platformInfo/installedList/openPlatform；两段式 installFromPlatform→confirmInstall→cancelInstall；离线 manifest 缓存；覆盖安装回滚备份 | Rust 单测：manifest/路径穿越/盘符/回滚代码；真实平台下载/插件执行未跑 |
+| 翻唱 Cover | 歌手/选音频/选目录/打开/取消/run；默认不分离；cover:progress 事件 | Rust args 单测；真实 engine_cover.py 未跑；分离模型路径解析未迁移 |
 
 ## 3. 门禁结果（当前源码）
 
@@ -38,7 +39,7 @@
 - `npm run typecheck`：0
 - `npm run audit`：0
 - `cargo test --offline`：**114 passed / 0 failed / 1 ignored**
-- `npm run tauri:handler-audit`：**150/150** 已注册，并已并入 `npm run audit`
+- `npm run tauri:handler-audit`：**156/156** 已注册，并已并入 `npm run audit`
 - release build：通过（150 命令，2m11s、0 warning，见 `TAURI-BUILD.md` §14）
 - `npm run tauri:video-smoke`：ok=true / 15827 bytes（合成 H.264+WAV 封装）
 - hidden `video-webcodecs`：VideoEncoder 实际编码 6 帧 H.264 Annex B，chunks/bytes > 0（Electron/Chromium；WebView2 未直接验证）
