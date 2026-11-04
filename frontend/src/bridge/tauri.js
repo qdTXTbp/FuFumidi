@@ -85,6 +85,8 @@ export function installTauriBridge() {
     exportStemsZip: (payload) => call('export_stems_zip', { payload }),
     pickCover: () => call('pick_cover'),
     exportDawproject: (payload) => call('export_dawproject', { payload }),
+    writeMidi: (opts) => call('write_midi', { opts }),
+    writeBinary: (p, data) => call('write_binary', { p, data: Array.from(data || []) }),
     autostartGet: () => call('autostart_get'),
     diagHealth: () => call('diag_health'),
     pickModelArchive: () => call('pick_model_archive'),

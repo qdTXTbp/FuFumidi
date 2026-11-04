@@ -561,6 +561,71 @@ fn presets_restore() -> serde_json::Value {
 
 fn midi_root() -> PathBuf { data_dir().join("midi") }
 
+fn sanitize_midi_base(name: &str) -> String {
+    let mut stem = name;
+    if let Some((s, e)) = name.rsplit_once('.') {
+        if !e.contains('/') && !e.contains('\\') { stem = s; }
+    }
+    let mut base: String = stem.chars().map(|c| match c {
+        '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+        c if (c as u32) < 32 => '_',
+        c => c,
+    }).collect();
+    base = base.split_whitespace().collect::<Vec<_>>().join(" ");
+    base = base.trim_end_matches(|c: char| c == '.' || c == ' ').to_string();
+    if base.is_empty() { base = "untitled".to_string(); }
+    if base.chars().count() > 120 { base = base.chars().take(120).collect(); }
+    base
+}
+
+fn write_midi_at(root: &Path, opts: &serde_json::Value) -> serde_json::Value {
+    let bytes: Vec<u8> = opts.get("bytes").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_u64().map(|n| n as u8)).collect()).unwrap_or_default();
+    if bytes.is_empty() { return serde_json::json!({ "ok": false, "error": "曲目字节为空" }); }
+    let _ = std::fs::create_dir_all(root);
+    let root_canon = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let prev = opts.get("path").and_then(|v| v.as_str()).unwrap_or("");
+    if !prev.is_empty() {
+        if let Ok(c) = PathBuf::from(prev).canonicalize() {
+            if c.starts_with(&root_canon) && std::fs::read(&c).ok().as_deref() == Some(bytes.as_slice()) {
+                return serde_json::json!({ "ok": true, "path": c.display().to_string(), "existed": true });
+            }
+        }
+    }
+    let base = sanitize_midi_base(opts.get("name").and_then(|v| v.as_str()).unwrap_or("untitled"));
+    let same = root.join(format!("{base}.mid"));
+    if std::fs::read(&same).ok().as_deref() == Some(bytes.as_slice()) {
+        return serde_json::json!({ "ok": true, "path": same.display().to_string(), "existed": true });
+    }
+    let mut target = if !prev.is_empty() { PathBuf::from(prev) } else if same.exists() { same.clone() } else { same.clone() };
+    if !prev.is_empty() && !target.starts_with(&root_canon) { target = same.clone(); }
+    if target == same && same.exists() {
+        let mut n = 2;
+        loop {
+            let cand = root.join(format!("{base} ({n}).mid"));
+            if !cand.exists() { target = cand; break; }
+            n += 1;
+            if n > 9999 { return serde_json::json!({ "ok": false, "error": "文件名冲突过多" }); }
+        }
+    }
+    if let Some(parent) = target.parent() { let _ = std::fs::create_dir_all(parent); }
+    match std::fs::write(&target, &bytes) {
+        Ok(_) => serde_json::json!({ "ok": true, "path": target.display().to_string(), "existed": false }),
+        Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
+    }
+}
+
+#[tauri::command]
+fn write_midi(opts: serde_json::Value) -> serde_json::Value { write_midi_at(&midi_root(), &opts) }
+
+#[tauri::command]
+fn write_binary(p: String, data: serde_json::Value) -> serde_json::Value {
+    let bytes: Vec<u8> = data.as_array().map(|a| a.iter().filter_map(|x| x.as_u64().map(|n| n as u8)).collect()).unwrap_or_default();
+    if bytes.is_empty() { return serde_json::json!({ "ok": false, "error": "empty data" }); }
+    if let Some(parent) = Path::new(&p).parent() { let _ = std::fs::create_dir_all(parent); }
+    match std::fs::write(&p, &bytes) { Ok(_) => serde_json::json!({ "ok": true, "path": p }), Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }) }
+}
+
+
 fn integrity_check_at(settings: &Path) -> serde_json::Value {
     let mut issues = Vec::new();
     if !settings.exists() {
@@ -2322,7 +2387,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, db_kv_get, db_kv_set,
-            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, model_list,
+            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
@@ -2356,6 +2421,24 @@ mod check_midi_tests {
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    #[test]
+    fn write_midi_and_binary() {
+        let root = tmpdir("write-midi");
+        let a = super::write_midi_at(&root, &serde_json::json!({ "name": "a:b", "bytes": [1,2,3] }));
+        assert_eq!(a["ok"], true);
+        assert_eq!(std::fs::read(a["path"].as_str().unwrap()).unwrap(), vec![1,2,3]);
+        let same = super::write_midi_at(&root, &serde_json::json!({ "name": "a:b", "bytes": [1,2,3] }));
+        assert_eq!(same["existed"], true);
+        let diff = super::write_midi_at(&root, &serde_json::json!({ "name": "a:b", "bytes": [4] }));
+        assert_eq!(diff["existed"], false);
+        assert!(diff["path"].as_str().unwrap().contains("a_b (2).mid"));
+        let bin = root.join("out/raw.wav");
+        let w = super::write_binary(bin.display().to_string(), serde_json::json!([82,73]));
+        assert_eq!(w["ok"], true);
+        assert_eq!(std::fs::read(&bin).unwrap(), vec![82,73]);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

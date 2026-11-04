@@ -6,9 +6,9 @@
 | 指标 | 数值 |
 |---|---:|
 | 前端调用的 bridge 方法（去重） | 212 |
-| Tauri 顶层方法 | 93 |
+| Tauri 顶层方法 | 95 |
 | Tauri 嵌套方法 | 43 |
-| **未找到实现** | **110** |
+| **未找到实现** | **108** |
 
 ## 未找到实现的方法
 
@@ -120,8 +120,6 @@
 - `wallpaperEngine.inventory` — frontend/src/components/WallpaperEnginePanel.vue
 - `wallpaperEngine.openFolder` — frontend/src/components/WallpaperEnginePanel.vue
 - `wallpaperEngine.view` — frontend/src/App.vue
-- `writeBinary` — frontend/src/views/ViewTranscribe.vue
-- `writeMidi` — frontend/src/stores/app.ts
 
 ## 说明
 
