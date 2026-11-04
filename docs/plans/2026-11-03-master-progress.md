@@ -550,3 +550,5 @@
 - **cover 分离模型解析**：按 id 在 models/{multi,separate,<id>} 或深度 3 内找目录，取最大 .safetensors/.pth/.pt/.ckpt，配 yaml，按名推断 HTDemucs/Roformer/MDX/UVR；`--sep-model/config/arch` 下发给 engine_cover.py；未知 id 明确报错；Rust 单测含 HTDemucs 路径；cargo **116/116 + 1 ignored**。
 
 - **156 命令 release（分离解析）**：去掉 resolver 重复 best 后 2m16s、0 warning；engine self-check 通过；无窗口/残留。
+
+- **cover CLI smoke**：新增 `npm run tauri:cover-smoke`，校验 engine_cover.py all 的参数面（rvc-model/sep-model/no-separate）；实测 ok/status0；不跑推理。

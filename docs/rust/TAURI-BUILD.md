@@ -139,3 +139,9 @@ Tauri 默认从 GitHub 下载 `nsis-3.13.zip`，本机直连超时。已把工�
 - 去掉 resolver 重复的 best 变量后，release 构建 2m16s、**0 warning**；
 - engine self-check：真实 worker / warm=1 / 无残留；
 - 含 cover 分离模型解析；真实 engine_cover.py 仍未跑。
+
+## 18. Cover CLI 无窗口 smoke
+
+- `npm run tauri:cover-smoke`：用 bundled Python 跑 `engine_cover.py all --help`；
+- 实测 ok=true / status=0，CLI 含 `--rvc-model` / `--sep-model` / `--no-separate`；
+- 只验证引擎入口/参数面，不跑模型推理。

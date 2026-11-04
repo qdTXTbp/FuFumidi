@@ -42,6 +42,7 @@
 - `npm run tauri:handler-audit`：**156/156** 已注册，并已并入 `npm run audit`
 - release build：通过（156 命令，2m16s、0 warning，见 `TAURI-BUILD.md` §17）
 - `npm run tauri:video-smoke`：ok=true / 15827 bytes（合成 H.264+WAV 封装）
+- `npm run tauri:cover-smoke`：ok=true / status 0，engine_cover.py 参数面存在（不跑推理）
 - hidden `video-webcodecs`：VideoEncoder 实际编码 6 帧 H.264 Annex B，chunks/bytes > 0（Electron/Chromium；WebView2 未直接验证）
 - release `--self-check` / `--engine-self-check`：通过（156 命令源码）
 

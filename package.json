@@ -88,6 +88,7 @@
     "tauri:arg-audit": "node scripts/tauri/arg-audit.mjs",
     "tauri:handler-audit": "node scripts/tauri/handler-audit.mjs",
     "tauri:video-smoke": "node scripts/tauri/video-mux-smoke.mjs",
+    "tauri:cover-smoke": "node scripts/tauri/cover-cli-smoke.mjs",
     "tauri:sf-registry": "node scripts/tauri/gen-soundfont-registry.mjs"
   },
   "dependencies": {
