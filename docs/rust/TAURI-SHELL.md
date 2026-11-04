@@ -93,6 +93,7 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 | wallpaper_set_desktop | 静态图片设为桌面：HKCU Desktop Wallpaper/WallpaperStyle/TileWallpaper + `rundll32 user32.dll,UpdatePerUserSystemParameters` | Rust 单测：注册表命令计划/路径；**测试不改真实桌面** |
 | plugins_list / rescan / set_enabled / open_dir | 调 engine/plugin_render.py list（--dir 来自 settings/env），按 settings.plugins_enabled 标 enabled；开关写 settings；打开插件目录 | Rust 单测：输出解析/启用映射、设置写入；真实 Python 插件列表未在测试中跑（手工无窗口跑过返回空列表） |
 | utau_list_voicebanks / voicebank_unified | 只读扫描 dataRoot/voicebanks（一层、三标记、character.yaml/txt 显示名）与 diffsinger-voicebanks（dsconfig 根/下一层、递归 size）；两侧独立容错 | Rust 单测：名称优先级/BOM/UTF-8 lossy/一层/缺根/dsconfig 根与一层/size/counts；dir_size 不再跟随 symlink（全仓生效） |
+| utau_read_oto / utau_save_oto | 读/写 voicebanks/<声库>/oto.ini：原始字节 base64、size/mtime；写前 .bak、8MB 上限、空内容拒绝；限制在 dataRoot/voicebanks 内 | Rust 单测：base64 宽容/往返、CJK、缺目录/缺 oto、备份两代、空/超大/根外拒绝 |
 | sf_workshop_list / import / delete / open_dir | 从 main/soundfonts.js 生成 20 条静态注册表；核对 bundled/downloaded 体积、扫描自定义 SF2/SF3；导入/删除/打开目录 | Rust 单测：20 条注册表、bundled GeneralUser builtin、自定义扫描、导入/删除；下载仍未实现 |
 | probe | 复用 engine_probe 的 music2midi.py probe（桥此前调 probe 缺失命令） | 与 engine_probe 共用实现；无独立单测 |
 | model_delete | 按模型 id 删除 models/<dest>（目录/文件 + .oudep/.parts/.tmp/.part 残留）；RVC 删除暂未迁移 | Rust 单测：muscriptor/small 删除、未知 id/RVC 拒绝 |
@@ -219,20 +220,20 @@ Python 子进程 echo/取消/EOF/暖复用测试）、cargo build release 通过
 
 - `npm run tauri:coverage` / `node scripts/tauri/ipc-coverage.mjs --write`：
   只解析 preload 与 Tauri 桥的方法名，不启动窗口；
-- 当前：preload 265 方法 / Tauri **138** 方法 / **127 未映射**；preload invoke 250 / tauri call **133**；
+- 当前：preload 265 方法 / Tauri **140** 方法 / **125 未映射**；preload invoke 250 / tauri call **135**；
 - 缺口分类：设置杂项 28、diffsinger 19、utau/voicebank 18、模型/安装 14、导出/渲染 14、
   资源/音频 13、rvc 12、曲库/数据 11、文件/诊断 11、事件/窗口 10、GPU 8、更新/测速 6、其他 4；
 - 明细见 [IPC-COVERAGE.md](IPC-COVERAGE.md)。
 - 前端实际调用审计：`npm run tauri:call-audit`（`docs/rust/BRIDGE-CALLS.md`），
   当前 212 个去重调用 / 104 未找到实现（启发式，含动态调用误报）。
-- 参数契约审计：`npm run tauri:arg-audit`（`docs/rust/ARG-AUDIT.md`），当前 117 命令 / 23 不一致
+- 参数契约审计：`npm run tauri:arg-audit`（`docs/rust/ARG-AUDIT.md`），当前 119 命令 / 23 不一致
   （主要来自尚未实现的 bridge 命令）；已修正 readSidecarLyrics/modelImportLocal/renameMidi/
   projectOpen/autosaveRead/autosaveClear 的 JS camelCase→Rust snake_case 参数错配。
 
-## 4. 当前命令清单（117 条）
+## 4. 当前命令清单（119 条）
 
 host_info, app_version, ping, python_selfcheck, engine_probe, convert, engine_worker_status,
-load_settings, save_settings, update_sources, update_set_preferred_source, utau_list_voicebanks, voicebank_unified, db_kv_get, db_kv_set, db_status, db_songs_list, db_songs_put,
+load_settings, save_settings, update_sources, update_set_preferred_source, utau_list_voicebanks, voicebank_unified, utau_read_oto, utau_save_oto, db_kv_get, db_kv_set, db_status, db_songs_list, db_songs_put,
 db_songs_delete, db_playlists_list, db_playlists_put, model_list, list_midi_files, read_binary,
 save_binary, soundfont_list, dep_check, diag_export, notify, open_output, open_external, cancel,
 presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,

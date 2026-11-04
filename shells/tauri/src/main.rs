@@ -327,6 +327,95 @@ fn voicebank_unified() -> serde_json::Value {
     )
 }
 
+/* ---------------- oto.ini 读/写（对齐 main/utau.js:311/333；只允许数据根 voicebanks 内） ---------------- */
+const OTO_MAX_BYTES: usize = 8 * 1024 * 1024;
+
+fn oto_err(error: &str) -> serde_json::Value { serde_json::json!({ "ok": false, "error": error }) }
+
+fn oto_path_text(path: &Path) -> String {
+    let s = path.display().to_string();
+    #[cfg(target_os = "windows")]
+    { if let Some(stripped) = s.strip_prefix(r"\\?\") { return stripped.to_string(); } }
+    s
+}
+
+fn oto_bank_dir(root: &Path, voicebank: Option<&str>) -> Result<PathBuf, &'static str> {
+    let Some(v) = voicebank.map(|s| s.trim()).filter(|s| !s.is_empty()) else { return Err("未指定声库目录"); };
+    let raw = PathBuf::from(v);
+    let target = if raw.is_absolute() { raw } else { root.join(raw) };
+    if !target.exists() { return Err("声库目录不存在"); }
+    let root_c = root.canonicalize().map_err(|_| "声库目录不存在")?;
+    let target_c = target.canonicalize().map_err(|_| "声库目录不存在")?;
+    if !target_c.starts_with(&root_c) { return Err("声库目录不在数据根内"); }
+    if !target_c.is_dir() { return Err("声库目录不存在"); }
+    Ok(target_c)
+}
+
+fn oto_b64_encode(data: &[u8]) -> String {
+    const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(A[((n >> 18) & 63) as usize] as char);
+        out.push(A[((n >> 12) & 63) as usize] as char);
+        out.push(if chunk.len() > 1 { A[((n >> 6) & 63) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 2 { A[(n & 63) as usize] as char } else { '=' });
+    }
+    out
+}
+
+/// 宽容解码：忽略非 base64 字符（与 Buffer.from(s,"base64") 的常见行为一致），不 panic。
+fn oto_b64_decode(src: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut buf: u32 = 0;
+    let mut bits = 0u32;
+    for b in src.bytes() {
+        if b == b'=' { break; }
+        let v = match b { b'A'..=b'Z' => b - b'A', b'a'..=b'z' => b - b'a' + 26, b'0'..=b'9' => b - b'0' + 52, b'+' => 62, b'/' => 63, _ => continue };
+        buf = (buf << 6) | v as u32;
+        bits += 6;
+        if bits >= 8 { bits -= 8; out.push(((buf >> bits) & 255) as u8); }
+    }
+    out
+}
+
+fn utau_read_oto_at(root: &Path, voicebank: Option<&str>) -> serde_json::Value {
+    let dir = match oto_bank_dir(root, voicebank) { Ok(d) => d, Err(e) => return oto_err(e) };
+    let target = dir.join("oto.ini");
+    if !target.is_file() { return oto_err("该声库没有 oto.ini"); }
+    let bytes = match std::fs::read(&target) { Ok(b) => b, Err(e) => return oto_err(&e.to_string()) };
+    let mtime = std::fs::metadata(&target).ok().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_millis() as f64).unwrap_or(0.0);
+    serde_json::json!({ "ok": true, "path": oto_path_text(&target), "base64": oto_b64_encode(&bytes), "size": bytes.len(), "mtimeMs": mtime })
+}
+
+fn utau_save_oto_at(root: &Path, voicebank: Option<&str>, base64: Option<&str>) -> serde_json::Value {
+    let dir = match oto_bank_dir(root, voicebank) { Ok(d) => d, Err(e) => return oto_err(e) };
+    let bytes = oto_b64_decode(base64.unwrap_or(""));
+    if bytes.is_empty() { return oto_err("内容为空"); }
+    if bytes.len() > OTO_MAX_BYTES { return oto_err("文件过大（上限 8MB）"); }
+    let target = dir.join("oto.ini");
+    let backup = if target.is_file() {
+        let bak = dir.join("oto.ini.bak");
+        if let Err(e) = std::fs::copy(&target, &bak) { return oto_err(&e.to_string()); }
+        oto_path_text(&bak)
+    } else { String::new() };
+    if let Err(e) = std::fs::write(&target, &bytes) { return oto_err(&e.to_string()); }
+    serde_json::json!({ "ok": true, "path": oto_path_text(&target), "backup": backup, "bytes": bytes.len() })
+}
+
+#[tauri::command]
+fn utau_read_oto(voicebank: Option<String>) -> serde_json::Value {
+    utau_read_oto_at(&data_dir().join("voicebanks"), voicebank.as_deref())
+}
+
+#[tauri::command]
+fn utau_save_oto(voicebank: Option<String>, base64: Option<String>) -> serde_json::Value {
+    utau_save_oto_at(&data_dir().join("voicebanks"), voicebank.as_deref(), base64.as_deref())
+}
+
 fn data_root_overridden() -> bool {
     std::env::var("FUFUMIDI_DATA_ROOT").map(|p| !p.trim().is_empty()).unwrap_or(false)
 }
@@ -3485,7 +3574,7 @@ fn main() {
             pick_file, pick_directory, pick_audio, pick_audio_files, pick_image, pick_music_xml,
             list_midi_files, list_audio_files, library_stats, read_soundfont, read_binary, save_binary,
             convert, probe, refine, cancel, set_transcribe_pause, engine_worker_status,
-            utau_list_voicebanks, voicebank_unified
+            utau_list_voicebanks, voicebank_unified, utau_read_oto, utau_save_oto
         ])
         .setup(|_app| {
             println!("[fufumidi-shell] {}", serde_json::to_string(&host_info_json()).unwrap_or_default());
@@ -4673,5 +4762,103 @@ mod voicebank_tests {
         assert_eq!(b["diffsingerCount"], 1);
         assert_eq!(ids(&b), vec!["diffsinger:only-ds"]);
         let _ = std::fs::remove_dir_all(base);
+    }
+}
+
+#[cfg(test)]
+mod oto_tests {
+    use super::{oto_b64_decode, oto_b64_encode, utau_read_oto_at, utau_save_oto_at};
+
+    fn tmpdir(tag: &str) -> std::path::PathBuf {
+        let uniq = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+        let p = std::env::temp_dir().join(format!("fufumidi-oto-{tag}-{}-{uniq}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn base64_roundtrip_and_lenient_decode() {
+        let raw = b"oto.ini\x00\xff\xe4\xb8\xad";
+        let enc = oto_b64_encode(raw);
+        assert_eq!(oto_b64_decode(&enc), raw.to_vec());
+        // 非法字符/空白忽略；'=' 截止；不 panic
+        assert_eq!(oto_b64_decode("!!QUJDRA=="), b"ABCD".to_vec());
+        assert_eq!(oto_b64_decode("QUJDRA"), b"ABCD".to_vec());
+        assert!(oto_b64_decode("=======").is_empty());
+    }
+
+    #[test]
+    fn read_oto_bytes_size_mtime_and_cjk_dir() {
+        let root = tmpdir("read-root");
+        let bank = root.join("声库 中文");
+        std::fs::create_dir_all(&bank).unwrap();
+        let bytes = b"a=oto\r\nb=oto2";
+        std::fs::write(bank.join("oto.ini"), bytes).unwrap();
+        let r = utau_read_oto_at(&root, Some(bank.to_str().unwrap()));
+        assert_eq!(r["ok"], true, "{}", r);
+        assert_eq!(r["size"], bytes.len());
+        assert!(r["mtimeMs"].as_f64().unwrap() > 0.0);
+        assert_eq!(oto_b64_decode(r["base64"].as_str().unwrap()), bytes.to_vec());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn read_errors_for_missing_bank_oto_and_arg() {
+        let root = tmpdir("read-err");
+        std::fs::create_dir_all(root.join("empty")).unwrap();
+        assert_eq!(utau_read_oto_at(&root, None)["ok"], false);
+        assert_eq!(utau_read_oto_at(&root, Some(""))["ok"], false);
+        assert_eq!(utau_read_oto_at(&root, Some("nope"))["ok"], false);
+        assert_eq!(utau_read_oto_at(&root, Some(root.join("empty").to_str().unwrap()))["ok"], false);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn save_new_file_backup_and_overwrite() {
+        let root = tmpdir("save-root");
+        let bank = root.join("bank");
+        std::fs::create_dir_all(&bank).unwrap();
+        let v = bank.to_str().unwrap();
+        let first = utau_save_oto_at(&root, Some(v), Some(&oto_b64_encode(b"first")));
+        assert_eq!(first["ok"], true, "{}", first);
+        assert_eq!(first["backup"], "");
+        assert_eq!(std::fs::read(bank.join("oto.ini")).unwrap(), b"first");
+        let second = utau_save_oto_at(&root, Some(v), Some(&oto_b64_encode(b"second")));
+        assert_eq!(second["ok"], true, "{}", second);
+        assert!(second["backup"].as_str().unwrap().ends_with("oto.ini.bak"));
+        assert_eq!(std::fs::read(bank.join("oto.ini.bak")).unwrap(), b"first");
+        assert_eq!(std::fs::read(bank.join("oto.ini")).unwrap(), b"second");
+        let third = utau_save_oto_at(&root, Some(v), Some(&oto_b64_encode(b"third")));
+        assert_eq!(third["ok"], true);
+        assert_eq!(std::fs::read(bank.join("oto.ini.bak")).unwrap(), b"second");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn save_rejects_empty_missing_and_outside_paths() {
+        let root = tmpdir("save-err");
+        let bank = root.join("bank");
+        std::fs::create_dir_all(&bank).unwrap();
+        let v = bank.to_str().unwrap();
+        assert_eq!(utau_save_oto_at(&root, Some(v), None)["ok"], false, "empty");
+        assert_eq!(utau_save_oto_at(&root, Some(v), Some(""))["ok"], false, "empty b64");
+        assert_eq!(utau_save_oto_at(&root, Some("missing"), Some(&oto_b64_encode(b"x")))["ok"], false);
+        let outside = tmpdir("outside");
+        let r = utau_save_oto_at(&root, Some(outside.to_str().unwrap()), Some(&oto_b64_encode(b"x")));
+        assert_eq!(r["ok"], false, "outside must be rejected: {}", r);
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(outside);
+    }
+
+    #[test]
+    fn save_rejects_over_8mb() {
+        let root = tmpdir("save-big");
+        let bank = root.join("bank");
+        std::fs::create_dir_all(&bank).unwrap();
+        let raw = vec![b'x'; super::OTO_MAX_BYTES + 1];
+        let r = utau_save_oto_at(&root, Some(bank.to_str().unwrap()), Some(&oto_b64_encode(&raw)));
+        assert_eq!(r["ok"], false, "{}", r);
+        let _ = std::fs::remove_dir_all(root);
     }
 }

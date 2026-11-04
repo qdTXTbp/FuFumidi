@@ -5,8 +5,8 @@
 
 | 指标 | 数值 |
 |---|---:|
-| Rust command | 117 |
-| bridge call | 133 |
+| Rust command | 119 |
+| bridge call | 135 |
 | 参数不一致 | 23 |
 
 ## 不一致列表
