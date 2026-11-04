@@ -119,3 +119,10 @@ cargo build --release --offline
 | F. 真实窗口 smoke | Tauri WebView2 交互/双实例 | 需要允许一次可见窗口验收 |
 
 在你选择前，目标保持 active，代码不推送。
+
+## 9. Release 产物指纹
+
+- 文件：`poc/tauri-poc/target/release/fufumidi-shell.exe`
+- 大小：**16,849,920 bytes**
+- SHA-256：`1761ea29213d5035f0c29c66c02fb0ccdc860bdd3a657451973a0266c78a46a6`
+- Authenticode：**NotSigned**（未签名；符合当前外部前置未采购的状态）
