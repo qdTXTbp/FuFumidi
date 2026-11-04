@@ -556,6 +556,37 @@ fn presets_restore() -> serde_json::Value {
     }
 }
 
+fn midi_root() -> PathBuf { data_dir().join("midi") }
+
+/// 与 Electron library:checkMidi 同语义：只认数据根 midi/ 内、非空文件；丢失的返回给前端重建。
+fn check_midi_items(items: &[serde_json::Value], root: &Path) -> serde_json::Value {
+    let root_canon = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let mut missing = Vec::new();
+    for it in items {
+        let id = it.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        if id.is_empty() { continue; }
+        let name = it.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let p = it.get("path").and_then(|v| v.as_str()).unwrap_or("");
+        let mut exists = false;
+        if !p.is_empty() {
+            if let Ok(c) = PathBuf::from(p).canonicalize() {
+                if c.starts_with(&root_canon) {
+                    if let Ok(m) = std::fs::metadata(&c) {
+                        exists = m.is_file() && m.len() > 0;
+                    }
+                }
+            }
+        }
+        if !exists { missing.push(serde_json::json!({ "id": id, "name": name })); }
+    }
+    serde_json::json!({ "ok": true, "missing": missing, "root": root.display().to_string() })
+}
+
+#[tauri::command]
+fn check_midi(items: Vec<serde_json::Value>) -> serde_json::Value {
+    check_midi_items(&items, &midi_root())
+}
+
 #[tauri::command]
 fn db_status() -> serde_json::Value {
     let counts = open_db().ok().map(|conn| {
@@ -988,7 +1019,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, db_kv_get, db_kv_set,
-            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, model_list,
+            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, check_midi, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
@@ -1009,4 +1040,38 @@ fn main() {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod check_midi_tests {
+    use super::check_midi_items;
+
+    fn tmpdir(tag: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!("fufumidi-checkmidi-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn missing_and_present_items() {
+        let root = tmpdir("shape");
+        let good = root.join("a.mid");
+        std::fs::write(&good, b"MThd").unwrap();
+        let outside = std::env::temp_dir().join(format!("fufumidi-outside-{}.mid", std::process::id()));
+        std::fs::write(&outside, b"MThd").unwrap();
+        let items = vec![
+            serde_json::json!({ "id": "a", "name": "A", "path": good.display().to_string() }),
+            serde_json::json!({ "id": "b", "name": "B", "path": root.join("nope.mid").display().to_string() }),
+            serde_json::json!({ "id": "c", "name": "C", "path": outside.display().to_string() }),
+        ];
+        let v = check_midi_items(&items, &root);
+        assert_eq!(v["ok"], true);
+        let missing = v["missing"].as_array().unwrap();
+        assert_eq!(missing.len(), 2);
+        assert!(missing.iter().any(|x| x["id"] == "b"));
+        assert!(missing.iter().any(|x| x["id"] == "c"), "outside root is missing");
+        let _ = std::fs::remove_file(outside);
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

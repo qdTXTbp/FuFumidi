@@ -72,6 +72,7 @@ export function installTauriBridge() {
     pickDirectory: () => call('pick_directory'),
     pickMusicXML: () => call('pick_music_xml'),
     listMidiFiles: (dir) => call('list_midi_files', { dir }),
+    checkMidi: (items) => call('check_midi', { items }),
     readBinary: (p) => call('read_binary', { p }),
     readSoundFont: (p) => call('read_soundfont', { p }),
     saveBinary: (opts) => call('save_binary', { opts }),

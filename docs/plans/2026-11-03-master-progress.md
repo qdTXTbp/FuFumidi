@@ -300,6 +300,9 @@
   页面尚未切换到该栈（EditorCanvas/Arrange 仍用快照栈），接入属后续步骤，不能宣称 P-011 整体完成。
   已补 `core/note_commands.js`（新增/删除/修改音符的增量命令 + 批量删除工具）与 4 项单测，
   为 EditorCanvas 切换准备最小 diff 命令。
+- **Tauri check_midi 已补**：Rust 实现与 Electron 同语义（只认数据根 midi/ 内非空文件），
+  桥补 `checkMidi`；Tauri 曲库自愈不再因缺命令而跳过。Rust 单测覆盖根内保留/缺失/根外路径。
+  命令总数 **44**；本轮全部无头验证（cargo test / typecheck / build / audit）。
 - **T-117 曲库/设置共享 Electron 数据（重要）**：Rust 用 rusqlite 直读/写
   `%APPDATA%/FuFumidi/fufumidi/fufumidi.sqlite`（songs/playlists/kv），设置优先读 legacy
   settings.json；只读验收实测 **1972 首真实曲目**、57 个设置键、侧栏「全部曲目 1972」正常；
