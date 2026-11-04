@@ -1644,7 +1644,10 @@ async fn separate_audio(state: State<'_, SeparationState>, app: AppHandle, opts:
             for line in BufReader::new(out).lines().map_while(Result::ok) {
                 let t = line.trim();
                 if let Some(rest) = t.strip_prefix("###PROG ") {
-                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(rest) { let _ = app2.emit("engine:separate:progress", v); }
+                    if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(rest) {
+                        if let Some(o) = v.as_object_mut() { o.insert("id".into(), serde_json::json!(id2)); }
+                        let _ = app2.emit("engine:separate:progress", v);
+                    }
                     continue;
                 }
                 if let Some(rest) = t.strip_prefix("###RESULT ") { result = serde_json::from_str::<serde_json::Value>(rest).ok(); continue; }
