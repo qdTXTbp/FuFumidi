@@ -2052,7 +2052,7 @@ async function openRefineResult() {
 }
 
 /* ---------------- 引擎日志 ---------------- */
-let offLog = null, offRefine = null, offModelProg = null, offSeparate = null, offSepProg = null, offStemProg = null;
+let offLog = null, offProgress = null, offRefine = null, offModelProg = null, offSeparate = null, offSepProg = null, offStemProg = null;
 onMounted(() => {
   window.addEventListener('keydown', onDocKeydown);   // 模型选择抽屉：Esc 关闭
   loadQueue();
@@ -2090,6 +2090,16 @@ onMounted(() => {
       if (p.id === currentJobId.value || String(p.id).indexOf('batch') === 0) {
         if (p.line) logLine(p.line);   // 详细引擎日志进日志面板；stage 由统一进度信息接管
       }
+    });
+  }
+  if (bridge && bridge.onEngineProgress) {
+    offProgress = bridge.onEngineProgress(p => {
+      if (!p) return;
+      const qid = parseInt(String(p.id || '').replace(/^batch/, ''), 10);
+      const it = queue.find((x) => x.id === qid);
+      const total = Number(p.total != null ? p.total : (p.n_total != null ? p.n_total : 0));
+      const doneN = Number(p.completed != null ? p.completed : (p.n_done != null ? p.n_done : 0));
+      if (it && total > 0) it.realPct = Math.min(99, Math.round(doneN / total * 100));
     });
   }
   if (bridge && bridge.onRefineLog) {
@@ -2144,6 +2154,7 @@ onBeforeUnmount(() => {
   try { window.removeEventListener('keydown', onDocKeydown); } catch (e) {}
   if (trTimer) clearInterval(trTimer);
   if (offLog) offLog();
+  if (offProgress) { try { offProgress(); } catch (e) {} offProgress = null; }
   if (offRefine) offRefine();
   if (offModelProg) { try { offModelProg(); } catch (e) {} offModelProg = null; }
   if (offSeparate) { try { offSeparate(); } catch (e) {} offSeparate = null; }

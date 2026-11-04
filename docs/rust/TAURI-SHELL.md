@@ -138,7 +138,8 @@ Python 子进程 echo/取消/EOF/暖复用测试）、cargo build release 通过
 GPU 环境（未设 `FUFUMIDI_DISABLE_GPU=1`）自动 −1，`FUFUMIDI_MAX_WORKERS` 可压低；
 `JobMap` 用前端 id 精确取消，cap>1 未知 id 不误杀；`engine_worker_status` 返回 cap/workers[]；
 缩容只回收空闲暖 worker，在途 job 不杀。默认 `__slots` 缺省仍 cap=1（与 P1 等价）。
-剩余：P3 进度节流/UI 队列绑定、队列迁移 UI；模型列表等 host 通道（T-115 扩面）。
+**P3 UI 消费已做**：ViewTranscribe 订阅 `onEngineProgress`，按 `id`（`batchN`）更新队列条目 `realPct`，
+与 `###PROG` 日志路径互补；卸载时退订。剩余：进度事件节流、队列迁移 UI；模型列表等 host 通道（T-115 扩面）。
 
 ### 3.1.1 Release 构建（T-119 第一步，2026-11-04）
 

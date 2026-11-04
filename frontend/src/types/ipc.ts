@@ -1117,6 +1117,7 @@ export interface FuBridge {
   /** 转录「暂停 / 继续」：正在转录的那一首当场停住，继续后从原处接着跑（只对分块引擎有效） */
   setTranscribePause(on: boolean): Promise<GeneralResult>;
   onEngineLog(cb: (p: any) => void): () => void;
+  onEngineProgress(cb: (p: any) => void): () => void;
   /** 6.5.0 智能分轨：分轨/逐轨转录/合并的阶段进度（main/task-queue.js → engine:stem-progress） */
   onStemProgress(cb: (p: any) => void): () => void;
   probe(): Promise<EngineProbeResult>;
