@@ -65,6 +65,7 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 | list_audio_files | 递归扫描音频/视频扩展（≤2000、深度≤8），排序 | Rust 单测：只收音频、递归、忽略 txt |
 | library_stats | 曲库目录文件数与字节数 | Rust 单测：只统计顶层文件 |
 | read_soundfont | 读取 SF2 原始字节（≤512MB；SF3 转换仍未迁） | Rust 读取路径/大小保护 |
+| data_root / open_data_root / clean_temp | 数据根概览（9 个目录大小）、打开数据根、清理 temp | Rust 单测：9 条目、temp 大小 = 文件总和、清理后消失（打开目录不测） |
 | soundfont_list | 扫描 renderer/vendor/soundfonts + dataDir/soundfonts（sf2/sf3） | 开发树返回 GeneralUser.sf2 |
 | dep_check | Rust 启动 Python `deps.py check`，解析 `###RESULT` 的 groups | 返回 universal/piano/aria/muscriptor/separate/transkun 6 组 |
 | diag_export | 写 dataDir/diagnostics-<ts>.json（host/python/models/soundfonts/dataDir） | 文件生成，ok=true |
@@ -170,12 +171,12 @@ worker running=true seq=1；输出 MIDI 头 `MThd`。剩余：cancel/pause、UI 
 
 - `npm run tauri:coverage` / `node scripts/tauri/ipc-coverage.mjs --write`：
   只解析 preload 与 Tauri 桥的方法名，不启动窗口；
-- 当前：preload 265 方法 / Tauri 97 方法 / **168 未映射**；preload invoke 250 / tauri call 88；
+- 当前：preload 265 方法 / Tauri **100** 方法 / **165 未映射**；preload invoke 250 / tauri call **91**；
 - 缺口分类：设置杂项 28、diffsinger 19、utau/voicebank 18、模型/安装 14、导出/渲染 14、
   资源/音频 13、rvc 12、曲库/数据 11、文件/诊断 11、事件/窗口 10、GPU 8、更新/测速 6、其他 4；
 - 明细见 [IPC-COVERAGE.md](IPC-COVERAGE.md)。
 
-## 4. 当前命令清单（51 条）
+## 4. 当前命令清单（54 条）
 
 host_info, app_version, ping, python_selfcheck, engine_probe, convert, engine_worker_status,
 load_settings, save_settings, db_kv_get, db_kv_set, db_status, db_songs_list, db_songs_put,
@@ -185,7 +186,7 @@ presets_list, presets_save, presets_delete, presets_last_used, presets_set_model
 presets_reorder, presets_reorder_to, presets_restore, set_transcribe_pause,
 pick_file, pick_directory, pick_audio, pick_audio_files, pick_image, pick_music_xml, check_midi,
 wallpaper_defaults, delete_midi, rename_midi, list_audio_files, library_stats, read_soundfont,
-db_playlists_delete。
+db_playlists_delete, data_root, open_data_root, clean_temp。
 
 ## 4.1 下一步
 

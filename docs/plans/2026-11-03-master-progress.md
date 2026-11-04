@@ -314,6 +314,9 @@
 - **Tauri 歌单删除 + IPC 覆盖基线**：`db_playlists_delete`（SQLite 往返单测）命令总数 **51**；
   新增 `npm run tauri:coverage` 静态统计（不弹窗）：preload **265** 方法 / Tauri **97** 方法 /
   未映射 **168**（250 invoke vs 88 call），分类明细写入 `docs/rust/IPC-COVERAGE.md`，作为后续迁移路线图。
+- **Tauri 数据根命令**：`data_root`（9 个目录大小概览）、`open_data_root`（安全子目录校验后打开）、
+  `clean_temp`（清理 temp 并返回释放字节）；桥补 dataRoot/openDataRoot/cleanTemp；Rust 测试
+  覆盖概览条目/大小/清理；命令总数 **54**，覆盖刷新为 100 方法/165 未映射（91 call）。
 - **T-117 曲库/设置共享 Electron 数据（重要）**：Rust 用 rusqlite 直读/写
   `%APPDATA%/FuFumidi/fufumidi/fufumidi.sqlite`（songs/playlists/kv），设置优先读 legacy
   settings.json；只读验收实测 **1972 首真实曲目**、57 个设置键、侧栏「全部曲目 1972」正常；

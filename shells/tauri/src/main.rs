@@ -584,6 +584,74 @@ fn desktop_video_files(dir: &Path) -> Vec<String> {
     out
 }
 
+fn data_root_entry(root: &Path, key: &str, label: &str) -> serde_json::Value {
+    let dir = root.join(key);
+    let exists = dir.is_dir();
+    let size = if exists { dir_size(&dir) } else { 0 };
+    serde_json::json!({
+        "key": key, "label": label, "dir": dir.display().to_string(), "exists": exists,
+        "legacyDir": serde_json::Value::Null, "pending": false, "conflict": false,
+        "size": size, "sizePartial": false
+    })
+}
+
+fn data_root_overview(root: &Path) -> serde_json::Value {
+    let defs = [
+        ("models", "模型权重"), ("gpu-enhancements", "GPU 增强包"), ("soundfonts", "音色库"),
+        ("voicebanks", "UTAU 声库"), ("diffsinger", "DiffSinger 组件"),
+        ("diffsinger-voicebanks", "DiffSinger 声库"), ("midi", "MIDI 曲库文件"),
+        ("cache", "第三方缓存"), ("temp", "中间产物"),
+    ];
+    let entries: Vec<serde_json::Value> = defs.iter().map(|(k, l)| data_root_entry(root, k, l)).collect();
+    serde_json::json!({
+        "ok": true, "root": root.display().to_string(), "reason": "tauri-data-root",
+        "from": "FUFUMIDI_DATA_ROOT/默认安装目录旁", "entries": entries, "migration": serde_json::Value::Null
+    })
+}
+
+#[tauri::command]
+fn data_root() -> serde_json::Value { data_root_overview(&data_dir()) }
+
+#[tauri::command]
+fn open_data_root(sub: Option<String>) -> serde_json::Value {
+    let root = data_dir();
+    let sub = sub.unwrap_or_default();
+    let mut target = root.clone();
+    if !sub.is_empty() && !sub.contains('/') && !sub.contains('\\') && sub != "." && sub != ".." {
+        let cand = root.join(&sub);
+        if cand.exists() { target = cand; }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        match Command::new("explorer").arg(&target).spawn() {
+            Ok(_) => serde_json::json!({ "ok": true, "dir": target.display().to_string() }),
+            Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    { serde_json::json!({ "ok": false, "error": "unsupported platform" }) }
+}
+
+fn clean_temp_dir(dir: &Path) -> u64 {
+    let mut freed = 0u64;
+    let Ok(rd) = std::fs::read_dir(dir) else { return 0 };
+    for e in rd.flatten() {
+        let p = e.path();
+        let sz = if p.is_dir() { dir_size(&p) } else { e.metadata().map(|m| m.len()).unwrap_or(0) };
+        if p.is_dir() { let _ = std::fs::remove_dir_all(&p); } else { let _ = std::fs::remove_file(&p); }
+        freed += sz;
+    }
+    freed
+}
+
+#[tauri::command]
+fn clean_temp() -> serde_json::Value {
+    let dir = data_dir().join("temp");
+    let _ = std::fs::create_dir_all(&dir);
+    let freed = clean_temp_dir(&dir);
+    serde_json::json!({ "ok": true, "freed": freed, "dir": dir.display().to_string() })
+}
+
 #[tauri::command]
 fn wallpaper_defaults() -> serde_json::Value {
     match desktop_dir() {
@@ -1176,7 +1244,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, db_kv_get, db_kv_set,
-            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, delete_midi, rename_midi, wallpaper_defaults, model_list,
+            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
@@ -1209,6 +1277,25 @@ mod check_midi_tests {
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    #[test]
+    fn data_root_overview_and_clean_temp() {
+        let root = tmpdir("data-root");
+        std::fs::create_dir_all(root.join("temp/sub")).unwrap();
+        std::fs::write(root.join("temp/a.bin"), b"1234").unwrap();
+        std::fs::write(root.join("temp/sub/b.bin"), b"12").unwrap();
+        std::fs::create_dir_all(root.join("models")).unwrap();
+        std::fs::write(root.join("models/x"), b"x").unwrap();
+        let v = super::data_root_overview(&root);
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["entries"].as_array().unwrap().len(), 9);
+        let temp = v["entries"].as_array().unwrap().iter().find(|e| e["key"] == "temp").unwrap();
+        assert_eq!(temp["size"], 6);
+        let freed = super::clean_temp_dir(&root.join("temp"));
+        assert_eq!(freed, 6);
+        assert!(!root.join("temp/a.bin").exists());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

@@ -5,10 +5,10 @@
 | 指标 | 数值 |
 |---|---:|
 | preload 暴露方法 | 265 |
-| Tauri 桥已映射方法 | 97 |
-| 尚未映射 | **168** |
+| Tauri 桥已映射方法 | 100 |
+| 尚未映射 | **165** |
 | preload IPC invoke 通道 | 250 |
-| Tauri call 通道 | 88 |
+| Tauri call 通道 | 91 |
 
 ## 缺口分类
 
@@ -21,9 +21,9 @@
 | 导出/渲染 | 14 |
 | 资源/音频/扩展 | 13 |
 | rvc | 12 |
-| 曲库/数据 | 11 |
-| 文件/诊断 | 11 |
+| 曲库/数据 | 10 |
 | 事件/窗口 | 10 |
+| 文件/诊断 | 9 |
 | gpu/运行时增强 | 8 |
 | 更新/测速 | 6 |
 | 其他 | 4 |
@@ -41,7 +41,6 @@ autostartGet
 autostartSet
 cancelInstall
 catalog
-cleanTemp
 cleanup
 clearFinished
 clearUserData
@@ -53,7 +52,6 @@ coverPickAudio
 coverPickDir
 coverRun
 coverSingers
-dataRoot
 dbCloudSongDir
 dbCloudSongPut
 demo
@@ -123,7 +121,6 @@ onUpdate
 onUpdateSpeedtest
 onVoicebankProgress
 open
-openDataRoot
 openFolder
 openPlatform
 pathForFile
