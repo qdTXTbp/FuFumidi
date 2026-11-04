@@ -5,9 +5,9 @@
 
 | 指标 | 数值 |
 |---|---:|
-| Rust command | 109 |
+| Rust command | 110 |
 | bridge call | 129 |
-| 参数不一致 | 27 |
+| 参数不一致 | 26 |
 
 ## 不一致列表
 
@@ -24,8 +24,6 @@
 - model_cancel（Rust 未找到命令）
   - bridge 多参数: id
 - model_pause（Rust 未找到命令）
-  - bridge 多参数: id
-- model_delete（Rust 未找到命令）
   - bridge 多参数: id
 - dep_install（Rust 未找到命令）
   - bridge 多参数: group

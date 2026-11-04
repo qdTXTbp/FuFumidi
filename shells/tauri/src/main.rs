@@ -562,6 +562,40 @@ fn presets_restore() -> serde_json::Value {
 
 fn midi_root() -> PathBuf { data_dir().join("midi") }
 
+fn model_artifact_path(root: &Path, id: &str) -> Option<PathBuf> {
+    let rel: &str = match id {
+        "basic_pitch" => "basic_pitch_quant.onnx",
+        "piano_transcription" => "piano_transcription/note_F1=0.9677_pedal_F1=0.9186.pth",
+        "hft_transformer" => "hft_transformer",
+        "muscriptor_small" => "muscriptor/small",
+        "muscriptor_medium" => "muscriptor/medium",
+        "muscriptor_large" => "muscriptor/large",
+        "yourmt3" => "yourmt3",
+        "miros" => "miros",
+        "aria_amt" => "aria_amt",
+        "beat_this" => "hub/checkpoints/beat_this-final0.ckpt",
+        "audio_tagger" => "audio-tagger",
+        "hnsep" => "hnsep",
+        "htdemucs4_6stems" => "multi/htdemucs4_6stems",
+        _ => return None,
+    };
+    Some(root.join(rel))
+}
+
+fn model_delete_at(root: &Path, id: &str) -> serde_json::Value {
+    if id.starts_with("rvc:") { return serde_json::json!({ "ok": false, "error": "RVC 模型删除尚未迁移" }); }
+    let Some(p) = model_artifact_path(root, id) else { return serde_json::json!({ "ok": false, "error": "not found" }); };
+    if !p.exists() { return serde_json::json!({ "ok": false, "error": "not found" }); }
+    let res = if p.is_dir() { std::fs::remove_dir_all(&p) } else { std::fs::remove_file(&p) };
+    if let Err(e) = res { return serde_json::json!({ "ok": false, "error": e.to_string() }); }
+    for suffix in [".oudep", ".parts", ".tmp", ".part"] { let _ = std::fs::remove_file(format!("{}{suffix}", p.display())); }
+    serde_json::json!({ "ok": true })
+}
+
+#[tauri::command]
+fn model_delete(id: String) -> serde_json::Value { model_delete_at(&models_dir(), &id) }
+
+
 fn sf_dir() -> PathBuf { data_dir().join("soundfonts") }
 
 fn sf_bundled_dir() -> Option<PathBuf> {
@@ -2956,6 +2990,18 @@ mod check_midi_tests {
         assert!(plan[0].join(" ").contains("Wallpaper"));
         assert!(plan[0].join(" ").contains("C:\\wall\\a.jpg"));
         assert_eq!(super::wallpaper_set_desktop("C:\\definitely-missing.jpg".into())["ok"], false);
+    }
+
+    #[test]
+    fn model_delete_paths() {
+        let root = tmpdir("model-delete");
+        std::fs::create_dir_all(root.join("muscriptor/small")).unwrap();
+        std::fs::write(root.join("muscriptor/small/model.safetensors"), b"m").unwrap();
+        assert_eq!(super::model_delete_at(&root, "muscriptor_small")["ok"], true);
+        assert!(!root.join("muscriptor/small").exists());
+        assert_eq!(super::model_delete_at(&root, "nope")["ok"], false);
+        assert_eq!(super::model_delete_at(&root, "rvc:x")["ok"], false);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
