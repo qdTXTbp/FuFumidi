@@ -12,7 +12,7 @@ import { timelineOfSong, iterBars, secOfTick, tickOfSec } from '../core/timeline
 // P1-13 B1：手势状态机（拖动/拖边/框选/平移/点击的判定与阈值统一走 core/gesture.js）
 import { createGestureState, beginGesture, updateGesture, endGesture, INTENTS, isMutatingIntent } from '../core/gesture.js';
 // P1-13 B2：撤销/重做走统一历史栈 + C1 命令注册表（菜单/命令面板/快捷键同一份）
-import { createTabbedHistoryRegistry } from '../core/history_stack.js';
+import { appSession } from '../core/session.js';
 import { commands, comboOfEvent } from '../core/commands.js';
 import {
   createArrangeState, addClip, removeClip, moveClip, resizeClip, splitClip,
@@ -40,19 +40,27 @@ const RULER_H = 26;
 let raf = 0;
 let gs = createGestureState();       // 当前指针手势（P1-13）
 let dragCtx = null;                  // 拖动上下文：clip 原值 + 命中边缘
-// P1-13：**分标签页独立撤销栈** —— 每个曲目一个快照栈，切走再切回仍能撤销/重做
-const tabHist = createTabbedHistoryRegistry({ limit: 60, maxTabs: 16 });
+// P-011：编排与编辑共用 session 按 doc 持有的撤销引擎；切曲目=切 doc=独立栈
 function tabKey() { return String(app.currentId || 'default'); }
+function arrangeDocId() { const s = song.value; return s ? 'edit:' + (app.currentId || s.name || 'untitled') : ''; }
 let lastTabKey = tabKey();
-let hist = tabHist.forTab(tabKey());
+let hist = null;
 const scrollByTab = new Map();   // 每个标签的横向滚动位置（tick）
 const histDepth = ref({ undo: 0, redo: 0 });
 const cmdOffs = [];
 
 function snapshotArrange() { return JSON.parse(JSON.stringify(state.value)); }
-function syncHist() { histDepth.value = hist.depth(); }
-/** 在修改**之前**调用：记下当前状态，供撤销恢复 */
-function pushHistory() { hist.push(snapshotArrange()); syncHist(); }
+function syncHist() { histDepth.value = hist ? hist.depth() : { undo: 0, redo: 0 }; }
+/** 在修改**之前**调用：把当前编排状态作为快照 entry 交给 session 引擎 */
+function pushHistory() {
+  if (!hist) return;
+  hist.pushSnapshot({
+    label: '编排', ti: -1,
+    capture: () => { const st = snapshotArrange(); return { arrange: st, label: '编排', at: Date.now(), bytes: JSON.stringify(st).length, noteCount: 0 }; },
+    restore: (before) => { if (before && before.arrange) applyArrange(before.arrange); },
+  });
+  syncHist();
+}
 function applyArrange(snap) {
   if (!snap) return false;
   state.value = createArrangeState(snap);
@@ -61,14 +69,16 @@ function applyArrange(snap) {
   return true;
 }
 function undoArrange() {
-  if (!hist.canUndo()) return false;
-  applyArrange(hist.undo(snapshotArrange()));
+  if (!hist || !hist.canUndo()) return false;
+  const label = hist.undo();
+  if (label == null) return false;
   syncHist();
   return true;
 }
 function redoArrange() {
-  if (!hist.canRedo()) return false;
-  applyArrange(hist.redo(snapshotArrange()));
+  if (!hist || !hist.canRedo()) return false;
+  const label = hist.redo();
+  if (label == null) return false;
   syncHist();
   return true;
 }
@@ -107,7 +117,11 @@ function resetState() {
   scrollByTab.set(lastTabKey, scrollX.value);
   const key = tabKey();
   lastTabKey = key;
-  hist = tabHist.forTab(key);
+  const d = arrangeDocId();
+  if (d) {
+    if (!appSession.get(d)) appSession.open({ docId: d, kind: 'edit', title: (song.value && song.value.name) || '' });
+    hist = appSession.history(d);
+  } else hist = null;
   syncHist();
   const s = song.value;
   // P1-1c：优先恢复 song.arrange（会话内持久化），没有则按曲目生成默认编排
@@ -584,11 +598,11 @@ onMounted(async () => {
   // C1：编排页自己的撤销/重做命令（命令面板/快捷键/Menu 都查同一张表）
   cmdOffs.push(commands.register({
     id: 'arrange.undo', title: '撤销', area: 'arrange', keys: 'Mod+Z', undoable: true,
-    when: () => hist.canUndo(), run: () => { undoArrange(); },
+    when: () => !!hist && hist.canUndo(), run: () => { undoArrange(); },
   }));
   cmdOffs.push(commands.register({
     id: 'arrange.redo', title: '重做', area: 'arrange', keys: 'Mod+Shift+Z', undoable: true,
-    when: () => hist.canRedo(), run: () => { redoArrange(); },
+    when: () => !!hist && hist.canRedo(), run: () => { redoArrange(); },
   }));
   window.addEventListener('keydown', onArrangeKey);
 });

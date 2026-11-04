@@ -344,7 +344,11 @@
   快照/命令全部走 session 引擎（fallback 本地引擎）；undo/redo 收敛为一次 engine 调用 + selection.clear+afterEdit；
   `pushMark`/长按取消用 `seq()/dropLast()`；`ViewEdit` 在 doc 切换时先同步 `histRef` 再 await 关旧 doc；
   新增隐藏 E2E `edit-undo-session`（单栈 bytes、跨页保留、切歌隔离、保存/自动保存轮询后 redo 仍存活）。
-  **编辑页 P-011 已完成**：隐藏全量 **39/39** 通过；**跨页统一（编辑↔编排）仍未做**，编排页仍用 tabbed registry。
+  **编辑页 P-011 已完成**：隐藏全量 **39/39** 通过。
+  **第十一批（跨页统一）**：`ViewArrange` 删除 tabbed registry，改用 `appSession.history(docId)` 同一文档引擎；
+  编排状态作为 `pushSnapshot` 的 arrange 快照 entry（capture/restore 只触编排状态），与编辑命令共享 LIFO；
+  切曲目=切 doc=独立栈；新增隐藏 E2E `edit-arrange-session`（编辑加音符 → 编排加标记 → 撤销标记 → 回编辑撤销音符）。
+  **编辑↔编排撤销栈已统一**，隐藏全量 **40/40** 通过；编排仍是快照 entry（非纯增量），但不再有双栈/双真相。
 - **Tauri check_midi 已补**：Rust 实现与 Electron 同语义（只认数据根 midi/ 内非空文件），
   桥补 `checkMidi`；Tauri 曲库自愈不再因缺命令而跳过。Rust 单测覆盖根内保留/缺失/根外路径。
   命令总数 **44**；本轮全部无头验证（cargo test / typecheck / build / audit）。
