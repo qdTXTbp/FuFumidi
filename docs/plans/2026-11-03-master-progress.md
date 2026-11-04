@@ -536,3 +536,5 @@
 - **150 命令 release（视频导出）**：2m11s、0 warning；host/engine self-check 通过；bundled imageio_ffmpeg 可用（ffmpeg 7.1）；真实 H.264 编码未跑。
 
 - **视频封装 smoke**：新增 `npm run tauri:video-smoke`（合成 H.264+WAV，按 video_export_end 参数封装）；实测 ok=true / 15827 bytes；WebCodecs 编码未跑。
+
+- **视频导出后全量 E2E**：隐藏全量 **40/40**（150 命令源码）；视频桥接不影响现有页面流程。
