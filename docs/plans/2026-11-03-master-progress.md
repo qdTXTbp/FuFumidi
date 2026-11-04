@@ -294,6 +294,10 @@
   重打并安装到干净目录，安装版 smoke 仍 **24/24**（renderer=<embedded>，python/engine 来自安装目录，转录 5.3 s）。
   Electron 回退基准：E2E **37/37**、`pack:base` 成功；**Electron NSIS 已重打**
   （排除 Tauri 产物后修复 7.2GB asar/EBUSY，安装包约 614 MiB；无头会话静默安装挂起，待交互桌面手测）。
+- **P-011/T-103 命令式撤销核心（已完成，待接入页面）**：新增 `frontend/src/core/command_history.js`：
+  增量命令（undo/redo 闭包）、标签、事务合并、limit/50MB 硬上限、diff 字节估算；
+  `frontend/tests/command-history.test.js` 5 项全过（含 10 万音符 × 50 次增量编辑 < 50MB 的内存验收）。
+  页面尚未切换到该栈（EditorCanvas/Arrange 仍用快照栈），接入属后续步骤，不能宣称 P-011 整体完成。
 - **T-117 曲库/设置共享 Electron 数据（重要）**：Rust 用 rusqlite 直读/写
   `%APPDATA%/FuFumidi/fufumidi/fufumidi.sqlite`（songs/playlists/kv），设置优先读 legacy
   settings.json；只读验收实测 **1972 首真实曲目**、57 个设置键、侧栏「全部曲目 1972」正常；
