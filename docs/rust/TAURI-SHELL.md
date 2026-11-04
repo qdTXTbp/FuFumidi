@@ -74,7 +74,7 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 | copy_asset | 复制分轨导出资产（自动建父目录） | Rust 单测：复制字节一致、源缺失报错 |
 | project_save / project_open | .fufumidi ZIP（project.json + files/），对话框/指定路径；开包校验条目数/总大小/路径穿越/资产白名单 | Rust 单测：写包→读包、资产字节一致、非法资产 id 计入 missing；缓存目录隔离；恶意包 ../evil.txt 不产生 resolved |
 | storage_report / storage_cleanup | 存储治理：10 类占用（曲库 protected、资产显式 includeAssets、日志保留 5 份） | Rust 单测：分类/总字节、默认只清 safe、资产需显式、midi 永不清 |
-| audio_duration | 读文件头取时长：WAV RIFF/fmt/data、FLAC STREAMINFO、MP3 逐帧扫描；其他格式返回 unsupported | Rust 单测：1s WAV、1s FLAC、100 帧 MP3（约 2.61s）、坏文件 false |
+| audio_duration | 读文件头取时长：WAV RIFF/fmt/data、FLAC STREAMINFO、MP3 逐帧扫描、M4A/MP4 mvhd；其他格式返回 unsupported | Rust 单测：1s WAV、1s FLAC、100 帧 MP3（约 2.61s）、合成 M4A 2s、坏文件 false |
 | export_audio | 渲染端字节落盘：文件名清洗、原子写、sidecar manifest（SHA-256/格式/采样率/时长/ISO createdAt），支持 targetPath 或保存对话框 | Rust 单测：字节落盘、manifest sha256/采样率/ISO 时间、非法名清洗、空字节拒绝 |
 | export_stems_zip | 分轨 ZIP 打包（≤100 轨、总 ≤2GB、文件名清洗、targetPath 或保存对话框） | Rust 单测：两轨 ZIP 条目/字节、非法名清洗、空列表拒绝 |
 | pick_cover | 选图片→data URL（png/jpeg/webp/bmp，≤6MB） | Rust 单测：jpeg MIME/base64、gif 拒绝、>6MB 拒绝；真实对话框不在无头会话触发 |

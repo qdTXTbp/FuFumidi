@@ -1693,6 +1693,44 @@ fn export_audio(app: AppHandle, payload: serde_json::Value) -> serde_json::Value
 }
 
 
+fn mp4_boxes(b: &[u8], start: usize, end: usize, depth: usize, f: &mut dyn FnMut(&[u8], &[u8])) {
+    if depth > 8 { return; }
+    let mut i = start;
+    while i + 8 <= end {
+        let mut size = u32::from_be_bytes([b[i], b[i+1], b[i+2], b[i+3]]) as usize;
+        let typ = &b[i+4..i+8];
+        let mut hdr = 8usize;
+        if size == 1 { if i + 16 > end { break; } size = u64::from_be_bytes([b[i+8],b[i+9],b[i+10],b[i+11],b[i+12],b[i+13],b[i+14],b[i+15]]) as usize; hdr = 16; }
+        if size == 0 { size = end - i; }
+        if size < hdr || i + size > end { break; }
+        let body = &b[i+hdr..i+size];
+        f(typ, body);
+        if typ == b"moov" || typ == b"trak" || typ == b"mdia" || typ == b"minf" || typ == b"stbl" {
+            mp4_boxes(b, i + hdr, i + size, depth + 1, f);
+        }
+        i += size;
+    }
+}
+
+fn mp4_duration(b: &[u8]) -> Option<f64> {
+    let mut found: Option<f64> = None;
+    mp4_boxes(b, 0, b.len(), 0, &mut |typ, body| {
+        if typ != b"mvhd" || body.len() < 20 { return; }
+        let ver = body[0];
+        if ver == 1 {
+            if body.len() >= 32 {
+                let ts = u32::from_be_bytes([body[20],body[21],body[22],body[23]]);
+                let dur = u64::from_be_bytes([body[24],body[25],body[26],body[27],body[28],body[29],body[30],body[31]]);
+                if ts > 0 { found = Some(dur as f64 / ts as f64); }
+            }
+        } else if body.len() >= 20 {
+            let ts = u32::from_be_bytes([body[12],body[13],body[14],body[15]]);
+            let dur = u32::from_be_bytes([body[16],body[17],body[18],body[19]]);
+            if ts > 0 { found = Some(dur as f64 / ts as f64); }
+        }
+    });
+    found
+}
 fn audio_duration_at(p: &str) -> serde_json::Value {
     let path = Path::new(p);
     let Ok(meta) = std::fs::metadata(path) else { return serde_json::json!({ "ok": false, "error": "not found" }); };
@@ -1704,6 +1742,7 @@ fn audio_duration_at(p: &str) -> serde_json::Value {
     let secs: Option<f64> = match ext.as_str() {
         "wav" | "wave" => wav_duration(&head),
         "flac" => flac_duration(&head),
+        "m4a" | "mp4" | "m4b" => mp4_duration(&head),
         "mp3" => mp3_duration(path),
         _ => None,
     };
@@ -3451,6 +3490,31 @@ mod check_midi_tests {
         assert_eq!(m["audio"]["sampleRate"], 48000);
         assert_eq!(super::sanitize_export_name("a:b/c", "wav"), "a_b_c.wav");
         assert_eq!(super::write_export_at(&root, "empty", "wav", &[], &meta, "test")["ok"], false);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn audio_duration_m4a() {
+        let root = tmpdir("audio-m4a");
+        let f = root.join("clip.m4a");
+        let mut b: Vec<u8> = Vec::new();
+        b.extend_from_slice(&16u32.to_be_bytes()); b.extend_from_slice(b"ftyp"); b.extend_from_slice(b"M4A "); b.extend_from_slice(&[0,0,0,0]);
+        let mut mvhd: Vec<u8> = Vec::new();
+        mvhd.extend_from_slice(&[0,0,0,0]);
+        mvhd.extend_from_slice(&[0,0,0,0]); mvhd.extend_from_slice(&[0,0,0,0]);
+        mvhd.extend_from_slice(&1000u32.to_be_bytes());
+        mvhd.extend_from_slice(&2000u32.to_be_bytes());
+        b.extend_from_slice(&((8 + mvhd.len()) as u32).to_be_bytes()); b.extend_from_slice(b"mvhd"); b.extend_from_slice(&mvhd);
+        let size = b.len() as u32 + 8;
+        // 包一层 moov（需要把 mvhd 放进 moov：重建）
+        let mut mvhd_box = Vec::new(); mvhd_box.extend_from_slice(&((8 + mvhd.len()) as u32).to_be_bytes()); mvhd_box.extend_from_slice(b"mvhd"); mvhd_box.extend_from_slice(&mvhd);
+        let mut out: Vec<u8> = Vec::new();
+        out.extend_from_slice(&16u32.to_be_bytes()); out.extend_from_slice(b"ftyp"); out.extend_from_slice(b"M4A "); out.extend_from_slice(&[0,0,0,0]);
+        out.extend_from_slice(&((8 + mvhd_box.len()) as u32).to_be_bytes()); out.extend_from_slice(b"moov"); out.extend_from_slice(&mvhd_box);
+        std::fs::write(&f, &out).unwrap();
+        let r = super::audio_duration_at(f.to_str().unwrap());
+        assert_eq!(r["ok"], true, "{}", r);
+        assert!((r["seconds"].as_f64().unwrap() - 2.0).abs() < 0.001);
         let _ = std::fs::remove_dir_all(root);
     }
 
