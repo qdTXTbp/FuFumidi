@@ -10,7 +10,7 @@
 //! T-115 纵切（本文件）：app_version / load_settings / save_settings / db_kv_get / db_kv_set /
 //! list_midi_files / read_binary / save_binary + host_info / python_selfcheck / ping。
 
-use std::collections::BTreeMap;
+use rusqlite::{params, Connection, OptionalExtension};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
@@ -132,40 +132,53 @@ fn model_list() -> Vec<serde_json::Value> {
     items
 }
 
-fn settings_path() -> PathBuf { data_dir().join("settings.json") }
-fn kv_path() -> PathBuf { data_dir().join("kv.json") }
-fn songs_path() -> PathBuf { data_dir().join("songs.json") }
-fn playlists_path() -> PathBuf { data_dir().join("playlists.json") }
-
-fn read_array(path: &Path) -> Vec<serde_json::Value> {
-    match std::fs::read_to_string(path) {
-        Ok(s) => match serde_json::from_str::<serde_json::Value>(&s) {
-            Ok(serde_json::Value::Array(a)) => a,
-            _ => Vec::new(),
-        },
-        Err(_) => Vec::new(),
-    }
+fn data_root_overridden() -> bool {
+    std::env::var("FUFUMIDI_DATA_ROOT").map(|p| !p.trim().is_empty()).unwrap_or(false)
 }
 
-fn write_array(path: &Path, arr: &[serde_json::Value]) -> Result<(), String> {
-    let tmp = path.with_extension("tmp");
-    let v = serde_json::Value::Array(arr.to_vec());
-    std::fs::write(&tmp, serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+fn legacy_dir() -> Option<PathBuf> {
+    std::env::var("APPDATA").ok().map(|a| PathBuf::from(a).join("FuFumidi").join("fufumidi"))
 }
 
-fn upsert_by_id(path: &Path, item: serde_json::Value) -> bool {
-    let id = item.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let mut arr = read_array(path);
-    if id.is_empty() {
-        arr.push(item);
-    } else if let Some(pos) = arr.iter().position(|x| x.get("id").and_then(|v| v.as_str()) == Some(id.as_str())) {
-        arr[pos] = item;
-    } else {
-        arr.push(item);
+/// 设置文件：显式 env → 旧 Electron 位置的 settings.json（双构建共享）→ 当前数据根。
+fn settings_path() -> PathBuf {
+    if let Ok(p) = std::env::var("FUFUMIDI_SETTINGS_FILE") {
+        if !p.trim().is_empty() { return PathBuf::from(p); }
     }
-    write_array(path, &arr).is_ok()
+    if !data_root_overridden() {
+        if let Some(d) = legacy_dir() {
+            let p = d.join("settings.json");
+            if p.exists() { return p; }
+        }
+    }
+    data_dir().join("settings.json")
+}
+
+/// 数据库：显式 env → 旧 Electron 的 fufumidi.sqlite（双构建共享）→ 当前数据根。
+fn db_path() -> PathBuf {
+    if let Ok(p) = std::env::var("FUFUMIDI_DB_FILE") {
+        if !p.trim().is_empty() { return PathBuf::from(p); }
+    }
+    if !data_root_overridden() {
+        if let Some(d) = legacy_dir() {
+            let p = d.join("fufumidi.sqlite");
+            if p.exists() { return p; }
+        }
+    }
+    data_dir().join("fufumidi.sqlite")
+}
+
+fn open_db() -> Result<Connection, String> {
+    let p = db_path();
+    if let Some(parent) = p.parent() { let _ = std::fs::create_dir_all(parent); }
+    let conn = Connection::open(&p).map_err(|e| e.to_string())?;
+    let _ = conn.busy_timeout(std::time::Duration::from_millis(2000));
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);\
+         CREATE TABLE IF NOT EXISTS songs (id TEXT PRIMARY KEY, name TEXT, data TEXT, meta TEXT, updated_at INTEGER);\
+         CREATE TABLE IF NOT EXISTS playlists (id TEXT PRIMARY KEY, name TEXT, song_ids TEXT);",
+    ).map_err(|e| e.to_string())?;
+    Ok(conn)
 }
 
 /// 查找 Python：显式 env > 安装版 resources/python > 开发树 resources/python。
@@ -271,21 +284,21 @@ fn save_settings(s: serde_json::Value) -> serde_json::Value {
 
 #[tauri::command]
 fn db_kv_get(key: String) -> serde_json::Value {
-    let v = read_json(&kv_path());
-    v.get(&key).cloned().unwrap_or(serde_json::Value::Null)
+    let Ok(conn) = open_db() else { return serde_json::Value::Null };
+    let raw: Option<String> = conn.query_row("SELECT value FROM kv WHERE key = ?1", params![key], |r| r.get(0)).optional().unwrap_or(None);
+    match raw {
+        Some(s) => serde_json::from_str(&s).unwrap_or(serde_json::Value::String(s)),
+        None => serde_json::Value::Null,
+    }
 }
 
 #[tauri::command]
 fn db_kv_set(key: String, value: serde_json::Value) -> serde_json::Value {
-    let mut map: BTreeMap<String, serde_json::Value> = match read_json(&kv_path()) {
-        serde_json::Value::Object(o) => o.into_iter().collect(),
-        _ => BTreeMap::new(),
-    };
-    map.insert(key, value);
-    let obj = serde_json::Value::Object(map.into_iter().collect());
-    match write_json(&kv_path(), &obj) {
+    let Ok(conn) = open_db() else { return serde_json::json!({ "ok": false, "error": "db open failed" }) };
+    let raw = serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
+    match conn.execute("INSERT INTO kv(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![key, raw]) {
         Ok(_) => serde_json::json!({ "ok": true }),
-        Err(e) => serde_json::json!({ "ok": false, "error": e }),
+        Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
     }
 }
 
@@ -545,33 +558,78 @@ fn presets_restore() -> serde_json::Value {
 
 #[tauri::command]
 fn db_status() -> serde_json::Value {
+    let counts = open_db().ok().map(|conn| {
+        let songs: i64 = conn.query_row("SELECT COUNT(*) FROM songs", [], |r| r.get(0)).unwrap_or(0);
+        let playlists: i64 = conn.query_row("SELECT COUNT(*) FROM playlists", [], |r| r.get(0)).unwrap_or(0);
+        (songs, playlists)
+    });
+    let (songs, playlists) = counts.unwrap_or((0, 0));
     serde_json::json!({
         "ok": true,
-        "kind": "json",
+        "kind": "sqlite",
+        "db": db_path().display().to_string(),
         "dataDir": data_dir().display().to_string(),
-        "songs": read_array(&songs_path()).len(),
-        "playlists": read_array(&playlists_path()).len(),
+        "songs": songs,
+        "playlists": playlists,
     })
 }
 
 #[tauri::command]
-fn db_songs_list() -> Vec<serde_json::Value> { read_array(&songs_path()) }
-
-#[tauri::command]
-fn db_songs_put(item: serde_json::Value) -> bool { upsert_by_id(&songs_path(), item) }
-
-#[tauri::command]
-fn db_songs_delete(id: String) -> bool {
-    let arr = read_array(&songs_path());
-    let next: Vec<serde_json::Value> = arr.into_iter().filter(|x| x.get("id").and_then(|v| v.as_str()) != Some(id.as_str())).collect();
-    write_array(&songs_path(), &next).is_ok()
+fn db_songs_list() -> Vec<serde_json::Value> {
+    let Ok(conn) = open_db() else { return Vec::new() };
+    let Ok(mut stmt) = conn.prepare("SELECT data FROM songs ORDER BY updated_at DESC") else { return Vec::new() };
+    let rows = stmt.query_map([], |r| r.get::<_, String>(0));
+    match rows {
+        Ok(it) => it.flatten().filter_map(|s| serde_json::from_str::<serde_json::Value>(&s).ok()).collect(),
+        Err(_) => Vec::new(),
+    }
 }
 
 #[tauri::command]
-fn db_playlists_list() -> Vec<serde_json::Value> { read_array(&playlists_path()) }
+fn db_songs_put(item: serde_json::Value) -> bool {
+    let id = item.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    if id.is_empty() { return false; }
+    let Ok(conn) = open_db() else { return false };
+    let data = serde_json::to_string(&item).unwrap_or_else(|_| "{}".to_string());
+    let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let meta = item.get("meta").cloned().unwrap_or_else(|| serde_json::json!({})).to_string();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+    conn.execute(
+        "INSERT INTO songs(id,name,data,meta,updated_at) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(id) DO UPDATE SET name=excluded.name,data=excluded.data,meta=excluded.meta,updated_at=excluded.updated_at",
+        params![id, name, data, meta, now],
+    ).is_ok()
+}
 
 #[tauri::command]
-fn db_playlists_put(item: serde_json::Value) -> bool { upsert_by_id(&playlists_path(), item) }
+fn db_songs_delete(id: String) -> bool {
+    open_db().map(|conn| conn.execute("DELETE FROM songs WHERE id = ?1", params![id]).is_ok()).unwrap_or(false)
+}
+
+#[tauri::command]
+fn db_playlists_list() -> Vec<serde_json::Value> {
+    let Ok(conn) = open_db() else { return Vec::new() };
+    let Ok(mut stmt) = conn.prepare("SELECT id,name,song_ids FROM playlists") else { return Vec::new() };
+    let rows = stmt.query_map([], |r| {
+        let id: String = r.get(0)?;
+        let name: String = r.get(1).unwrap_or_default();
+        let ids: String = r.get(2).unwrap_or_else(|_| "[]".to_string());
+        Ok(serde_json::json!({ "id": id, "name": name, "songIds": serde_json::from_str::<serde_json::Value>(&ids).unwrap_or_else(|_| serde_json::json!([])) }))
+    });
+    match rows { Ok(it) => it.flatten().collect(), Err(_) => Vec::new() }
+}
+
+#[tauri::command]
+fn db_playlists_put(item: serde_json::Value) -> bool {
+    let id = item.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    if id.is_empty() { return false; }
+    let Ok(conn) = open_db() else { return false };
+    let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let ids = item.get("songIds").cloned().unwrap_or_else(|| serde_json::json!([])).to_string();
+    conn.execute(
+        "INSERT INTO playlists(id,name,song_ids) VALUES(?1,?2,?3) ON CONFLICT(id) DO UPDATE SET name=excluded.name,song_ids=excluded.song_ids",
+        params![id, name, ids],
+    ).is_ok()
+}
 
 #[tauri::command]
 fn list_midi_files(dir: String) -> Vec<String> {

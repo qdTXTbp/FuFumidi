@@ -13,6 +13,8 @@ npm run tauri:bundle      # build:ui + stage + NSIS 安装包
 ```
 
 Tauri CLI 固定在 devDependency `@tauri-apps/cli@2.12.4`（crate tauri 2.12.5）。
+曲库/设置/歌单直接共享 Electron 的 `fufumidi.sqlite` 与 legacy `settings.json`（rusqlite bundled），
+安装版首次启动即可看到老用户曲库；测试用 `FUFUMIDI_DATA_ROOT` / `FUFUMIDI_DB_FILE` 隔离。
 原生文件对话框用 `tauri-plugin-dialog 2.8.4`（Rust 侧直接调用，不依赖前端插件权限）。
 
 ## 2. 打包内容（与 electron-builder.base.yml 对齐）

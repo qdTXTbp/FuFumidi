@@ -56,8 +56,9 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 | set_transcribe_pause | 写/删 `dataRoot/engine.pause`，引擎 pause_gate 监听（worker 启动时注入 FUFUMIDI_PAUSE_FILE） | 120 s WAV：暂停后 900 ms 仍未结束（settledEarly=false），继续后完成，pausedConv.ok=true |
 | pick_file / pick_directory / pick_audio / pick_audio_files / pick_image / pick_music_xml | 原生文件/目录对话框（tauri-plugin-dialog 2.8.4，Rust 直接调用） | 桥 6 个方法均为 function；安装版 smoke 通过（人工点选仍待验收） |
 | model_list | 13 个核心模型条目（basic/piano/hft/MuScriptor×3/yourmt3/miros/aria/beat_this/audio_tagger/hnsep/HTDemucs4_6stems）；exists 按 models 目录真实大小判断 | smoke 断言 13 条、id 齐全、含 separate 条目 |
-| db_status / db_songs_list / db_songs_put / db_songs_delete | JSON 曲库（dataDir/songs.json），按 id upsert/删除 | 写 smoke-song → 列表 1 条 → 删除 → 0 条 |
-| db_playlists_list / db_playlists_put | JSON 歌单（dataDir/playlists.json） | 默认歌单 + smoke-pl 出现 |
+| db_status / db_songs_list / db_songs_put / db_songs_delete | **共享 Electron SQLite**（legacy `fufumidi.sqlite`；测试态用 dataRoot 独立库），按 id upsert/删除 | smoke 往返通过；真实库只读验收读到 **1972 首** |
+| db_playlists_list / db_playlists_put | 同一 SQLite 的 playlists 表 | 默认歌单 + smoke-pl 出现 |
+| db_kv_get / db_kv_set | 同一 SQLite 的 kv 表 | smoke 写 {a:1} → 读回 |
 | soundfont_list | 扫描 renderer/vendor/soundfonts + dataDir/soundfonts（sf2/sf3） | 开发树返回 GeneralUser.sf2 |
 | dep_check | Rust 启动 Python `deps.py check`，解析 `###RESULT` 的 groups | 返回 universal/piano/aria/muscriptor/separate/transkun 6 组 |
 | diag_export | 写 dataDir/diagnostics-<ts>.json（host/python/models/soundfonts/dataDir） | 文件生成，ok=true |
@@ -102,7 +103,18 @@ worker running=true seq=1；输出 MIDI 头 `MThd`。剩余：cancel/pause、UI 
 - 修复后 smoke 实测：`apiBridgeReady=true / apiBridgeKeys=71`、`restoreBridgeKeys=71`、
   `storeSongs=1`、页面出现 `Smoke UI Song`、曲库显示 **1 首**、首页"继续上次的工作"出现该曲。
 
-### 3.3 曲库 JSON store + UI 路由冒烟（2026-11-04）
+### 3.2.2 真实老用户数据接入（T-117，2026-11-04）
+
+- `rusqlite`（bundled SQLite）直读/写 Electron 的 `%APPDATA%/FuFumidi/fufumidi/fufumidi.sqlite`：
+  songs / playlists / kv；无覆盖时自动共享，设置了 `FUFUMIDI_DATA_ROOT` 时改用独立库（测试隔离）；
+- 设置文件同样优先 legacy `%APPDATA%/FuFumidi/fufumidi/settings.json`（57 键实测读取）；
+- 只读验收脚本 `node scripts/tauri/legacy-data-check.mjs`（不设 data root）：
+  真实库 **1972 首**、首曲 `Bad Apple!!.mid`、主题 fufu、侧栏「全部曲目 1972」正常渲染；
+  截图 `shells/tauri/artifacts/legacy-library.png`；
+- 双构建并存风险：Tauri 与 Electron 同时运行会争用同一 sqlite；当前约定是**同一时间只开一个壳**，
+  后续若需并行会加只读副本/文件锁。
+
+### 3.3 曲库 SQLite + UI 路由冒烟（2026-11-04）
 
 - **数据根对齐**：默认先找安装目录旁的 `FuFumidiData`（存在即用），否则 `%APPDATA%/FuFumidi/FuFumidiData`；
   `FUFUMIDI_DATA_ROOT` 仍可覆盖（smoke 用临时目录）。模型目录 = 数据根/`models`。

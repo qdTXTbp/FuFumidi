@@ -293,6 +293,10 @@
 - **T-119 收尾进展**：`mainBinaryName: FuFumidi`，安装包主程序改为 **FuFumidi.exe**；
   重打并安装到干净目录，安装版 smoke 仍 **24/24**（renderer=<embedded>，python/engine 来自安装目录，转录 5.3 s）。
   Electron 回退基准：E2E **35/35**、`pack:base` 成功（28 GB base 数据包，已删除不入库）。
+- **T-117 曲库/设置共享 Electron 数据（重要）**：Rust 用 rusqlite 直读/写
+  `%APPDATA%/FuFumidi/fufumidi/fufumidi.sqlite`（songs/playlists/kv），设置优先读 legacy
+  settings.json；只读验收实测 **1972 首真实曲目**、57 个设置键、侧栏「全部曲目 1972」正常；
+  测试态由 FUFUMIDI_DATA_ROOT/DB_FILE 隔离。
 - **P-012 快捷键可配置已落地**：新增 `core/shortcuts.js`（10 个窗口级动作注册表、
   localStorage 持久化、冲突检测、重置）；App.onKey 改为按注册表分发；SettingsPanel
   快捷键页支持点击录制（Esc 取消、冲突提示）并保留只读编辑器键位表。
