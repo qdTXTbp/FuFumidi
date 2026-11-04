@@ -233,6 +233,18 @@
 - 新增 `scripts/e2e/cases/models-catalog.mjs`：守住模型家族与字段完整性，防止后续改动悄悄删模型/改 ID。
 - 兼容矩阵与变更流程：docs/MODELS-COMPATIBILITY.md。
 
+## 18. Tauri 真正外壳第一步（2026-11-04）
+
+- 新增 `shells/tauri/`（不再是 POC）：tauri 2 壳，命令 `host_info` / `python_selfcheck` / `ping`；
+  加载现有 `renderer/dist`，Python 只做发现/自检（推理仍归 Python，ADR-0002）。
+- 实测：复用 POC target 编译 **16.7 s**；`--self-check` 输出 version 6.5.0-beta.1、
+  `resources/python/python.exe` exists=true、renderer/dist exists=true；
+  开窗 **0.66 s**，标题 FuFumidi，主进程 RSS 41.4 MB，WebView2 子进程 7；
+  截图 `shells/tauri/artifacts/window.png`（真实首页 + 新手引导，不是占位页）。
+- 文档：docs/rust/TAURI-SHELL.md（边界/构建/实测/下一步/风险）。
+- 边界未变：**IPC 仍缺 ~172 条**、更新链仍要自研；模型兼容硬约束继续生效。
+- 下一步：T-115 IPC 纵切 10 条 → T-118 Python sidecar supervisor → T-117 host 业务迁移。
+
 ## 17. 待收口（下一轮）
 
 1. 6.7 剩余：可配置快捷键、命令式撤销、量化增强（强度/终点）、编排参与播放。
