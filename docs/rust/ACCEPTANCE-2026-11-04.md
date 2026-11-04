@@ -39,8 +39,8 @@
 - `npm run audit`：0
 - `cargo test --offline`：**113 passed / 0 failed / 1 ignored**
 - `npm run tauri:handler-audit`：**143/143** 已注册，并已并入 `npm run audit`
-- release build：通过（2m19s，见 `TAURI-BUILD.md` §8）
-- release `--self-check` / `--engine-self-check`：通过
+- release build：通过（插件安装后 2m21s、0 warning，见 `TAURI-BUILD.md` §11）
+- release `--self-check` / `--engine-self-check`：通过（143 命令源码）
 
 ## 4. 仍需完成的重型缺口
 

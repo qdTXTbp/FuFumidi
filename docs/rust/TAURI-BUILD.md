@@ -95,3 +95,10 @@ Tauri 默认从 GitHub 下载 `nsis-3.13.zip`，本机直连超时。已把工�
 - release `--self-check`：host ok / renderer embedded；
 - release `--engine-self-check`：真实 worker / warm=1 / 无残留；
 - 测试构建已无 unused 警告；隐藏 smoke 1/1；无 Python/壳残留。
+
+## 11. 2026-11-04 当前源码 release（插件安装后）
+
+- 143 命令源码 release 构建：2m21s，**0 warning**；
+- host `--self-check`：pythonExists / renderer embedded / version 正确；
+- `--engine-self-check`：真实 worker / warm=1 / 无 Python/壳残留；
+- 隐藏全量 E2E 40/40、test:ui 589/589、cargo 113/113 (+1 ignored)。

@@ -517,3 +517,5 @@
 - **插件安装回滚备份**：覆盖升级先把旧目录 rename 成 `.install-backup-<token>`，新包解压失败则删除半成品并恢复旧目录；下载 curl 加 `-f`，HTTP 4xx/5xx 不再当 zip 解析。cargo **113/113 + 1 ignored**。
 
 - **当前源码复验（插件安装后）**：隐藏全量 E2E **40/40**、test:ui **589/589**、typecheck/audit 0、cargo **113/113 + 1 ignored**；命令 143，覆盖 165/101，call 159，arg 23。
+
+- **143 命令 release 复验**：release 2m21s、0 warning；host/engine self-check 通过；无窗口/残留；E2E 40/40、test:ui 589、cargo 113。
