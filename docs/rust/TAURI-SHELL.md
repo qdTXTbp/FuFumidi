@@ -53,6 +53,7 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 | cancel | 置取消标志 + taskkill worker；阻塞读返回 EOF 后识别为 canceled | 120 s WAV 转录中取消：cancelR.canceled=true、convert 返回 {ok:false,canceled:true}、worker running=false；下次请求重新拉起 |
 | presets_list / save / delete / last_used | Rust 读写 dataRoot/presets.json；内置表由 engine/presets.py 生成并嵌入（builtin_presets.json） | 9 个内置预设 + 11 个 model_defaults；保存 Smoke Preset → last_used；删除后消失 |
 | presets_set_model / reorder / reorder_to / restore | 模型→预设绑定、排序、恢复内置 | 绑定 basic→Smoke Preset、解绑、删除均成功 |
+| set_transcribe_pause | 写/删 `dataRoot/engine.pause`，引擎 pause_gate 监听（worker 启动时注入 FUFUMIDI_PAUSE_FILE） | 120 s WAV：暂停后 900 ms 仍未结束（settledEarly=false），继续后完成，pausedConv.ok=true |
 | model_list | 13 个核心模型条目（basic/piano/hft/MuScriptor×3/yourmt3/miros/aria/beat_this/audio_tagger/hnsep/HTDemucs4_6stems）；exists 按 models 目录真实大小判断 | smoke 断言 13 条、id 齐全、含 separate 条目 |
 | db_status / db_songs_list / db_songs_put / db_songs_delete | JSON 曲库（dataDir/songs.json），按 id upsert/删除 | 写 smoke-song → 列表 1 条 → 删除 → 0 条 |
 | db_playlists_list / db_playlists_put | JSON 歌单（dataDir/playlists.json） | 默认歌单 + smoke-pl 出现 |
@@ -116,7 +117,7 @@ worker running=true seq=1；输出 MIDI 头 `MThd`。剩余：cancel/pause、UI 
 - smoke 实测：9 builtins / 11 model_defaults；保存 Smoke Preset → last_used；绑定/解绑 basic；删除后列表消失；
   **23 项**断言全绿。
 
-- 断言 **23 项全绿**：host / engineProbe / convert / worker / cancel / **presets** / dbSongs / dbPlaylists /
+- 断言 **24 项全绿**：host / engineProbe / convert / worker / **pause** / cancel / presets / dbSongs / dbPlaylists /
   soundfonts / depCheck / diagExport / safeShellOps / modelList / version / python / settings / kv /
   listMidi / readBinary / saveBinary / ui / uiRoutes / uiLibrary；
   `uiLibrary` = 写入曲库 → 真刷新 → 侧栏/首页出现该曲（storeSongs=1，曲库 1 首）；
@@ -124,14 +125,14 @@ worker running=true seq=1；输出 MIDI 头 `MThd`。剩余：cancel/pause、UI 
 - 实测输出：version 6.5.0-beta.1、Python 3.12.10、settings 42 往返、MIDI 头 `MThd`、字节 4 往返；
 - 截图：`shells/tauri/artifacts/smoke.png`（真实 UI）。
 
-## 4. 当前命令清单（36 条）
+## 4. 当前命令清单（37 条）
 
 host_info, app_version, ping, python_selfcheck, engine_probe, convert, engine_worker_status,
 load_settings, save_settings, db_kv_get, db_kv_set, db_status, db_songs_list, db_songs_put,
 db_songs_delete, db_playlists_list, db_playlists_put, model_list, list_midi_files, read_binary,
 save_binary, soundfont_list, dep_check, diag_export, notify, open_output, open_external, cancel,
 presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
-presets_reorder, presets_reorder_to, presets_restore。
+presets_reorder, presets_reorder_to, presets_restore, set_transcribe_pause。
 
 ## 4.1 下一步
 

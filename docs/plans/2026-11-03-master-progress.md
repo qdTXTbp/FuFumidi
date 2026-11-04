@@ -277,6 +277,9 @@
 - **T-115 预设收尾**：新增 8 条 `presets_*` 命令（list/save/delete/last_used/set_model/reorder/reorder_to/restore），
   数据存 dataRoot/presets.json；内置 9 套预设由 engine/presets.py 生成并嵌入 builtin_presets.json
   （运行时不再调 Python）；桥补 setModelPreset；smoke **23 项**全绿（9 builtins/11 model_defaults/保存/绑定/删除）。
+- **T-118 暂停已打通**：worker 启动注入 `FUFUMIDI_PAUSE_FILE=dataRoot/engine.pause`；
+  `set_transcribe_pause` 写/删文件，引擎 pause_gate 原地等待（120 s WAV 实测：暂停 900 ms 未结束，
+  继续后完成，pausedConv.elapsedMs=2255）；桥补 `setTranscribePause`；smoke **24 项**全绿。
   下一步：T-115 继续补这些 UI 必需通道，T-117 继续 settings/song/task host 化，cancel/pause 与批量并发。
 
 ## 17. 待收口（下一轮）

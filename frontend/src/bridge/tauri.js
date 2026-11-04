@@ -94,6 +94,7 @@ export function installTauriBridge() {
     // ---- 转录引擎 ----
     convert: (cfg) => call('convert', { req: cfg }),
     cancel: (id) => call('cancel', { id }),
+    setTranscribePause: (on) => call('set_transcribe_pause', { on: !!on }),
     probe: () => call('probe'),
     refine: (cfg) => call('refine', { req: cfg }),
     onEngineLog: (cb) => listen('engine:log', cb),

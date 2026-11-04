@@ -650,6 +650,8 @@ struct Worker {
 
 struct WorkerState(Arc<Mutex<Option<Worker>>>, Arc<AtomicBool>, Arc<AtomicU32>);
 
+fn pause_file() -> PathBuf { data_dir().join("engine.pause") }
+
 fn spawn_worker() -> Result<Worker, String> {
     let py = python_path().ok_or("python runtime not found")?;
     let eng = engine_dir().ok_or("engine/music2midi.py not found")?;
@@ -657,6 +659,7 @@ fn spawn_worker() -> Result<Worker, String> {
         .current_dir(&eng)
         .args(["music2midi.py", "worker"])
         .env("PYTHONIOENCODING", "utf-8")
+        .env("FUFUMIDI_PAUSE_FILE", pause_file())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -779,6 +782,21 @@ async fn convert(state: State<'_, WorkerState>, app: AppHandle, req: serde_json:
         .map_err(|e| e.to_string())
 }
 
+/// 暂停/继续：引擎 pause_gate 监听文件是否存在；继续后从原处接着跑（不改协议）。
+#[tauri::command]
+fn set_transcribe_pause(on: bool) -> serde_json::Value {
+    let f = pause_file();
+    if on {
+        match std::fs::write(&f, b"1") {
+            Ok(_) => serde_json::json!({ "ok": true, "paused": true, "file": f.display().to_string() }),
+            Err(e) => serde_json::json!({ "ok": false, "paused": false, "error": e.to_string() }),
+        }
+    } else {
+        let _ = std::fs::remove_file(&f);
+        serde_json::json!({ "ok": true, "paused": false, "file": f.display().to_string() })
+    }
+}
+
 /// 取消当前转录：置标志 + taskkill 掉 worker；阻塞中的读会返回 EOF，convert 识别为 canceled。
 /// 下一次 convert 会重新拉起 worker（模型冷启动由用户可见日志承担）。
 #[tauri::command]
@@ -830,7 +848,7 @@ fn main() {
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
             list_midi_files, read_binary, save_binary,
-            convert, cancel, engine_worker_status
+            convert, cancel, set_transcribe_pause, engine_worker_status
         ])
         .setup(|_app| {
             println!("[fufumidi-shell] {}", serde_json::to_string(&host_info_json()).unwrap_or_default());
