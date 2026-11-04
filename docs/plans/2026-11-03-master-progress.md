@@ -508,3 +508,5 @@
 - **单实例修复后复验**：release 2m24s；host/engine self-check 通过；测试构建无 unused 警告；无 Python/壳残留。
 
 - **handler-audit 已并入 npm run audit**：命令注册审计成为常规门禁，136/136。
+
+- **插件外链白名单**：`plugins_open_platform` 只接受站内相对路径（长度/空白/引号/尖括号回退 `/`），并补 installedList.dir；Rust 测试 6 组路径；cargo **112/112 + 1 ignored**。

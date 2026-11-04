@@ -1078,7 +1078,18 @@ fn plugin_catalog_from_json(body: &str, channel: &str, url: &str) -> serde_json:
 }
 
 #[tauri::command]
-fn plugins_installed_list() -> serde_json::Value { serde_json::json!({ "ok": true, "plugins": plugins_list() }) }
+fn plugins_installed_list() -> serde_json::Value {
+    let dir = data_dir().join("plugins");
+    serde_json::json!({ "ok": true, "dir": oto_path_text(&dir), "plugins": plugins_list() })
+}
+
+/// 平台外链只接受站内相对路径；绝对 URL/空白/引号/尖括号一律回退 /（与 Electron 白名单一致）。
+fn plugin_platform_rel(rel: Option<&str>) -> String {
+    let mut p = rel.unwrap_or("/").to_string();
+    if p.is_empty() { p = "/".to_string(); }
+    if !p.starts_with('/') { p = format!("/{p}"); }
+    if p.len() > 120 || p.chars().any(|c| c.is_whitespace() || c == '"' || c == '\'' || c == '<' || c == '>') { "/".to_string() } else { p }
+}
 
 #[tauri::command]
 fn plugins_platform_info() -> serde_json::Value {
@@ -1103,8 +1114,7 @@ async fn plugins_catalog(channel: Option<String>) -> serde_json::Value {
 #[tauri::command]
 fn plugins_open_platform(rel: Option<String>) -> serde_json::Value {
     let base = plugin_platform_base();
-    let rel = rel.unwrap_or_default();
-    let url = if rel.starts_with("http://") || rel.starts_with("https://") { rel } else if rel.starts_with('/') { format!("{base}{rel}") } else { format!("{base}/{rel}") };
+    let url = format!("{base}{}", plugin_platform_rel(rel.as_deref()));
     open_external(url)
 }
 
@@ -6273,5 +6283,17 @@ mod plugin_catalog_tests {
         assert_eq!(v["plugins"][0]["id"], "p");
         assert_eq!(super::plugin_catalog_from_json("{}", "stable", "u")["plugins"].as_array().unwrap().len(), 0);
         assert!(super::plugin_platform_base().starts_with("http"));
+    }
+}
+
+#[cfg(test)]
+mod plugin_platform_tests {
+    #[test]
+    fn relative_paths_only() {
+        assert_eq!(super::plugin_platform_rel(Some("/store")), "/store");
+        assert_eq!(super::plugin_platform_rel(Some("store")), "/store");
+        assert_eq!(super::plugin_platform_rel(Some("https://evil.example")), "/https://evil.example");
+        assert_eq!(super::plugin_platform_rel(Some("/a b")), "/");
+        assert_eq!(super::plugin_platform_rel(None), "/");
     }
 }
