@@ -16,10 +16,12 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
@@ -966,6 +968,49 @@ fn take_pending_open_file(state: State<'_, PendingOpen>) -> serde_json::Value {
         Ok(bytes) => serde_json::json!({ "name": path.file_name().and_then(|x| x.to_str()).unwrap_or("opened.mid"), "bytes": bytes }),
         Err(_) => serde_json::Value::Null,
     }
+}
+
+const SINGLE_INSTANCE_PORT: u16 = 47823;
+
+/// 已有实例时把待开文件（或 FOCUS）发给它；连不上/写失败返回 false。
+fn single_instance_forward_at(port: u16, path: Option<&Path>) -> bool {
+    for _ in 0..10 {
+        if let Ok(mut s) = TcpStream::connect(("127.0.0.1", port)) {
+            let msg = path.map(|p| p.display().to_string()).unwrap_or_else(|| "__FOCUS__".to_string());
+            return s.write_all(msg.as_bytes()).is_ok() && s.write_all(b"\n").is_ok();
+        }
+        std::thread::sleep(Duration::from_millis(120));
+    }
+    false
+}
+
+fn single_instance_forward(path: Option<&Path>) -> bool { single_instance_forward_at(SINGLE_INSTANCE_PORT, path) }
+
+fn start_single_instance_listener(listener: TcpListener, app: AppHandle) {
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut line = String::new();
+            let mut r = BufReader::new(stream);
+            if r.read_line(&mut line).is_err() { continue; }
+            let msg = line.trim();
+            if msg == "__FOCUS__" {
+                if let Some(w) = app.webview_windows().values().next() {
+                    let _ = w.unminimize(); let _ = w.show(); let _ = w.set_focus();
+                }
+                continue;
+            }
+            let path = PathBuf::from(msg);
+            let ext = path.extension().and_then(|x| x.to_str()).unwrap_or("").to_ascii_lowercase();
+            if ext != "mid" && ext != "midi" { continue; }
+            if let Ok(bytes) = std::fs::read(&path) {
+                if bytes.len() > 64 * 1024 * 1024 { continue; }
+                if let Some(st) = app.try_state::<PendingOpen>() { *st.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(path.clone()); }
+                let payload = serde_json::json!({ "name": path.file_name().and_then(|x| x.to_str()).unwrap_or("opened.mid"), "bytes": bytes });
+                let _ = app.emit("open-file", payload);
+                if let Some(w) = app.webview_windows().values().next() { let _ = w.unminimize(); let _ = w.show(); let _ = w.set_focus(); }
+            }
+        }
+    });
 }
 
 fn data_root_overridden() -> bool {
@@ -4290,7 +4335,13 @@ fn main() {
         seq: Arc::new(AtomicU64::new(0)),
         jobs: Arc::new(Mutex::new(HashMap::new())),
     };
-    let pending_open = PendingOpen(Mutex::new(pending_open_from_args(std::env::args())));
+    let open_arg = pending_open_from_args(std::env::args());
+    let listener = TcpListener::bind(("127.0.0.1", SINGLE_INSTANCE_PORT)).ok();
+    if listener.is_none() {
+        // 已有实例：把文件/聚焦请求交给它，本进程不再创建窗口。
+        if single_instance_forward(open_arg.as_deref()) { return; }
+    }
+    let pending_open = PendingOpen(Mutex::new(open_arg));
     let zoom_state = ZoomState(Arc::new(Mutex::new(1.0)));
     let update_preferred_state = UpdatePreferredState(Mutex::new(None));
     let app = tauri::Builder::default()
@@ -6062,5 +6113,35 @@ mod pending_open_tests {
         assert_eq!(picked, mid);
         assert!(super::pending_open_from_args(vec!["exe".to_string(), dir.join("missing.mid").display().to_string()]).is_none());
         let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[cfg(test)]
+mod single_instance_tests {
+    use std::io::BufRead as _;
+    #[test]
+    fn forwards_path_and_focus_to_listener() {
+        let l = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = l.local_addr().unwrap().port();
+        let h = std::thread::spawn(move || {
+            let (s, _) = l.accept().unwrap();
+            let mut r = std::io::BufReader::new(s);
+            let mut line = String::new();
+            r.read_line(&mut line).unwrap();
+            line.trim().to_string()
+        });
+        assert!(super::single_instance_forward_at(port, Some(std::path::Path::new("C:/x/a.mid"))));
+        assert_eq!(h.join().unwrap(), "C:/x/a.mid");
+        let l2 = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port2 = l2.local_addr().unwrap().port();
+        let h2 = std::thread::spawn(move || {
+            let (s, _) = l2.accept().unwrap();
+            let mut r = std::io::BufReader::new(s);
+            let mut line = String::new();
+            r.read_line(&mut line).unwrap();
+            line.trim().to_string()
+        });
+        assert!(super::single_instance_forward_at(port2, None));
+        assert_eq!(h2.join().unwrap(), "__FOCUS__");
     }
 }
