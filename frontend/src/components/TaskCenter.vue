@@ -39,7 +39,8 @@ function startBallDrag(e) {
   dragging.value = true;
   moved.value = false;
   try { e.currentTarget.setPointerCapture?.(e.pointerId); } catch (err) {}
-  e.preventDefault();
+  // 不能 preventDefault：那会吞掉后续 click，键盘/自动化都打不开面板（e2e 实测）。
+  // 拖拽本身靠 touch-action:none + pointer capture，不依赖 preventDefault。
 }
 function moveBall(e) {
   if (!dragging.value || !dragStart) return;
@@ -50,10 +51,16 @@ function moveBall(e) {
 function endBallDrag() {
   if (!dragging.value) return;
   dragging.value = false;
-  if (!moved.value) { toggleOpen(); return; }
+  // 没拖动：交给 button 的 click 处理（合成的 el.click() / 键盘 Enter 也走同一路径）。
+  if (!moved.value) return;
+  suppressClick = true; // 拖动结束浏览器仍可能发 click，必须吞掉这一次
   if (pos.value.x <= LEFT_LIMIT + 10) hideBall('left');
   else if (pos.value.x > window.innerWidth - 78) hideBall('right');
   else { hiddenSide.value = ''; saveBall(); }
+}
+function onFabClick() {
+  if (suppressClick) { suppressClick = false; return; }
+  toggleOpen();
 }
 function cancelBallDrag() { dragging.value = false; dragStart = null; }
 function hideToCurrentSide() { hideBall(pos.value.x < window.innerWidth / 2 ? 'left' : 'right'); }
@@ -162,7 +169,7 @@ function iconOf(k) { return KIND_ICON[k] || 'task'; }
 
 <template>
   <div class="task-center" data-guide="task-center" :style="hiddenSide ? {} : ballStyle">
-    <button v-if="!hiddenSide" ref="fabEl" class="tc-fab" :class="{ on: activeCount > 0, dragging }" data-guide="task-center-btn" :title="t('任务中心')" :aria-label="t('任务中心')" :aria-expanded="open" @pointerdown="startBallDrag" @pointermove="moveBall" @pointerup="endBallDrag" @pointercancel="cancelBallDrag" @keydown.enter.prevent="toggleOpen" @keydown.space.prevent="toggleOpen">
+    <button v-if="!hiddenSide" ref="fabEl" class="tc-fab" :class="{ on: activeCount > 0, dragging }" data-guide="task-center-btn" :title="t('任务中心')" :aria-label="t('任务中心')" :aria-expanded="open" @pointerdown="startBallDrag" @pointermove="moveBall" @pointerup="endBallDrag" @pointercancel="cancelBallDrag" @click="onFabClick">
       <Icon name="task" :size="15" />
       <span v-if="activeCount" class="tc-badge">{{ activeCount }}</span>
     </button>

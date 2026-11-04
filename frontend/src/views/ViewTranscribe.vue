@@ -27,6 +27,9 @@ const mode = ref('universal');           // universal | piano | separate
 // 6.5.0：智能分轨（通用识别内联，默认开；后端失败自动回退整曲）
 const stemEnhance = ref(true);
 const trackBudget = ref('auto');
+// 转录结果体检（analyzeQuality 写、长音修复读）——6.5.0 漏了声明，会让队列收尾抛
+// ReferenceError: quality is not defined（e2e transcribe-queue-chain 实测抓到）。
+const quality = ref(null);
 const umodel = ref('basic');             // 通用子模型：basic | muscriptor
 const msSize = ref('medium');            // MuScriptor 规格：small | medium | large
 const pmodel = ref('piano_pt');          // 钢琴子模型：piano_pt | aria | transkun | hft

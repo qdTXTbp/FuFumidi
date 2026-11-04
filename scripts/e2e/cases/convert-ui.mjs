@@ -23,8 +23,18 @@ export default async function (app) {
     await app.eval("window.__fufumidiE2E.importMidi('e2e-convert.mid', " + JSON.stringify(MINI) + ")");
     await app.waitFor('!!window.__fufumidiE2E.hasSong()', { timeout: 20000 });
   }
-  await app.navigate('#/convert');
-  await app.waitFor('location.hash.indexOf("convert") >= 0', { timeout: 15000, message: '路由到转换页' });
+  // 导入完成后主进程/首页还会做一次「切到工作台」的导航；紧接着手写 hash 会被它覆盖。
+  // 这里等导入流程落定，再重试导航直到 ViewConvert 真正挂载（否则会在首页采样到空 labels）。
+  await new Promise((r) => setTimeout(r, 900));
+  let mounted = false;
+  for (let i = 0; i < 4 && !mounted; i++) {
+    await app.navigate('#/convert');
+    try {
+      await app.waitFor('location.hash.indexOf("convert") >= 0 && !!document.querySelector(".convert-view")', { timeout: 4000 });
+      mounted = true;
+    } catch (e) { await new Promise((r) => setTimeout(r, 400)); }
+  }
+  app.assert(mounted, '转换页挂载（.convert-view 存在）');
   await app.waitFor('document.body.innerText.indexOf("音频导出") >= 0', { timeout: 20000, message: '音频导出卡片出现' });
   const r = JSON.parse(await app.eval(PROBE));
   const allOpts = r.opts.flat().join('|');
