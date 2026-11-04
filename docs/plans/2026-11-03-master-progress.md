@@ -583,4 +583,4 @@
 
 - **转录/分轨恢复**：data_dir 认领 data_root_last（E:/Midi/FuFumidi/FuFumidiData，models=13）；GPU 增强包 site-packages 注入 PYTHONPATH（release python import torch 2.9.1+cu128）；分离补 .th/_configs、CPU float32、chunk clamp；智能分轨 6 轨真实 smoke ok（release）；cargo **121/121 + 1 ignored**。
 
-- **转录/分轨修复 release**：全量 acceptance ok:true（12 步）；release 2m32/0 warning；dataDir/models 正确；release --stem-smoke ok/6 tracks；产物 SHA cdfd08ad…3286。
+- **转录/分轨修复 release**：全量 acceptance ok:true（13 步）；release 2m32/0 warning；dataDir/models 正确；release --stem-smoke ok/6 tracks；产物 SHA cdfd08ad…3286。

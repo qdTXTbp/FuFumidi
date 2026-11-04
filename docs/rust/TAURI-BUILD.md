@@ -203,7 +203,7 @@ Tauri 默认从 GitHub 下载 `nsis-3.13.zip`，本机直连超时。已把工�
 
 ## 28. 2026-11-04 转录/分轨修复 release
 
-- 全量一键验收 **ok:true**（12 步，含 hidden E2E 41/41、clippy、release、host/engine self-check）；
+- 全量一键验收 **ok:true**（13 步，含 hidden E2E 41/41、clippy、release、engine 资源同步、host/engine self-check）；
 - release 构建 2m32s、**0 warning**；产物 16,935,936 bytes，SHA-256 `cdfd08ad3eb7eaab08aff4b702455f3d2246dfc9820a92d76ae362e0396c3286`；
 - release dataDir=E:/Midi/FuFumidi/FuFumidiData，models=13；
 - release --stem-smoke ok / 6 tracks（分轨→逐 stem→合并）；
