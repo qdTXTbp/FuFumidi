@@ -2210,20 +2210,34 @@ fn read_binary(p: String) -> Result<tauri::ipc::Response, String> {
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-fn save_binary(opts: serde_json::Value) -> serde_json::Value {
-    let path = opts.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    if path.is_empty() {
-        return serde_json::json!({ "ok": false, "error": "missing path" });
+fn save_binary_bytes(opts: &serde_json::Value) -> Vec<u8> {
+    for key in ["data", "bytes"] {
+        match opts.get(key) {
+            Some(serde_json::Value::Array(a)) => return a.iter().map(|x| x.as_u64().unwrap_or(0) as u8).collect(),
+            Some(serde_json::Value::String(s)) => return s.as_bytes().to_vec(),
+            _ => {}
+        }
     }
-    let bytes: Vec<u8> = match opts.get("bytes") {
-        Some(serde_json::Value::Array(a)) => a.iter().map(|x| x.as_u64().unwrap_or(0) as u8).collect(),
-        Some(serde_json::Value::String(s)) => s.as_bytes().to_vec(),
-        _ => return serde_json::json!({ "ok": false, "error": "missing bytes" }),
-    };
-    match std::fs::write(&path, bytes) {
+    Vec::new()
+}
+
+#[tauri::command]
+fn save_binary(app: AppHandle, opts: serde_json::Value) -> serde_json::Value {
+    let bytes = save_binary_bytes(&opts);
+    if bytes.is_empty() { return serde_json::json!({ "ok": false, "canceled": false, "error": "missing bytes" }); }
+    let name = opts.get("name").and_then(|v| v.as_str()).unwrap_or("download.bin");
+    let mut path = opts.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    if path.is_empty() {
+        let ext = Path::new(name).extension().and_then(|x| x.to_str()).unwrap_or("");
+        let filter = if ext.eq_ignore_ascii_case("wav") { "WAV 音频" } else if ext.eq_ignore_ascii_case("mid") || ext.eq_ignore_ascii_case("midi") { "MIDI 音频" } else { "文件" };
+        let exts: &[&str] = if ext.is_empty() { &["*"] } else { &[ext] };
+        let picked = app.dialog().file().set_title("保存文件").set_file_name(name).add_filter(filter, exts).blocking_save_file();
+        path = match picked.and_then(file_path_string) { Some(p) => p, None => return serde_json::json!({ "ok": false, "canceled": true }) };
+    }
+    if let Some(parent) = Path::new(&path).parent() { let _ = std::fs::create_dir_all(parent); }
+    match std::fs::write(&path, &bytes) {
         Ok(_) => serde_json::json!({ "ok": true, "path": path }),
-        Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
+        Err(e) => serde_json::json!({ "ok": false, "canceled": false, "error": e.to_string() }),
     }
 }
 
@@ -2523,6 +2537,13 @@ mod check_midi_tests {
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    #[test]
+    fn save_binary_bytes_parsing() {
+        assert_eq!(super::save_binary_bytes(&serde_json::json!({ "data": [1,2] })), vec![1,2]);
+        assert_eq!(super::save_binary_bytes(&serde_json::json!({ "bytes": "ab" })), b"ab".to_vec());
+        assert!(super::save_binary_bytes(&serde_json::json!({})).is_empty());
     }
 
     #[test]

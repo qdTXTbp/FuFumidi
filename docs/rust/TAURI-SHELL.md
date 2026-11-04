@@ -86,6 +86,7 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 | check_integrity / repair_integrity | 检查 settings 缺失/损坏；修复前备份并写回默认（presets/asar 校验不适用 Tauri） | Rust 单测：缺失/损坏/修复/备份/恢复后 ok；并修正桥参数从 {req:{ids}} 为 {ids} |
 | write_midi / write_binary | 曲库真实 .mid 落盘（同名复用/重名 (2)/prev 路径安全）；任意二进制写盘 | Rust 单测：落盘/相同内容复用/不同内容重名、二进制写盘；修复曲目自检写不了文件的问题 |
 | usermeta_list / set / remove / reorder / pin | 资源中心用户元数据（name/author/source/category/tags/order/pinned），dataRoot/usermeta.json，损坏先另存 .corrupt-* | Rust 单测：合并/标签去重/排序/取消 pin/删除/损坏备份 |
+| save_binary（修复） | 原先只认 `{path,bytes}`，前端实际传 `{name,data}` → 保存 MIDI/壁纸导出失败；现支持原生保存对话框 + data/bytes 两种字节 | Rust 单测：data/bytes/空值解析；真实对话框不在无头触发 |
 | open_folder | 打开目录（仅目录） | 实际打开资源管理器不在无头会话触发 |
 | soundfont_list | 扫描 renderer/vendor/soundfonts + dataDir/soundfonts（sf2/sf3） | 开发树返回 GeneralUser.sf2 |
 | dep_check | Rust 启动 Python `deps.py check`，解析 `###RESULT` 的 groups | 返回 universal/piano/aria/muscriptor/separate/transkun 6 组 |
