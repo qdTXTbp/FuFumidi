@@ -1224,7 +1224,7 @@ async fn plugins_install_from_platform(slug: String, version: Option<String>) ->
         let zip_path = dir.join("package.zip");
         let mut url = format!("{}/api/store/plugins/{}/download?source=app", plugin_platform_base(), plugin_url_encode(slug.trim()));
         if let Some(v) = version.filter(|v| !v.trim().is_empty()) { url.push_str(&format!("&version={}", plugin_url_encode(v.trim()))); }
-        let out = match Command::new("curl.exe").args(["-L", "--silent", "--show-error", "--max-time", "120", "-H", "Accept: application/zip", "-o"]).arg(&zip_path).arg(&url).output() {
+        let out = match Command::new("curl.exe").args(["-f", "-L", "--silent", "--show-error", "--max-time", "120", "-H", "Accept: application/zip", "-o"]).arg(&zip_path).arg(&url).output() {
             Ok(o) => o, Err(e) => { let _ = std::fs::remove_dir_all(&dir); return oto_err(&format!("curl 不可用: {e}")); }
         };
         if !out.status.success() || !zip_path.is_file() { let _ = std::fs::remove_dir_all(&dir); return oto_err(&String::from_utf8_lossy(&out.stderr).chars().rev().take(400).collect::<String>().chars().rev().collect::<String>()); }
@@ -1246,8 +1246,14 @@ fn plugins_confirm_install(token: String, overwrite: Option<bool>) -> serde_json
     let id = info.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let target = info.get("existing").and_then(|v| v.as_str()).map(PathBuf::from).unwrap_or_else(|| plugins_dir.join(info.get("targetDirName").and_then(|v| v.as_str()).unwrap_or(&id)));
     if target.exists() && !overwrite.unwrap_or(false) { return oto_err("插件已存在，需确认覆盖"); }
+    // 覆盖升级先在旁边留一份；解压失败时恢复，避免把已安装插件删丢。
+    let backup = if target.exists() {
+        let b = target.with_file_name(format!(".install-backup-{token}"));
+        let _ = std::fs::remove_dir_all(&b);
+        if let Err(e) = std::fs::rename(&target, &b) { return oto_err(&e.to_string()); }
+        Some(b)
+    } else { None };
     let result = (|| -> Result<serde_json::Value, String> {
-        if target.exists() { std::fs::remove_dir_all(&target).map_err(|e| e.to_string())?; }
         std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
         let prefix = info.get("prefix").and_then(|v| v.as_str()).unwrap_or("");
         let file = std::fs::File::open(&zip_path).map_err(|e| e.to_string())?;
@@ -1268,7 +1274,17 @@ fn plugins_confirm_install(token: String, overwrite: Option<bool>) -> serde_json
         Ok(serde_json::json!({ "ok": true, "id": id, "dir": oto_path_text(&target), "activated": activated, "total": list.len() }))
     })();
     let _ = std::fs::remove_dir_all(&dir);
-    result.unwrap_or_else(|e| { let _ = std::fs::remove_dir_all(&target); oto_err(&e) })
+    match result {
+        Ok(v) => {
+            if let Some(b) = backup { let _ = std::fs::remove_dir_all(&b); }
+            v
+        }
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&target);
+            if let Some(b) = backup { let _ = std::fs::rename(&b, &target); }
+            oto_err(&e)
+        }
+    }
 }
 
 #[tauri::command]

@@ -513,3 +513,5 @@
 - **插件外链白名单**：`plugins_open_platform` 只接受站内相对路径（长度/空白/引号/尖括号回退 `/`），并补 installedList.dir；Rust 测试 6 组路径；cargo **112/112 + 1 ignored**。
 
 - **插件 manifest 离线缓存**：`plugins_catalog` 成功时写 `dataRoot/plugins-manifest-{ch}.json`；curl 失败/无网络时返回缓存并标 `cached:true`（保持 plugins/url/channel 形状）；Rust 测试不变，cargo **112/112 + 1 ignored**。
+
+- **插件安装回滚备份**：覆盖升级先把旧目录 rename 成 `.install-backup-<token>`，新包解压失败则删除半成品并恢复旧目录；下载 curl 加 `-f`，HTTP 4xx/5xx 不再当 zip 解析。cargo **113/113 + 1 ignored**。
