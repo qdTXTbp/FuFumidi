@@ -5,10 +5,10 @@
 | 指标 | 数值 |
 |---|---:|
 | preload 暴露方法 | 265 |
-| Tauri 桥已映射方法 | 181 |
-| 尚未映射 | **85** |
+| Tauri 桥已映射方法 | 182 |
+| 尚未映射 | **84** |
 | preload IPC invoke 通道 | 250 |
-| Tauri call 通道 | 173 |
+| Tauri call 通道 | 174 |
 
 ## 缺口分类
 
@@ -17,8 +17,8 @@
 | diffsinger | 19 |
 | 设置/杂项 | 17 |
 | utau/voicebank | 10 |
-| gpu/运行时增强 | 8 |
 | 导出/渲染 | 7 |
+| gpu/运行时增强 | 7 |
 | 模型/安装/平台 | 6 |
 | 事件/窗口 | 6 |
 | 更新/测速 | 4 |
@@ -59,7 +59,6 @@ exportScorePdfPages
 exportUstx
 generate
 gpuCancelInstall
-gpuUnifiedMemoryExperiment
 homrInstall
 homrRemove
 homrStatus

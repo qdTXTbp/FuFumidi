@@ -6,9 +6,9 @@
 | 指标 | 数值 |
 |---|---:|
 | 前端调用的 bridge 方法（去重） | 213 |
-| Tauri 顶层方法 | 133 |
+| Tauri 顶层方法 | 134 |
 | Tauri 嵌套方法 | 61 |
-| **未找到实现** | **59** |
+| **未找到实现** | **58** |
 
 ## 未找到实现的方法
 
@@ -18,7 +18,6 @@
 - `diffsingerMsDownload` — frontend/src/views/DiffSingerCatalog.vue
 - `e2e` — frontend/src/audio.js
 - `gpuCancelInstall` — frontend/src/components/SettingsPanel.vue
-- `gpuUnifiedMemoryExperiment` — frontend/src/views/ViewTranscribe.vue
 - `omrEngine` — frontend/src/views/ViewResources.vue
 - `omrEngine.homrInstall` — frontend/src/views/ViewResources.vue
 - `omrEngine.homrRemove` — frontend/src/views/ViewResources.vue

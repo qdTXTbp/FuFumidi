@@ -219,6 +219,7 @@ export function installTauriBridge() {
     },
 
     // ---- GPU 增强包 ----
+    gpuUnifiedMemoryExperiment: () => call('gpu_unified_memory_experiment'),
     gpuStatus: () => call('gpu_status'),
     gpuUninstall: (kind) => call('gpu_uninstall', { kind }),
     gpuListPackages: () => call('gpu_list_packages'),

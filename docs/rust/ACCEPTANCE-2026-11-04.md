@@ -8,10 +8,10 @@
 - 分支：`feat/audio-tagger-auto-probe`
 - 最新代码提交：`e24fffa`（验收文档另提交）
 - Electron 原版基线：6.5.0-beta.1（`47f6062`）
-- Tauri 命令：**157**（handler 注册审计 157/157）
-- 前端 bridge 方法：**181 / 265**
-- 未映射：**85**
-- 前端 invoke 通道：**250**，Tauri 已接 **173**
+- Tauri 命令：**158**（handler 注册审计 158/158）
+- 前端 bridge 方法：**182 / 265**
+- 未映射：**84**
+- 前端 invoke 通道：**250**，Tauri 已接 **174**
 - 参数审计不一致：**23**（均为已知/兼容项）
 - 可见窗口：**0**（自本轮起所有验证走隐藏窗口/无窗口）
 
@@ -40,12 +40,13 @@
 - `npm run typecheck`：0
 - `npm run audit`：0
 - `cargo test --offline`：**114 passed / 0 failed / 1 ignored**
-- `npm run tauri:handler-audit`：**157/157** 已注册，并已并入 `npm run audit`
+- `npm run tauri:handler-audit`：**158/158** 已注册，并已并入 `npm run audit`
 - release build：通过（157 命令，2m17s、0 warning，见 `TAURI-BUILD.md` §20）
 - `npm run tauri:video-smoke`：ok=true / 15827 bytes（合成 H.264+WAV 封装）
 - `npm run tauri:cover-smoke`：ok=true / status 0，engine_cover.py 参数面存在
 - `npm run tauri:cover-engine-smoke`：ok=true / status 0，真实 analyze 合成音频并返回 ###RESULT（不含 RVC/分离/混音）
 - `npm run tauri:separate-smoke`：ok=true / status 0，music2midi.py separate 参数面存在（不跑推理）
+- GPU 统一内存实验：本机无 cudart，脚本返回 backend-missing（命令已接入）
 - hidden `video-webcodecs`：VideoEncoder 实际编码 6 帧 H.264 Annex B，chunks/bytes > 0（Electron/Chromium；WebView2 未直接验证）
 - release `--self-check` / `--engine-self-check`：通过（157 命令源码）
 

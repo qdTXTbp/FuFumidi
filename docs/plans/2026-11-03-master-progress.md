@@ -562,3 +562,5 @@
 - **157 命令 release（分离）**：2m17s、0 warning；host/engine self-check 通过；无窗口/残留。
 
 - **separate CLI smoke**：新增 `npm run tauri:separate-smoke`，校验 music2midi.py separate 的 model/arch/stems/output 参数；实测 ok/status0；不跑推理。
+
+- **GPU 统一内存实验**：`gpu_unified_memory_experiment` 跑 cuda_um_experiment.py，解析 JSON；本机无 cudart 返回 backend-missing；桥补；命令 **158**，覆盖 **182/84**，call 174；cargo **118/118 + 1 ignored**。

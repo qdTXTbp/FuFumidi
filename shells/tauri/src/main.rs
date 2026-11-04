@@ -3085,6 +3085,33 @@ fn parse_health_json(stdout: &str) -> Option<serde_json::Value> {
     None
 }
 
+fn parse_um_json(stdout: &str) -> Option<serde_json::Value> {
+    let t = stdout.trim();
+    let candidate = t.rsplit_once('\n').map(|(_, last)| last.trim()).unwrap_or(t);
+    serde_json::from_str::<serde_json::Value>(candidate).ok().or_else(|| {
+        let start = t.find('{')?;
+        serde_json::from_str::<serde_json::Value>(&t[start..]).ok()
+    })
+}
+
+#[tauri::command]
+async fn gpu_unified_memory_experiment() -> serde_json::Value {
+    tauri::async_runtime::spawn_blocking(move || {
+        let (Some(py), Some(engine)) = (python_path(), engine_dir()) else { return oto_err("Python/引擎目录不存在") };
+        let script = engine.join("cuda_um_experiment.py");
+        if !script.is_file() { return oto_err("cuda_um_experiment.py 不存在"); }
+        let out = match Command::new(&py).current_dir(&engine).arg(&script).args(["--mb", "256", "--json"]).env("PYTHONIOENCODING", "utf-8").creation_flags(0x08000000).output() {
+            Ok(o) => o, Err(e) => return oto_err(&e.to_string()),
+        };
+        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+        match parse_um_json(&stdout) {
+            Some(v) => v,
+            None => serde_json::json!({ "ok": false, "error": "实验脚本没有返回 JSON", "raw": format!("{}{}", stdout.chars().rev().take(400).collect::<String>().chars().rev().collect::<String>(), stderr.chars().rev().take(200).collect::<String>().chars().rev().collect::<String>()) }),
+        }
+    }).await.unwrap_or_else(|e| oto_err(&e.to_string()))
+}
+
 #[tauri::command]
 fn diag_health() -> serde_json::Value {
     let Some(py) = python_path() else { return serde_json::json!({ "ok": false, "error": "python runtime not found" }); };
@@ -5089,7 +5116,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, update_sources, update_set_preferred_source, db_kv_get, db_kv_set,
-            tasks_list, tasks_cancel, tasks_clear_finished, db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, cover_singers, cover_pick_audio, cover_pick_dir, cover_open, cover_cancel, cover_run, video_export_begin, video_export_write, video_export_abort, video_export_end, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, wallpaper_set_desktop, gpu_status, gpu_uninstall, plugins_list, plugins_rescan, plugins_set_enabled, plugins_installed_list, plugins_platform_info, plugins_catalog, plugins_open_platform, plugins_install_from_platform, plugins_confirm_install, plugins_cancel_install, plugins_open_dir, plugins_open_docs, open_edit_guide, sf_workshop_list, sf_workshop_import, sf_workshop_delete, sf_workshop_open_dir, model_list,
+            tasks_list, tasks_cancel, tasks_clear_finished, db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, cover_singers, cover_pick_audio, cover_pick_dir, cover_open, cover_cancel, cover_run, video_export_begin, video_export_write, video_export_abort, video_export_end, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, wallpaper_set_desktop, gpu_status, gpu_uninstall, gpu_unified_memory_experiment, plugins_list, plugins_rescan, plugins_set_enabled, plugins_installed_list, plugins_platform_info, plugins_catalog, plugins_open_platform, plugins_install_from_platform, plugins_confirm_install, plugins_cancel_install, plugins_open_dir, plugins_open_docs, open_edit_guide, sf_workshop_list, sf_workshop_import, sf_workshop_delete, sf_workshop_open_dir, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
@@ -7096,5 +7123,15 @@ mod separate_args_tests {
         let bad = serde_json::json!({ "audio": audio.display().to_string(), "sep_model": "nope" });
         assert!(super::separate_args(&bad, &models, &out).is_err());
         let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+mod um_json_tests {
+    #[test]
+    fn parses_last_json_or_first_brace() {
+        assert_eq!(super::parse_um_json("{\"ok\":true}").unwrap()["ok"], true);
+        assert_eq!(super::parse_um_json("log line\n{\"ok\":false,\"code\":\"no_gpu\"}").unwrap()["code"], "no_gpu");
+        assert!(super::parse_um_json("no json").is_none());
     }
 }
