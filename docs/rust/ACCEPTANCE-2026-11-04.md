@@ -8,10 +8,10 @@
 - 分支：`feat/audio-tagger-auto-probe`
 - 最新代码提交：`e24fffa`（验收文档另提交）
 - Electron 原版基线：6.5.0-beta.1（`47f6062`）
-- Tauri 命令：**135**
-- 前端 bridge 方法：**157 / 265**
-- 未映射：**109**
-- 前端 invoke 通道：**250**，Tauri 已接 **151**
+- Tauri 命令：**136**（handler 注册审计 136/136）
+- 前端 bridge 方法：**158 / 265**
+- 未映射：**108**
+- 前端 invoke 通道：**250**，Tauri 已接 **152**
 - 参数审计不一致：**23**（均为已知/兼容项）
 - 可见窗口：**0**（自本轮起所有验证走隐藏窗口/无窗口）
 
@@ -36,13 +36,14 @@
 - 前端单测：**589/589**（`npm run test:ui`）
 - `npm run typecheck`：0
 - `npm run audit`：0
-- `cargo test --offline`：**109 passed / 0 failed / 1 ignored**
+- `cargo test --offline`：**110 passed / 0 failed / 1 ignored**
+- `npm run tauri:handler-audit`：**136/136** 已注册（本轮修掉 `model_delete` 漏挂）
 - release build：通过（2m19s，见 `TAURI-BUILD.md` §8）
 - release `--self-check` / `--engine-self-check`：通过
 
 ## 4. 仍需完成的重型缺口
 
-### 4.1 IPC 主要分组（109）
+### 4.1 IPC 主要分组（108）
 
 - DiffSinger：19（catalog/download/render/status 等，依赖 ML 资产）
 - OMR：16（Audiveris/Homr 安装、状态、语言包、进度）
@@ -69,7 +70,7 @@ npm run test:ui                              # 589/589
 npm run typecheck
 npm run audit
 cd shells/tauri
-cargo test --offline                        # 109/109 + 1 ignored
+cargo test --offline                        # 110/110 + 1 ignored
 cargo build --release --offline
 .\poc\tauri-poc\target\release\fufumidi-shell.exe --self-check
 .\poc\tauri-poc\target\release\fufumidi-shell.exe --engine-self-check
