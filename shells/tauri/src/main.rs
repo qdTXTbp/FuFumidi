@@ -562,6 +562,124 @@ fn presets_restore() -> serde_json::Value {
 
 fn midi_root() -> PathBuf { data_dir().join("midi") }
 
+fn sf_dir() -> PathBuf { data_dir().join("soundfonts") }
+
+fn sf_bundled_dir() -> Option<PathBuf> {
+    if let Some(d) = dev_root() { let p = d.join("renderer/vendor/soundfonts"); if p.is_dir() { return Some(p); } }
+    if let Some(d) = exe_dir() { for p in [d.join("resources/soundfonts"), d.join("soundfonts")] { if p.is_dir() { return Some(p); } } }
+    None
+}
+
+fn sf_safe_name(name: &str) -> String {
+    let base: String = name.chars().map(|c| match c { '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_', c if (c as u32) < 32 => '_', c => c }).collect();
+    let t = base.trim(); if t.is_empty() { "soundfont.sf2".to_string() } else { t.to_string() }
+}
+
+fn sf_file_name(it: &serde_json::Value) -> String {
+    if let Some(s) = it.get("fileName").and_then(|v| v.as_str()) { if !s.is_empty() { return s.to_string(); } }
+    if let Some(s) = it.get("repoFile").and_then(|v| v.as_str()) { if !s.is_empty() { return s.to_string(); } }
+    let name = it.get("name").and_then(|v| v.as_str()).unwrap_or("soundfont");
+    format!("{}.sf2", sf_safe_name(name))
+}
+
+fn sf_registry() -> Vec<serde_json::Value> {
+    serde_json::from_str::<Vec<serde_json::Value>>(include_str!("soundfont_registry.json")).unwrap_or_default()
+}
+
+fn sf_workshop_list_at(root: &Path, bundled: Option<&Path>) -> serde_json::Value {
+    let _ = std::fs::create_dir_all(root);
+    let mut registry = Vec::new();
+    let mut curated: Vec<PathBuf> = Vec::new();
+    for it in sf_registry() {
+        let bundled_path = it.get("bundledPath").and_then(|v| v.as_str()).unwrap_or("");
+        let p = if !bundled_path.is_empty() {
+            match bundled { Some(b) => b.join(Path::new(bundled_path).file_name().and_then(|x| x.to_str()).unwrap_or("")), None => PathBuf::new() }
+        } else { root.join(sf_file_name(&it)) };
+        if !p.as_os_str().is_empty() { curated.push(p.clone()); }
+        let size = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+        let min = it.get("minSize").and_then(|v| v.as_u64()).unwrap_or(0);
+        let max = it.get("maxSize").and_then(|v| v.as_u64()).unwrap_or(u64::MAX);
+        let complete = size >= min && size <= max;
+        let builtin = !bundled_path.is_empty() && complete;
+        let mut o = it.clone();
+        if let Some(m) = o.as_object_mut() {
+            m.insert("size".into(), serde_json::json!(size));
+            m.insert("expected".into(), it.get("size").cloned().unwrap_or(serde_json::json!(0)));
+            m.insert("downloaded".into(), serde_json::json!(complete));
+            m.insert("builtin".into(), serde_json::json!(builtin));
+            m.insert("source".into(), serde_json::json!(if builtin { "builtin" } else if complete { "downloaded" } else { "curated" }));
+            m.insert("stale".into(), serde_json::json!(size > 0 && !complete));
+            m.insert("manual".into(), it.get("manual").cloned().unwrap_or(serde_json::json!(false)));
+            m.insert("officialUrl".into(), it.get("officialUrl").cloned().unwrap_or(serde_json::json!("")));
+            m.insert("path".into(), serde_json::json!(p.display().to_string()));
+            m.insert("sources".into(), serde_json::json!([]));
+            m.insert("category".into(), it.get("category").cloned().unwrap_or(serde_json::json!("内置精选")));
+            m.insert("slow".into(), it.get("slow").cloned().unwrap_or(serde_json::json!(false)));
+            m.insert("overLimit".into(), it.get("overLimit").cloned().unwrap_or(serde_json::json!(false)));
+        }
+        registry.push(o);
+    }
+    let mut customs = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(root) {
+        for e in rd.flatten() {
+            let p = e.path();
+            if !p.is_file() { continue; }
+            let name = p.file_name().and_then(|x| x.to_str()).unwrap_or("").to_string();
+            if name.ends_with(".conv.sf2") || !(name.to_ascii_lowercase().ends_with(".sf2") || name.to_ascii_lowercase().ends_with(".sf3")) { continue; }
+            if curated.iter().any(|c| c == &p) { continue; }
+            let size = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+            customs.push(serde_json::json!({ "id": format!("custom:{name}"), "name": Path::new(&name).file_stem().and_then(|x| x.to_str()).unwrap_or(""), "desc": "用户导入的音色库", "size": size, "downloaded": size > 0, "builtin": false, "source": "imported", "category": "我的音色", "custom": true, "path": p.display().to_string(), "overLimit": false }));
+        }
+    }
+    customs.sort_by(|a, b| a["name"].as_str().unwrap_or("").cmp(b["name"].as_str().unwrap_or("")));
+    serde_json::json!({ "registry": registry, "customs": customs, "dir": root.display().to_string() })
+}
+
+#[tauri::command]
+fn sf_workshop_list() -> serde_json::Value { sf_workshop_list_at(&sf_dir(), sf_bundled_dir().as_deref()) }
+
+fn sf_workshop_import_at(root: &Path, src: &str) -> serde_json::Value {
+    let p = Path::new(src);
+    if !p.is_file() { return serde_json::json!({ "ok": false, "canceled": true }); }
+    let ext = p.extension().and_then(|x| x.to_str()).unwrap_or("").to_ascii_lowercase();
+    if ext != "sf2" && ext != "sf3" { return serde_json::json!({ "ok": false, "error": "只支持 SF2/SF3" }); }
+    let name = p.file_name().and_then(|x| x.to_str()).unwrap_or("soundfont.sf2");
+    let _ = std::fs::create_dir_all(root);
+    let dst = root.join(name);
+    if let Err(e) = std::fs::copy(p, &dst) { return serde_json::json!({ "ok": false, "error": e.to_string() }); }
+    serde_json::json!({ "ok": true, "path": dst.display().to_string(), "name": name })
+}
+
+#[tauri::command]
+fn sf_workshop_import(app: AppHandle) -> serde_json::Value {
+    let picked = app.dialog().file().set_title("导入音色库").add_filter("SoundFont (SF2/SF3)", &["sf2", "sf3"]).blocking_pick_file();
+    match picked.and_then(file_path_string) { Some(p) => sf_workshop_import_at(&sf_dir(), &p), None => serde_json::json!({ "ok": false, "canceled": true }) }
+}
+
+fn sf_workshop_delete_at(root: &Path, id: &str) -> serde_json::Value {
+    let p = if let Some(name) = id.strip_prefix("custom:") {
+        if name.contains('/') || name.contains('\\') || name == "." || name == ".." { return serde_json::json!({ "ok": false, "error": "not found" }); }
+        root.join(name)
+    } else {
+        let Some(it) = sf_registry().into_iter().find(|x| x["id"].as_str() == Some(id)) else { return serde_json::json!({ "ok": false, "error": "not found" }); };
+        root.join(sf_file_name(&it))
+    };
+    if !p.is_file() { return serde_json::json!({ "ok": false, "error": "not found" }); }
+    match std::fs::remove_file(&p) { Ok(_) => serde_json::json!({ "ok": true }), Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }) }
+}
+
+#[tauri::command]
+fn sf_workshop_delete(id: String) -> serde_json::Value { sf_workshop_delete_at(&sf_dir(), &id) }
+
+#[tauri::command]
+fn sf_workshop_open_dir() -> serde_json::Value {
+    let d = sf_dir(); let _ = std::fs::create_dir_all(&d);
+    #[cfg(target_os = "windows")]
+    { let _ = Command::new("explorer").arg(&d).creation_flags(0x08000000).spawn(); }
+    serde_json::json!({ "ok": true, "dir": d.display().to_string() })
+}
+
+
 fn plugin_dirs(settings: &serde_json::Value) -> Vec<String> {
     let mut dirs: Vec<String> = Vec::new();
     if let Some(a) = settings.get("plugin.dirs").and_then(|v| v.as_array()) { for v in a { if let Some(s) = v.as_str() { if !s.trim().is_empty() { dirs.push(s.to_string()); } } } }
@@ -2783,7 +2901,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, db_kv_get, db_kv_set,
-            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, wallpaper_set_desktop, gpu_status, gpu_uninstall, plugins_list, plugins_rescan, plugins_set_enabled, plugins_open_dir, model_list,
+            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, wallpaper_set_desktop, gpu_status, gpu_uninstall, plugins_list, plugins_rescan, plugins_set_enabled, plugins_open_dir, sf_workshop_list, sf_workshop_import, sf_workshop_delete, sf_workshop_open_dir, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
@@ -2834,6 +2952,29 @@ mod check_midi_tests {
         assert!(plan[0].join(" ").contains("Wallpaper"));
         assert!(plan[0].join(" ").contains("C:\\wall\\a.jpg"));
         assert_eq!(super::wallpaper_set_desktop("C:\\definitely-missing.jpg".into())["ok"], false);
+    }
+
+    #[test]
+    fn soundfont_workshop_list() {
+        let root = tmpdir("sf-root");
+        let bundled = tmpdir("sf-bundled");
+        let f = std::fs::File::create(bundled.join("GeneralUser.sf2")).unwrap();
+        f.set_len(26_000_000).unwrap();
+        std::fs::write(root.join("custom.sf2"), b"sf2").unwrap();
+        let r = super::sf_workshop_list_at(&root, Some(&bundled));
+        assert_eq!(r["registry"].as_array().unwrap().len(), 20);
+        let gu = r["registry"].as_array().unwrap().iter().find(|x| x["id"] == "generaluser_gs").unwrap();
+        assert_eq!(gu["source"], "builtin");
+        assert_eq!(gu["downloaded"], true);
+        assert_eq!(r["customs"].as_array().unwrap().len(), 1);
+        let src = bundled.join("imported.sf2");
+        std::fs::write(&src, b"sf2").unwrap();
+        let imp = super::sf_workshop_import_at(&root, src.to_str().unwrap());
+        assert_eq!(imp["ok"], true);
+        assert_eq!(super::sf_workshop_delete_at(&root, "custom:imported.sf2")["ok"], true);
+        assert!(!root.join("imported.sf2").exists());
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(bundled);
     }
 
     #[test]

@@ -5,23 +5,18 @@
 
 | 指标 | 数值 |
 |---|---:|
-| Rust command | 104 |
+| Rust command | 108 |
 | bridge call | 129 |
-| 参数不一致 | 32 |
+| 参数不一致 | 28 |
 
 ## 不一致列表
 
 - pick_file
   - bridge 多参数: filters
-- sf_workshop_list（Rust 未找到命令）
 - sf_workshop_download（Rust 未找到命令）
   - bridge 多参数: id
 - sf_workshop_cancel（Rust 未找到命令）
   - bridge 多参数: id
-- sf_workshop_import（Rust 未找到命令）
-- sf_workshop_delete（Rust 未找到命令）
-  - bridge 多参数: id
-- sf_workshop_open_dir（Rust 未找到命令）
 - probe（Rust 未找到命令）
 - refine（Rust 未找到命令）
   - bridge 多参数: req

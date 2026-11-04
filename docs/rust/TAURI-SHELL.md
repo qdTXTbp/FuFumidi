@@ -92,6 +92,7 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 | gpu_status / gpu_uninstall | 读取 dataRoot/gpu-enhancements 下 cuda/rocm/xpu；返回当前 Python、rocm 是否需 3.12；卸载删除对应目录 | Rust 单测（临时目录）：识别 cuda、卸载删除、非法类型拒绝；真实 Python 版本读取在测试中执行 |
 | wallpaper_set_desktop | 静态图片设为桌面：HKCU Desktop Wallpaper/WallpaperStyle/TileWallpaper + `rundll32 user32.dll,UpdatePerUserSystemParameters` | Rust 单测：注册表命令计划/路径；**测试不改真实桌面** |
 | plugins_list / rescan / set_enabled / open_dir | 调 engine/plugin_render.py list（--dir 来自 settings/env），按 settings.plugins_enabled 标 enabled；开关写 settings；打开插件目录 | Rust 单测：输出解析/启用映射、设置写入；真实 Python 插件列表未在测试中跑（手工无窗口跑过返回空列表） |
+| sf_workshop_list / import / delete / open_dir | 从 main/soundfonts.js 生成 20 条静态注册表；核对 bundled/downloaded 体积、扫描自定义 SF2/SF3；导入/删除/打开目录 | Rust 单测：20 条注册表、bundled GeneralUser builtin、自定义扫描、导入/删除；下载仍未实现 |
 | open_folder | 打开目录（仅目录） | 实际打开资源管理器不在无头会话触发 |
 | soundfont_list | 扫描 renderer/vendor/soundfonts + dataDir/soundfonts（sf2/sf3） | 开发树返回 GeneralUser.sf2 |
 | dep_check | Rust 启动 Python `deps.py check`，解析 `###RESULT` 的 groups | 返回 universal/piano/aria/muscriptor/separate/transkun 6 组 |
@@ -204,11 +205,11 @@ worker running=true seq=1；输出 MIDI 头 `MThd`。剩余：cancel/pause、UI 
 - 明细见 [IPC-COVERAGE.md](IPC-COVERAGE.md)。
 - 前端实际调用审计：`npm run tauri:call-audit`（`docs/rust/BRIDGE-CALLS.md`），
   当前 212 个去重调用 / 104 未找到实现（启发式，含动态调用误报）。
-- 参数契约审计：`npm run tauri:arg-audit`（`docs/rust/ARG-AUDIT.md`），当前 104 命令 / 32 不一致
+- 参数契约审计：`npm run tauri:arg-audit`（`docs/rust/ARG-AUDIT.md`），当前 108 命令 / 28 不一致
   （主要来自尚未实现的 bridge 命令）；已修正 readSidecarLyrics/modelImportLocal/renameMidi/
   projectOpen/autosaveRead/autosaveClear 的 JS camelCase→Rust snake_case 参数错配。
 
-## 4. 当前命令清单（104 条）
+## 4. 当前命令清单（108 条）
 
 host_info, app_version, ping, python_selfcheck, engine_probe, convert, engine_worker_status,
 load_settings, save_settings, db_kv_get, db_kv_set, db_status, db_songs_list, db_songs_put,
@@ -225,7 +226,8 @@ storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip,
 autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data,
 check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin,
 wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc,
-gpu_status, gpu_uninstall, wallpaper_set_desktop, plugins_list, plugins_rescan, plugins_set_enabled, plugins_open_dir。
+gpu_status, gpu_uninstall, wallpaper_set_desktop, plugins_list, plugins_rescan, plugins_set_enabled, plugins_open_dir,
+sf_workshop_list, sf_workshop_import, sf_workshop_delete, sf_workshop_open_dir。
 
 ## 4.1 下一步
 
