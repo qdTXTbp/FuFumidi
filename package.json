@@ -77,7 +77,8 @@
     "test:cancel": "node --test scripts/test-cancel-worker.mjs",
     "push:api": "node scripts/api-push.mjs",
     "test:zip": "node --test scripts/test-zip-safe.mjs",
-    "design:shoot": "node scripts/design/shoot.mjs"
+    "design:shoot": "node scripts/design/shoot.mjs",
+    "tauri:smoke": "node scripts/tauri/smoke.mjs"
   },
   "dependencies": {
     "adm-zip": "^0.6.0",

@@ -243,7 +243,11 @@
   截图 `shells/tauri/artifacts/window.png`（真实首页 + 新手引导，不是占位页）。
 - 文档：docs/rust/TAURI-SHELL.md（边界/构建/实测/下一步/风险）。
 - 边界未变：**IPC 仍缺 ~172 条**、更新链仍要自研；模型兼容硬约束继续生效。
-- 下一步：T-115 IPC 纵切 10 条 → T-118 Python sidecar supervisor → T-117 host 业务迁移。
+- **T-115 IPC 纵切已完成 11 条**：app_version / load_settings / save_settings / db_kv_get / db_kv_set /
+  list_midi_files / read_binary / save_binary + host_info / python_selfcheck / ping；
+  `npm run tauri:smoke` 通过 WebView2 CDP 实测 9 项断言全绿（settings 42 往返、MIDI 头 MThd、
+  字节往返、Python 3.12.10、#app/fuBridge/__TAURI__、正文 >200 字），截图 artifacts/smoke.png。
+- 下一步：T-118 Python sidecar supervisor → T-117 host 业务迁移（file/settings/song/task 逐步替换 main/*.js）。
 
 ## 17. 待收口（下一轮）
 

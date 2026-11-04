@@ -35,6 +35,27 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 - 与 POC 的区别：POC 只有 `poc_ping/poc_echo`；本壳已带 host_info/python_selfcheck，
   并可作为后续 T-115（IPC 纵切）、T-118（Python sidecar supervisor）的落点。
 
+## 3.1 T-115 IPC 纵切（2026-11-04，已完成 11 条）
+
+| 命令 | 作用 | 验证 |
+|---|---|---|
+| host_info | 版本/模式/数据目录/Python/renderer 状态 | CDP eval |
+| app_version | 6.5.0-beta.1 | CDP eval |
+| python_selfcheck | 启动 `resources/python/python.exe` 并取 3.12.10 | CDP eval |
+| load_settings / save_settings | `%APPDATA%/FuFumidi/settings.json`（可用 FUFUMIDI_DATA_ROOT 覆盖） | 写 42 → 读回 42 |
+| db_kv_get / db_kv_set | `kv.json` 键值存储 | 写 {a:1} → 读回 |
+| list_midi_files | 递归扫描 .mid/.midi/.kar/.rmi（≤2000，深度≤8） | 临时目录 1 个 .mid |
+| read_binary | `tauri::ipc::Response` 原始字节 | 读出 `MThd` |
+| save_binary | 按 opts.path/bytes 落盘 | 写 [1,2,3,4] → 读回长度 4 |
+
+**冒烟命令**：`npm run tauri:smoke`（`scripts/tauri/smoke.mjs`）：
+
+- 启动真实壳 + WebView2 CDP（`--remote-debugging-port`）；
+- 断言 9 项全绿：host / version / python / settings / kv / listMidi / readBinary / saveBinary / ui；
+- UI 断言：title、#app 已挂载、`window.fuBridge` 与 `window.__TAURI__` 均为 object、正文 >200 字；
+- 实测输出：version 6.5.0-beta.1、Python 3.12.10、settings 42 往返、MIDI 头 `MThd`、字节 4 往返；
+- 截图：`shells/tauri/artifacts/smoke.png`（真实 UI）。
+
 ## 4. 下一步
 
 1. **T-115 IPC 纵切**：从 ipc.schema.json 生成 10 条真实 command + 桥映射（含事件退订），
