@@ -45,8 +45,9 @@ function createWindow({ BrowserWindow, shell, pluginHost, rootDir }) {
 
   // 冷启动 splash（6.5.0 恢复）：6.4.4 的 preload 没有 rendererReady，
   // 因此主窗口 ready-to-show 后至少展示 600ms，再切主窗口。
+  const e2eHidden = process.env.FUFUMIDI_E2E_HIDDEN === '1';
   let splash = null;
-  try {
+  if (!e2eHidden) try {
     splash = new BrowserWindow({
       width: 520, height: 286, frame: false, resizable: false, movable: false,
       minimizable: false, maximizable: false, alwaysOnTop: true, skipTaskbar: true,
@@ -60,6 +61,7 @@ function createWindow({ BrowserWindow, shell, pluginHost, rootDir }) {
   let mainShown = false;
   const closeSplash = () => { try { if (splash && !splash.isDestroyed()) splash.destroy(); } catch (_) {} splash = null; };
   const showMain = () => {
+    if (e2eHidden) { mainShown = true; return; }
     if (mainShown) return;
     mainShown = true;
     try { if (!win.isDestroyed()) win.show(); } catch (_) {}

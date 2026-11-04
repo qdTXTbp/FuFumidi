@@ -395,6 +395,7 @@
 - **Tauri 音频时长补 M4A/MP4**：解析 MP4 box/`mvhd` 得到时长；合成 M4A 2s 单测通过；audio_duration 现覆盖 WAV/FLAC/MP3/M4A，cargo test **39/39 + 1 ignored**。
 - **Tauri 音频时长补 OGG**：解析 OggS 页 granule + Vorbis 采样率 / Opus preskip；合成 1s OGG 单测；audio_duration 覆盖 WAV/FLAC/MP3/M4A/OGG，cargo test **40/40 + 1 ignored**。
 - **Tauri 音频时长补 AIFF/AIFC**：FORM/COMM + 80-bit extended sample rate；合成 1s AIFF 单测；audio_duration 覆盖 WAV/FLAC/MP3/M4A/OGG/AIFF，cargo test **41/41 + 1 ignored**。
+- **隐藏窗口 E2E 恢复**：新增 `FUFUMIDI_E2E_HIDDEN=1`（E2E 启动器自动设置），主窗口与 splash 全程 `show:false`，**不弹窗**；隐藏模式实测 `shortcuts-config` 1/1、关键 9 子集 **9/9** 通过（smoke/edit-basic/track-crud/arrange-tabs-undo/arrange-playback/autosave/export/storage/tasks）。全量 37 用例尝试时工具 600s 超时，未拿到完整结果（非用例失败证据），后续可后台分段跑。
 - **T-117 曲库/设置共享 Electron 数据（重要）**：Rust 用 rusqlite 直读/写
   `%APPDATA%/FuFumidi/fufumidi/fufumidi.sqlite`（songs/playlists/kv），设置优先读 legacy
   settings.json；只读验收实测 **1972 首真实曲目**、57 个设置键、侧栏「全部曲目 1972」正常；

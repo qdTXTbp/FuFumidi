@@ -271,6 +271,7 @@ export async function launchApp(opts = {}) {
   // 如果 shell/CI 里带了 ELECTRON_RUN_AS_NODE=1，electron.exe 会退化成纯 Node 跑 main.js
   // （app 为 undefined，启动即崩，CDP 永远不出现）。E2E 必须显式清掉它。
   delete childEnv.ELECTRON_RUN_AS_NODE;
+  childEnv.FUFUMIDI_E2E_HIDDEN = "1";
   const child = spawn(ELECTRON, args, {
     cwd: ROOT,
     env: childEnv,
