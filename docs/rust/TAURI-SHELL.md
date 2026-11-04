@@ -47,11 +47,12 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 | list_midi_files | 递归扫描 .mid/.midi/.kar/.rmi（≤2000，深度≤8） | 临时目录 1 个 .mid |
 | read_binary | `tauri::ipc::Response` 原始字节 | 读出 `MThd` |
 | save_binary | 按 opts.path/bytes 落盘 | 写 [1,2,3,4] → 读回长度 4 |
+| engine_probe | Rust 启动 Python 执行 `music2midi.py probe`，返回耗时 + probe JSON（T-118 第一步） | 实测 4.9 s，probe.ok=true，engine 路径与 Python 3.12.10 正确 |
 
 **冒烟命令**：`npm run tauri:smoke`（`scripts/tauri/smoke.mjs`）：
 
 - 启动真实壳 + WebView2 CDP（`--remote-debugging-port`）；
-- 断言 9 项全绿：host / version / python / settings / kv / listMidi / readBinary / saveBinary / ui；
+- 断言 10 项全绿：host / engineProbe / version / python / settings / kv / listMidi / readBinary / saveBinary / ui；
 - UI 断言：title、#app 已挂载、`window.fuBridge` 与 `window.__TAURI__` 均为 object、正文 >200 字；
 - 实测输出：version 6.5.0-beta.1、Python 3.12.10、settings 42 往返、MIDI 头 `MThd`、字节 4 往返；
 - 截图：`shells/tauri/artifacts/smoke.png`（真实 UI）。
@@ -63,7 +64,8 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 2. **T-118 Python sidecar supervisor**：Rust 启动/监控 Python，转发 `convert/separate` 等推理请求；
    模型路径/参数契约不变。
 3. **T-117 host 业务迁移**：文件/设置/曲库/任务队列先迁，保持 IPC 语义与双跑回归。
-4. T-119 双构建 + Electron 回退；T-114 品牌一致性校验（图标复用 build/icon.ico）。
+4. T-118 完整 supervisor：常驻 Python worker + `###RESULT/###PROG/###LOG` 转发 + 崩溃重启（目前只是一次性 probe）。
+5. T-119 双构建 + Electron 回退；T-114 品牌一致性校验（图标复用 build/icon.ico）。
 
 ## 5. 风险与约束
 

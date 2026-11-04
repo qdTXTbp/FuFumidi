@@ -247,7 +247,11 @@
   list_midi_files / read_binary / save_binary + host_info / python_selfcheck / ping；
   `npm run tauri:smoke` 通过 WebView2 CDP 实测 9 项断言全绿（settings 42 往返、MIDI 头 MThd、
   字节往返、Python 3.12.10、#app/fuBridge/__TAURI__、正文 >200 字），截图 artifacts/smoke.png。
-- 下一步：T-118 Python sidecar supervisor → T-117 host 业务迁移（file/settings/song/task 逐步替换 main/*.js）。
+- **T-118 第一步已完成**：Rust 命令 `engine_probe` 真实启动 Python `music2midi.py probe`，
+  返回 engine 路径、耗时 **4.9 s**、完整 probe JSON（app=FuFumidi 转录引擎，piano available=true 等）；
+  smoke 断言增到 **10 项**全绿（新增 engineProbe）。
+- 下一步：T-118 完整 supervisor（常驻 worker + 三种输出转发 + 崩溃重启）→ T-117 host 业务迁移
+  （file/settings/song/task 逐步替换 main/*.js）。
 
 ## 17. 待收口（下一轮）
 

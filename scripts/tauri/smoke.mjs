@@ -40,6 +40,7 @@ const EXPR = [
   "  const info = await inv('host_info');",
   "  const ver = await inv('app_version');",
   "  const py = await inv('python_selfcheck');",
+  "  const eng = await inv('engine_probe');",
   "  const saved = await inv('save_settings', { s: { smoke: true, n: 42 } });",
   "  const loaded = await inv('load_settings');",
   "  const set = await inv('db_kv_set', { key: 'smoke', value: { a: 1 } });",
@@ -52,7 +53,7 @@ const EXPR = [
   "  const back = toU8(await inv('read_binary', { p: P.out }));",
   "  return {",
   "    ui: { title: document.title, appChildren: (document.getElementById('app') || { childElementCount: -1 }).childElementCount, fuBridge: typeof window.fuBridge, tauri: typeof window.__TAURI__, hash: location.hash, textLen: (document.body.innerText || '').length },",
-  "    info, ver, py, saved, loaded, set, got, files, header, sb, backLen: back.length,",
+  "    info, ver, py, eng, saved, loaded, set, got, files, header, sb, backLen: back.length,",
   "  };",
   "})()",
 ].join("\n");
@@ -76,6 +77,7 @@ try {
   fs.writeFileSync(shotPath, Buffer.from(shot.data, "base64"));
   const checks = {
     host: !!r.info && r.info.ok === true,
+    engineProbe: !!r.eng && r.eng.ok === true && !!r.eng.probe && r.eng.elapsedMs > 0,
     version: typeof r.ver === "string" && r.ver.length > 0,
     python: !!r.py && r.py.ok === true,
     settings: !!r.saved && r.saved.ok === true && !!r.loaded && r.loaded.smoke === true && r.loaded.n === 42,

@@ -176,6 +176,51 @@ fn list_midi_files(dir: String) -> Vec<String> {
     out
 }
 
+fn engine_dir() -> Option<PathBuf> {
+    let mut cands = vec![repo_root_from_manifest().join("engine")];
+    if let Some(d) = exe_dir() {
+        cands.push(d.join("../resources/engine"));
+        cands.push(d.join("engine"));
+        cands.push(d.join("../engine"));
+    }
+    cands.into_iter().find(|p| p.join("music2midi.py").exists())
+}
+
+/// T-118 第一步：Rust 启动 Python 推理进程做一次真实 probe（不是 mock）。
+/// 返回耗时 + Python 版本 + probe JSON（stdout 最后一段 JSON）。模型/参数契约不变。
+#[tauri::command]
+fn engine_probe() -> serde_json::Value {
+    let Some(py) = python_path() else {
+        return serde_json::json!({ "ok": false, "error": "python runtime not found" });
+    };
+    let Some(eng) = engine_dir() else {
+        return serde_json::json!({ "ok": false, "error": "engine/music2midi.py not found" });
+    };
+    let started = std::time::Instant::now();
+    let out = match Command::new(&py)
+        .current_dir(&eng)
+        .args(["music2midi.py", "probe"])
+        .output()
+    {
+        Ok(o) => o,
+        Err(e) => return serde_json::json!({ "ok": false, "error": e.to_string() }),
+    };
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    let probe = stdout
+        .find('{')
+        .and_then(|i| serde_json::from_str::<serde_json::Value>(&stdout[i..]).ok());
+    serde_json::json!({
+        "ok": out.status.success() && probe.is_some(),
+        "python": py.display().to_string(),
+        "engine": eng.display().to_string(),
+        "elapsedMs": elapsed_ms,
+        "probe": probe,
+        "stderrTail": stderr.chars().rev().take(400).collect::<String>().chars().rev().collect::<String>(),
+    })
+}
+
 #[tauri::command]
 fn read_binary(p: String) -> Result<tauri::ipc::Response, String> {
     std::fs::read(&p)
@@ -207,7 +252,7 @@ fn main() {
     }
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
-            host_info, app_version, ping, python_selfcheck,
+            host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, db_kv_get, db_kv_set,
             list_midi_files, read_binary, save_binary
         ])
