@@ -698,6 +698,111 @@ fn in_midi_root(p: &str) -> bool {
     }
 }
 
+fn top_level_midi_files(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let Ok(rd) = std::fs::read_dir(dir) else { return out };
+    for e in rd.flatten() {
+        let p = e.path();
+        if !p.is_file() { continue; }
+        if let Some(ext) = p.extension().and_then(|x| x.to_str()) {
+            let e = ext.to_ascii_lowercase();
+            if e == "mid" || e == "midi" { out.push(p); }
+        }
+    }
+    out.sort();
+    out
+}
+
+fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in bytes { h ^= *b as u64; h = h.wrapping_mul(0x100000001b3); }
+    h
+}
+
+fn verify_midi_at(dir: &Path) -> serde_json::Value {
+    let files = top_level_midi_files(dir);
+    let mut rows = Vec::new();
+    let mut bad = Vec::new();
+    let mut total_notes = 0usize;
+    let mut total_bytes = 0u64;
+    for p in files {
+        let size = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+        total_bytes += size;
+        let row = match std::fs::read(&p) {
+            Ok(bytes) => match fufumidi_core::parse_smf(&bytes) {
+                Ok(smf) => match fufumidi_core::analyze_file(&smf) {
+                    Ok(st) => {
+                        total_notes += st.notes;
+                        serde_json::json!({
+                            "file": p.display().to_string(), "ok": true, "error": "", "size": size,
+                            "format": st.format, "tracks": st.tracks, "notes": st.notes, "bpm": st.bpm,
+                            "minMidi": st.min_midi, "maxMidi": st.max_midi, "avgVel": st.avg_vel
+                        })
+                    }
+                    Err(e) => serde_json::json!({ "file": p.display().to_string(), "ok": false, "error": e.to_string(), "size": size }),
+                },
+                Err(e) => serde_json::json!({ "file": p.display().to_string(), "ok": false, "error": e.to_string(), "size": size }),
+            },
+            Err(e) => serde_json::json!({ "file": p.display().to_string(), "ok": false, "error": e.to_string(), "size": size }),
+        };
+        if row.get("ok").and_then(|v| v.as_bool()) != Some(true) { bad.push(row.clone()); }
+        rows.push(row);
+    }
+    serde_json::json!({
+        "ok": true, "engine": "rust", "dir": dir.display().to_string(),
+        "count": rows.len(), "badCount": bad.len(), "totalNotes": total_notes,
+        "totalBytes": total_bytes, "files": rows, "bad": bad
+    })
+}
+
+fn dupe_midi_at(dir: &Path) -> serde_json::Value {
+    let mut rows = Vec::new();
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return serde_json::json!({ "ok": true, "engine": "rust", "dir": dir.display().to_string(), "count": 0, "dupeGroups": 0, "dupeFiles": 0, "groups": [] });
+    };
+    for e in rd.flatten() {
+        let p = e.path();
+        if !p.is_file() { continue; }
+        let Some(ext) = p.extension().and_then(|x| x.to_str()) else { continue };
+        let ext = ext.to_ascii_lowercase();
+        if !matches!(ext.as_str(), "mid" | "midi" | "sf2" | "sf3" | "wav" | "mp3" | "flac") { continue; }
+        if let Ok(bytes) = std::fs::read(&p) {
+            rows.push((p.display().to_string(), fnv1a(&bytes), bytes.len()));
+        }
+    }
+    let mut map: std::collections::BTreeMap<(u64, usize), Vec<serde_json::Value>> = std::collections::BTreeMap::new();
+    for (file, hash, size) in &rows {
+        map.entry((*hash, *size)).or_default().push(serde_json::json!({ "file": file, "size": size }));
+    }
+    let groups: Vec<serde_json::Value> = map.into_values().filter(|g| g.len() > 1).map(serde_json::Value::Array).collect();
+    let dupe_files = groups.iter().map(|g| g.as_array().map(|a| a.len().saturating_sub(1)).unwrap_or(0)).sum::<usize>();
+    serde_json::json!({
+        "ok": true, "engine": "rust", "dir": dir.display().to_string(), "count": rows.len(),
+        "dupeGroups": groups.len(), "dupeFiles": dupe_files, "groups": groups
+    })
+}
+
+fn has_midi_at(root: &Path, p: &str) -> serde_json::Value {
+    let root_canon = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let ok = PathBuf::from(p).canonicalize().map(|c| {
+        c.starts_with(&root_canon) && std::fs::metadata(&c).map(|m| m.is_file() && m.len() > 0).unwrap_or(false)
+    }).unwrap_or(false);
+    let size = if ok { std::fs::metadata(p).map(|m| m.len()).unwrap_or(0) } else { 0 };
+    serde_json::json!({ "ok": true, "exists": ok, "size": size })
+}
+
+#[tauri::command]
+fn has_midi(p: String) -> serde_json::Value {
+    if p.trim().is_empty() { return serde_json::json!({ "ok": true, "exists": false, "size": 0 }); }
+    has_midi_at(&midi_root(), &p)
+}
+
+#[tauri::command]
+fn verify_midi() -> serde_json::Value { verify_midi_at(&midi_root()) }
+
+#[tauri::command]
+fn dupe_midi() -> serde_json::Value { dupe_midi_at(&midi_root()) }
+
 #[tauri::command]
 fn delete_midi(p: String) -> serde_json::Value {
     if p.trim().is_empty() { return serde_json::json!({ "ok": true, "deleted": false }); }
@@ -1244,7 +1349,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, db_kv_get, db_kv_set,
-            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, model_list,
+            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
@@ -1277,6 +1382,36 @@ mod check_midi_tests {
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    #[test]
+    fn verify_and_dupe_midi() {
+        let root = tmpdir("verify-dupe");
+        // 合法 SMF（format 0 / 480 tick / 1 个 C4 音符）
+        let midi: Vec<u8> = vec![77,84,104,100,0,0,0,6,0,0,0,1,1,224,77,84,114,107,0,0,0,21,0,255,3,1,84,0,192,0,0,144,60,100,131,96,128,60,64,0,255,47,0];
+        std::fs::write(root.join("a.mid"), &midi).unwrap();
+        std::fs::write(root.join("b.mid"), &midi).unwrap();
+        std::fs::write(root.join("bad.mid"), b"not midi").unwrap();
+        std::fs::write(root.join("x.txt"), b"same").unwrap();
+        let v = super::verify_midi_at(&root);
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["engine"], "rust");
+        assert_eq!(v["count"], 3);
+        assert_eq!(v["badCount"], 1);
+        assert_eq!(v["totalNotes"], 2);
+        let bad = v["bad"].as_array().unwrap();
+        assert_eq!(bad.len(), 1);
+        assert!(bad[0]["file"].as_str().unwrap().ends_with("bad.mid"));
+        let d = super::dupe_midi_at(&root);
+        assert_eq!(d["dupeGroups"], 1);
+        assert_eq!(d["dupeFiles"], 1);
+        let g = d["groups"][0].as_array().unwrap();
+        assert_eq!(g.len(), 2);
+        let has = super::has_midi_at(&root, root.join("a.mid").to_str().unwrap());
+        assert_eq!(has["exists"], true);
+        let outside = super::has_midi_at(&root, root.join("x.txt").to_str().unwrap());
+        assert_eq!(outside["exists"], true, "hasMidi only checks existence/size, extension is not constrained");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

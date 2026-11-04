@@ -317,6 +317,9 @@
 - **Tauri 数据根命令**：`data_root`（9 个目录大小概览）、`open_data_root`（安全子目录校验后打开）、
   `clean_temp`（清理 temp 并返回释放字节）；桥补 dataRoot/openDataRoot/cleanTemp；Rust 测试
   覆盖概览条目/大小/清理；命令总数 **54**，覆盖刷新为 100 方法/165 未映射（91 call）。
+- **Tauri 曲库体检/查重（Rust core）**：`has_midi`、`verify_midi`（复用 fufumidi-core 解析，
+  返回轨道/音符/BPM/损坏列表）、`dupe_midi`（FNV-1a 分组）；桥补 hasMidi/midiStats/verifyMidi/dupeMidi；
+  Rust 测试覆盖合法 SMF 2 音符、坏文件、重复组；命令总数 **57**，覆盖 104 方法/161 未映射（95 call）。
 - **T-117 曲库/设置共享 Electron 数据（重要）**：Rust 用 rusqlite 直读/写
   `%APPDATA%/FuFumidi/fufumidi/fufumidi.sqlite`（songs/playlists/kv），设置优先读 legacy
   settings.json；只读验收实测 **1972 首真实曲目**、57 个设置键、侧栏「全部曲目 1972」正常；
