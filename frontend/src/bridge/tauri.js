@@ -87,6 +87,8 @@ export function installTauriBridge() {
     exportDawproject: (payload) => call('export_dawproject', { payload }),
     autostartGet: () => call('autostart_get'),
     diagHealth: () => call('diag_health'),
+    pickModelArchive: () => call('pick_model_archive'),
+    modelImportLocal: (filePath) => call('model_import_local', { filePath }),
     autostartSet: (open) => call('autostart_set', { open: !!open }),
     copyAsset: (payload) => call('copy_asset', { src: payload && payload.src, dest: payload && payload.dest }),
     openExternal: (url) => call('open_external', { url }),

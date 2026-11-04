@@ -366,6 +366,11 @@
   Rust 测试完整 JSON/噪声尾行/空输出；**真机冒烟已补并实测通过 5.64s**——health.py 实际输出
   `###RESULT {json}` 信封，原先纯 JSON 解析会失败，本轮已修正并兼容前缀；命令总数 **80**，
   覆盖 125 方法/140 未映射（117 call），bridge 调用审计未实现 **113**，cargo test **21/21**（另有 1 个 ignored 真机测试）。
+- **Tauri 本地模型导入（ZIP）**：`pick_model_archive/model_import_local`（安全解压、识别
+  muscriptor/small|medium|large、aria_amt、piano_transcription，复制到 models/<dest>；
+  7z/tar 明确报错仍走 Electron）；桥补 pickModelArchive/modelImportLocal；Rust 测试 ZIP 导入/
+  识别/7z 拒绝；命令总数 **82**，覆盖 127 方法/138 未映射（119 call），bridge 未实现 **111**，
+  cargo test **22/22 + 1 ignored**。
 - **T-117 曲库/设置共享 Electron 数据（重要）**：Rust 用 rusqlite 直读/写
   `%APPDATA%/FuFumidi/fufumidi/fufumidi.sqlite`（songs/playlists/kv），设置优先读 legacy
   settings.json；只读验收实测 **1972 首真实曲目**、57 个设置键、侧栏「全部曲目 1972」正常；

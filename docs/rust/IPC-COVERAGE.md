@@ -5,10 +5,10 @@
 | 指标 | 数值 |
 |---|---:|
 | preload 暴露方法 | 265 |
-| Tauri 桥已映射方法 | 125 |
-| 尚未映射 | **140** |
+| Tauri 桥已映射方法 | 127 |
+| 尚未映射 | **138** |
 | preload IPC invoke 通道 | 250 |
-| Tauri call 通道 | 117 |
+| Tauri call 通道 | 119 |
 
 ## 缺口分类
 
@@ -17,14 +17,14 @@
 | 设置/杂项 | 20 |
 | diffsinger | 19 |
 | utau/voicebank | 18 |
-| 模型/安装/平台 | 14 |
+| 模型/安装/平台 | 13 |
 | rvc | 12 |
 | 资源/音频/扩展 | 11 |
 | 导出/渲染 | 11 |
 | gpu/运行时增强 | 8 |
 | 事件/窗口 | 7 |
 | 更新/测速 | 6 |
-| 文件/诊断 | 6 |
+| 文件/诊断 | 5 |
 | 其他 | 4 |
 | 曲库/数据 | 4 |
 
@@ -86,7 +86,6 @@ langInstall
 langRemove
 langStatus
 modelEnsureConfig
-modelImportLocal
 onCoverProgress
 onDiffsingerMsProgress
 onDiffsingerRenderProgress
@@ -107,7 +106,6 @@ openFolder
 openPlatform
 pathForFile
 pickDir
-pickModelArchive
 pin
 platformInfo
 preview

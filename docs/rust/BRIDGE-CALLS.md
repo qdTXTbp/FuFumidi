@@ -6,9 +6,9 @@
 | 指标 | 数值 |
 |---|---:|
 | 前端调用的 bridge 方法（去重） | 212 |
-| Tauri 顶层方法 | 90 |
+| Tauri 顶层方法 | 92 |
 | Tauri 嵌套方法 | 43 |
-| **未找到实现** | **113** |
+| **未找到实现** | **111** |
 
 ## 未找到实现的方法
 
@@ -26,7 +26,6 @@
 - `e2e` — frontend/src/audio.js
 - `gpuCancelInstall` — frontend/src/components/SettingsPanel.vue
 - `gpuUnifiedMemoryExperiment` — frontend/src/views/ViewTranscribe.vue
-- `modelImportLocal` — frontend/src/views/ViewResources.vue
 - `omrEngine` — frontend/src/views/ViewResources.vue
 - `omrEngine.homrInstall` — frontend/src/views/ViewResources.vue
 - `omrEngine.homrRemove` — frontend/src/views/ViewResources.vue
@@ -51,7 +50,6 @@
 - `onStemProgress` — frontend/src/views/ViewTranscribe.vue
 - `onTrayControl` — frontend/src/App.vue
 - `onVoicebankProgress` — frontend/src/components/utau/UtauVoicebankStore.vue
-- `pickModelArchive` — frontend/src/views/ViewResources.vue
 - `plugin` — frontend/src/views/ViewConvert.vue
 - `plugin.pickAudio` — frontend/src/views/ViewConvert.vue
 - `plugin.pickFile` — frontend/src/views/ViewConvert.vue

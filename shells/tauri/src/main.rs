@@ -561,6 +561,122 @@ fn presets_restore() -> serde_json::Value {
 
 fn midi_root() -> PathBuf { data_dir().join("midi") }
 
+fn detect_model_dest(archive: &Path, files: &[String]) -> Option<String> {
+    let joined = files.join("\n").replace('\\', "/").to_ascii_lowercase();
+    for (needle, dest) in [
+        ("muscriptor/small/", "muscriptor/small"), ("muscriptor/medium/", "muscriptor/medium"),
+        ("muscriptor/large/", "muscriptor/large"), ("aria_amt/", "aria_amt"),
+        ("piano_transcription/", "piano_transcription"),
+    ] {
+        if joined.contains(needle) { return Some(dest.to_string()); }
+    }
+    let n = archive.file_name().and_then(|x| x.to_str()).unwrap_or("").to_ascii_lowercase();
+    for (needle, dest) in [
+        ("muscriptor_small", "muscriptor/small"), ("muscriptor-small", "muscriptor/small"),
+        ("muscriptor_medium", "muscriptor/medium"), ("muscriptor-medium", "muscriptor/medium"),
+        ("muscriptor_large", "muscriptor/large"), ("muscriptor-large", "muscriptor/large"),
+        ("aria_amt", "aria_amt"), ("aria-amt", "aria_amt"),
+        ("piano_transcription", "piano_transcription"), ("piano-transcription", "piano_transcription"),
+    ] {
+        if n.contains(needle) { return Some(dest.to_string()); }
+    }
+    None
+}
+
+fn find_model_source_dir(root: &Path, dest: &str) -> PathBuf {
+    let last = dest.rsplit('/').next().unwrap_or(dest);
+    let first = dest.split('/').next().unwrap_or(dest);
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    fn walk(d: &Path, out: &mut Vec<PathBuf>, depth: usize) {
+        if depth > 8 { return; }
+        let Ok(rd) = std::fs::read_dir(d) else { return };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() { out.push(p.clone()); walk(&p, out, depth + 1); }
+        }
+    }
+    walk(root, &mut dirs, 0);
+    for d in &dirs {
+        let rel = d.strip_prefix(root).unwrap_or(d).to_string_lossy().replace('\\', "/");
+        if rel.eq_ignore_ascii_case(dest) { return d.clone(); }
+    }
+    for d in &dirs {
+        let name = d.file_name().and_then(|x| x.to_str()).unwrap_or("");
+        if name.eq_ignore_ascii_case(last) && d.to_string_lossy().to_ascii_lowercase().contains(&first.to_ascii_lowercase()) { return d.clone(); }
+    }
+    for d in &dirs {
+        let name = d.file_name().and_then(|x| x.to_str()).unwrap_or("");
+        if name.eq_ignore_ascii_case(last) { return d.clone(); }
+    }
+    root.to_path_buf()
+}
+
+fn copy_tree(src: &Path, dst: &Path) -> std::io::Result<u64> {
+    let mut total = 0u64;
+    std::fs::create_dir_all(dst)?;
+    fn walk(src: &Path, dst: &Path, total: &mut u64, depth: usize) -> std::io::Result<()> {
+        if depth > 12 { return Ok(()); }
+        for e in std::fs::read_dir(src)?.flatten() {
+            let p = e.path();
+            let rel = p.strip_prefix(src).unwrap_or(&p).to_path_buf();
+            let out = dst.join(rel);
+            if p.is_dir() { std::fs::create_dir_all(&out)?; walk(&p, &out, total, depth + 1)?; }
+            else if p.is_file() { std::fs::copy(&p, &out)?; *total += std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0); }
+        }
+        Ok(())
+    }
+    walk(src, dst, &mut total, 0)?;
+    Ok(total)
+}
+
+fn model_import_local_at(archive: &Path, models_root: &Path) -> serde_json::Value {
+    let ext = archive.extension().and_then(|x| x.to_str()).unwrap_or("").to_ascii_lowercase();
+    if ext != "zip" { return serde_json::json!({ "ok": false, "error": "Tauri 目前只支持 .zip 模型压缩包（7z/tar 仍走 Electron）" }); }
+    let tmp = std::env::temp_dir().join(format!("fufumidi-model-import-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let _ = std::fs::create_dir_all(&tmp);
+    let result = (|| -> Result<serde_json::Value, String> {
+        let file = std::fs::File::open(archive).map_err(|e| e.to_string())?;
+        let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+        if zip.len() > 4096 { return Err("压缩包条目过多".to_string()); }
+        let mut total: u64 = 0;
+        let mut names: Vec<String> = Vec::new();
+        for i in 0..zip.len() {
+            let mut e = zip.by_index(i).map_err(|e| e.to_string())?;
+            let name = e.name().replace('\\', "/");
+            if name.contains("..") || name.starts_with('/') || name.is_empty() { continue; }
+            total += e.size();
+            if total > 8 * 1024 * 1024 * 1024 { return Err("压缩包解压后过大（>8GB）".to_string()); }
+            let dest = tmp.join(&name);
+            if e.is_dir() { let _ = std::fs::create_dir_all(&dest); continue; }
+            if let Some(parent) = dest.parent() { let _ = std::fs::create_dir_all(parent); }
+            let mut out = std::fs::File::create(&dest).map_err(|e| e.to_string())?;
+            std::io::copy(&mut e, &mut out).map_err(|e| e.to_string())?;
+            names.push(name);
+        }
+        let dest = detect_model_dest(archive, &names).ok_or_else(|| "无法识别压缩包中的模型类型（MuScriptor / Aria-AMT / 钢琴模型）".to_string())?;
+        let src_dir = find_model_source_dir(&tmp, &dest);
+        let dest_dir = models_root.join(&dest);
+        let _ = std::fs::remove_dir_all(&dest_dir);
+        let size = copy_tree(&src_dir, &dest_dir).map_err(|e| e.to_string())?;
+        Ok(serde_json::json!({ "ok": true, "path": dest_dir.display().to_string(), "size": size, "model": dest }))
+    })();
+    let _ = std::fs::remove_dir_all(&tmp);
+    match result { Ok(v) => v, Err(e) => serde_json::json!({ "ok": false, "error": e }) }
+}
+
+#[tauri::command]
+fn pick_model_archive(app: AppHandle) -> Option<String> {
+    let picked = app.dialog().file().set_title("选择本地模型压缩包").add_filter("模型压缩包", &["zip"]).blocking_pick_file();
+    picked.and_then(|p| p.into_path().ok()).map(|p| p.display().to_string())
+}
+
+#[tauri::command]
+fn model_import_local(file_path: String) -> serde_json::Value {
+    model_import_local_at(Path::new(&file_path), &data_dir().join("models"))
+}
+
+
 fn parse_health_json(stdout: &str) -> Option<serde_json::Value> {
     let t = stdout.trim();
     if t.is_empty() { return None; }
@@ -2142,7 +2258,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, db_kv_get, db_kv_set,
-            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, model_list,
+            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
@@ -2176,6 +2292,29 @@ mod check_midi_tests {
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    #[test]
+    fn model_import_zip() {
+        let root = tmpdir("model-import");
+        let archive = root.join("muscriptor_small.zip");
+        {
+            let f = std::fs::File::create(&archive).unwrap();
+            let mut w = zip::ZipWriter::new(f);
+            let opts = zip::write::SimpleFileOptions::default();
+            w.start_file("muscriptor/small/weights.onnx", opts).unwrap();
+            w.write_all(b"weights").unwrap();
+            w.finish().unwrap();
+        }
+        let models = root.join("models");
+        let r = super::model_import_local_at(&archive, &models);
+        assert_eq!(r["ok"], true, "{}", r);
+        assert_eq!(r["model"], "muscriptor/small");
+        assert_eq!(std::fs::read(models.join("muscriptor/small/weights.onnx")).unwrap(), b"weights");
+        let bad = root.join("x.7z");
+        std::fs::write(&bad, b"x").unwrap();
+        assert_eq!(super::model_import_local_at(&bad, &models)["ok"], false);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
