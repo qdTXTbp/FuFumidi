@@ -298,6 +298,8 @@
   增量命令（undo/redo 闭包）、标签、事务合并、limit/50MB 硬上限、diff 字节估算；
   `frontend/tests/command-history.test.js` 5 项全过（含 10 万音符 × 50 次增量编辑 < 50MB 的内存验收）。
   页面尚未切换到该栈（EditorCanvas/Arrange 仍用快照栈），接入属后续步骤，不能宣称 P-011 整体完成。
+  已补 `core/note_commands.js`（新增/删除/修改音符的增量命令 + 批量删除工具）与 4 项单测，
+  为 EditorCanvas 切换准备最小 diff 命令。
 - **T-117 曲库/设置共享 Electron 数据（重要）**：Rust 用 rusqlite 直读/写
   `%APPDATA%/FuFumidi/fufumidi/fufumidi.sqlite`（songs/playlists/kv），设置优先读 legacy
   settings.json；只读验收实测 **1972 首真实曲目**、57 个设置键、侧栏「全部曲目 1972」正常；
