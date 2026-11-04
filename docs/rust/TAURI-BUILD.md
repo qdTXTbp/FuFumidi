@@ -163,3 +163,9 @@ Tauri 默认从 GitHub 下载 `nsis-3.13.zip`，本机直连超时。已把工�
 - `npm run tauri:separate-smoke`：bundled Python 跑 `music2midi.py separate --help`；
 - 实测 ok=true / status=0，参数面含 `--model/--arch/--stems/--output`；
 - 只验证 CLI 参数面，不跑分离推理。
+
+## 22. 2026-11-04 158 命令 release（UM）
+
+- release 构建 2m24s、**0 warning**；
+- host/engine self-check 通过（embedded renderer / warm=1 / 无残留）；
+- 含 GPU 统一内存实验；本机无 cudart，实际返回 backend-missing。

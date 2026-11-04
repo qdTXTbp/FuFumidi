@@ -41,14 +41,14 @@
 - `npm run audit`：0
 - `cargo test --offline`：**114 passed / 0 failed / 1 ignored**
 - `npm run tauri:handler-audit`：**158/158** 已注册，并已并入 `npm run audit`
-- release build：通过（157 命令，2m17s、0 warning，见 `TAURI-BUILD.md` §20）
+- release build：通过（158 命令，2m24s、0 warning，见 `TAURI-BUILD.md` §22）
 - `npm run tauri:video-smoke`：ok=true / 15827 bytes（合成 H.264+WAV 封装）
 - `npm run tauri:cover-smoke`：ok=true / status 0，engine_cover.py 参数面存在
 - `npm run tauri:cover-engine-smoke`：ok=true / status 0，真实 analyze 合成音频并返回 ###RESULT（不含 RVC/分离/混音）
 - `npm run tauri:separate-smoke`：ok=true / status 0，music2midi.py separate 参数面存在（不跑推理）
 - GPU 统一内存实验：本机无 cudart，脚本返回 backend-missing（命令已接入）
 - hidden `video-webcodecs`：VideoEncoder 实际编码 6 帧 H.264 Annex B，chunks/bytes > 0（Electron/Chromium；WebView2 未直接验证）
-- release `--self-check` / `--engine-self-check`：通过（157 命令源码）
+- release `--self-check` / `--engine-self-check`：通过（158 命令源码）
 
 ## 4. 仍需完成的重型缺口
 
