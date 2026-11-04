@@ -435,6 +435,7 @@
 - **T-118 P3 UI 消费**：ViewTranscribe 订阅 `onEngineProgress`，按 `id`（batchN）更新队列 realPct；与日志 ###PROG 路径互补，卸载退订；type 补 onEngineProgress；build/test:ui 589/smoke 通过。
 - **Tauri 单实例文件转发**：首实例 bind 127.0.0.1:47823 + accept 线程；第二实例把 .mid 路径或 `__FOCUS__` 发过去后**在 Builder 前退出**；首实例 emit `open-file`、聚焦窗口；桥 onOpenFile 接事件；Rust 单测路径/FOCUS；双实例真实窗口未跑。
 - **Tauri 文件关联冷启动**：`take_pending_open_file` 从 argv 取第一个存在的 .mid/.midi，读字节返回 {name,bytes} 并清空；桥补 takePendingOpenFile；App.vue 已有兜底调用；Rust 测试 MID/非 MID/缺失；命令 **135**，cargo test **108/108 + 1 ignored**。
+- **Tauri RVC 在线刷新**：`rvc_refresh_catalog` 用 curl 拉 ModelScope 文件树，解析 pth/index/采样率→写缓存；`rvc_catalog` 优先读缓存；**补注册之前漏挂的 rvc_catalog/rvc_open_catalog_page**；Rust 单测解析；命令 **136**，cargo test **110/110 + 1 ignored**。
 - **Tauri RVC probe**：`rvc_probe` 等 id 找清单，spawn_blocking 调 `engine_rvc.py probe --model`，解析 ###RESULT 并回写 version/sr/f0/engine；无模型/脚本明确错误；桥补 rvcProbe；Rust 查找/patch 测试；命令 **134**，cargo test **107/107 + 1 ignored**。
 - **Tauri RVC 内置目录**：`rvc_catalog` 编译期 include_str main/rvc-catalog.json（443KB，models 非空）、`rvc_open_catalog_page` 复用 open_external 仅 http/https；桥补；命令 **133**，cargo test **106/106 + 1 ignored**。
 - **Tauri RVC zip 导入**：`rvc_pick_zip/rvc_import_zip` 安全解压到 models/rvc/<id>，多一层时定位含权重子目录并给文件加前缀，写 model.json；Rust 测试 flat/nested/无效包；命令 **131**，cargo test **105/105 + 1 ignored**。

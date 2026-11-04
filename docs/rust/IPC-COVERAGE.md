@@ -5,10 +5,10 @@
 | 指标 | 数值 |
 |---|---:|
 | preload 暴露方法 | 265 |
-| Tauri 桥已映射方法 | 157 |
-| 尚未映射 | **109** |
+| Tauri 桥已映射方法 | 158 |
+| 尚未映射 | **108** |
 | preload IPC invoke 通道 | 250 |
-| Tauri call 通道 | 151 |
+| Tauri call 通道 | 152 |
 
 ## 缺口分类
 
@@ -26,7 +26,6 @@
 | 其他 | 3 |
 | 文件/诊断 | 3 |
 | 曲库/数据 | 2 |
-| rvc | 1 |
 
 ## 尚未映射的方法
 
@@ -110,7 +109,6 @@ preview
 probeVoicebank
 renderFile
 rendererReady
-rvcRefreshCatalog
 saveLocal
 savePath
 scoreCancel

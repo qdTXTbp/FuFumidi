@@ -1013,6 +1013,57 @@ fn start_single_instance_listener(listener: TcpListener, app: AppHandle) {
     });
 }
 
+const RVC_CATALOG_API: &str = "https://www.modelscope.cn/api/v1/models/aihobbyist/RVC_Model_Collection/repo/files?Revision=master&Recursive=True";
+
+/// 把 ModelScope 文件树转成与 main/rvc-catalog.json 相同的最小结构（只收 blob 的 .pth/.index）。
+fn rvc_catalog_from_api(body: &str) -> Result<serde_json::Value, String> {
+    let v: serde_json::Value = serde_json::from_str(body).map_err(|e| e.to_string())?;
+    let files = v.get("Data").and_then(|d| d.get("Files")).and_then(|f| f.as_array()).ok_or_else(|| "目录响应缺少 Data.Files".to_string())?;
+    let mut by_dir: std::collections::BTreeMap<String, (Option<String>, Option<String>)> = std::collections::BTreeMap::new();
+    for f in files {
+        if f.get("Type").and_then(|t| t.as_str()) != Some("blob") { continue; }
+        let Some(path) = f.get("Path").and_then(|p| p.as_str()) else { continue };
+        let dir = path.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default();
+        let name = path.rsplit_once('/').map(|(_, n)| n).unwrap_or(path);
+        let lower = name.to_ascii_lowercase();
+        let e = by_dir.entry(dir).or_insert((None, None));
+        if lower.ends_with(".pth") { e.0 = Some(path.to_string()); }
+        else if lower.ends_with(".index") { e.1 = Some(path.to_string()); }
+    }
+    let langs = ["中文", "日语", "英语", "韩语"];
+    let mut models = Vec::new();
+    for (dir, (pth, index)) in by_dir {
+        let Some(pth) = pth else { continue };
+        let parts: Vec<&str> = dir.split('/').collect();
+        let gen = parts.first().copied().unwrap_or("");
+        let sr = if gen.contains("40k") { 40000 } else if gen.contains("48k") { 48000 } else if gen.contains("32k") { 32000 } else { 0 };
+        let has_lang = parts.len() > 3 && langs.contains(&parts[2]);
+        models.push(serde_json::json!({
+            "id": format!("rvc:{dir}"), "name": parts.last().copied().unwrap_or(""), "work": parts.get(1).copied().unwrap_or(""),
+            "lang": if has_lang { parts[2] } else { "未标语言" }, "sr": sr, "gen": gen, "engine": "rvc", "repo": "rvc",
+            "pth": pth, "pthSize": 0, "index": index.unwrap_or_default(), "indexSize": 0,
+        }));
+    }
+    Ok(serde_json::json!({ "generated": format!("unix:{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)), "refreshed": true, "models": models }))
+}
+
+#[tauri::command]
+async fn rvc_refresh_catalog() -> serde_json::Value {
+    tauri::async_runtime::spawn_blocking(move || {
+        let out = match Command::new("curl.exe").args(["-L", "--silent", "--show-error", "--max-time", "30", RVC_CATALOG_API]).output() {
+            Ok(o) => o, Err(e) => return oto_err(&format!("curl 不可用: {e}")),
+        };
+        if !out.status.success() { return oto_err(&String::from_utf8_lossy(&out.stderr).chars().rev().take(400).collect::<String>().chars().rev().collect::<String>()); }
+        let body = String::from_utf8_lossy(&out.stdout).to_string();
+        let catalog = match rvc_catalog_from_api(&body) { Ok(c) => c, Err(e) => return oto_err(&e) };
+        let n = catalog.get("models").and_then(|m| m.as_array()).map(|m| m.len()).unwrap_or(0);
+        let cache = data_dir().join("rvc-catalog.json");
+        let _ = std::fs::create_dir_all(cache.parent().unwrap_or_else(|| Path::new(".")));
+        if let Err(e) = std::fs::write(&cache, serde_json::to_string_pretty(&catalog).unwrap_or_default()) { return oto_err(&e.to_string()); }
+        serde_json::json!({ "ok": true, "count": n, "generated": catalog.get("generated").cloned().unwrap_or(serde_json::Value::Null) })
+    }).await.unwrap_or_else(|e| oto_err(&e.to_string()))
+}
+
 fn data_root_overridden() -> bool {
     std::env::var("FUFUMIDI_DATA_ROOT").map(|p| !p.trim().is_empty()).unwrap_or(false)
 }
@@ -4360,7 +4411,7 @@ fn main() {
             pick_file, pick_directory, pick_audio, pick_audio_files, pick_image, pick_music_xml,
             list_midi_files, list_audio_files, library_stats, read_soundfont, read_binary, save_binary,
             convert, probe, refine, cancel, set_transcribe_pause, engine_worker_status,
-            utau_list_voicebanks, voicebank_unified, utau_read_oto, utau_save_oto, utau_delete_voicebank, utau_import_voicebank_zip, utau_export_voicebank, utau_export_voicebank_zip, take_pending_open_file, rvc_list, rvc_remove, rvc_pick_folder, rvc_pick_files, rvc_pick_zip, rvc_import_folder, rvc_import_files, rvc_import_zip, rvc_probe
+            utau_list_voicebanks, voicebank_unified, utau_read_oto, utau_save_oto, utau_delete_voicebank, utau_import_voicebank_zip, utau_export_voicebank, utau_export_voicebank_zip, take_pending_open_file, rvc_list, rvc_remove, rvc_pick_folder, rvc_pick_files, rvc_pick_zip, rvc_import_folder, rvc_import_files, rvc_import_zip, rvc_probe, rvc_catalog, rvc_open_catalog_page, rvc_refresh_catalog
         ])
         .setup(|_app| {
             println!("[fufumidi-shell] {}", serde_json::to_string(&host_info_json()).unwrap_or_default());
@@ -6143,5 +6194,24 @@ mod single_instance_tests {
         });
         assert!(super::single_instance_forward_at(port2, None));
         assert_eq!(h2.join().unwrap(), "__FOCUS__");
+    }
+}
+
+#[cfg(test)]
+mod rvc_catalog_api_tests {
+    #[test]
+    fn parses_modelscope_file_tree() {
+        let body = r#"{"Data":{"Files":[
+            {"Type":"blob","Path":"40k/作品/中文/角色/voice.pth","Size":123},
+            {"Type":"blob","Path":"40k/作品/中文/角色/voice.index","Size":4},
+            {"Type":"tree","Path":"40k/作品/中文/角色"}
+        ]}}"#;
+        let v = super::rvc_catalog_from_api(body).unwrap();
+        let m = &v["models"][0];
+        assert_eq!(m["engine"], "rvc");
+        assert_eq!(m["name"], "角色");
+        assert_eq!(m["sr"], 40000);
+        assert_eq!(m["index"], "40k/作品/中文/角色/voice.index");
+        assert!(super::rvc_catalog_from_api("{}").is_err());
     }
 }

@@ -6,9 +6,9 @@
 | 指标 | 数值 |
 |---|---:|
 | 前端调用的 bridge 方法（去重） | 213 |
-| Tauri 顶层方法 | 118 |
+| Tauri 顶层方法 | 119 |
 | Tauri 嵌套方法 | 50 |
-| **未找到实现** | **83** |
+| **未找到实现** | **82** |
 
 ## 未找到实现的方法
 
@@ -66,7 +66,6 @@
 - `probeVoicebank` — frontend/src/components/sing/VoicebankPanel.vue
 - `project` — frontend/src/views/ViewEdit.vue
 - `project.autosave` — frontend/src/core/session.js
-- `rvcRefreshCatalog` — frontend/src/components/cover/RvcModelPanel.vue
 - `separateAudio` — frontend/src/views/ViewTranscribe.vue
 - `sfWorkshop` — frontend/src/views/ViewSoundfonts.vue
 - `soundfonts` — frontend/src/audio.js
