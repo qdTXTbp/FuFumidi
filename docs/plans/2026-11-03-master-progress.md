@@ -306,7 +306,7 @@
   localStorage 持久化、冲突检测、重置）；App.onKey 改为按注册表分发；SettingsPanel
   快捷键页支持点击录制（Esc 取消、冲突提示）并保留只读编辑器键位表。
   E2E `shortcuts-config.mjs`：把播放/暂停改为 T → 持久化/按钮显示 → 关闭设置后按 T
-  真实播放再暂停通过。
+  真实播放再暂停通过；另有 headless 单测（事件组合键/持久化/冲突拒绝/reset/坏 localStorage 回退）。
 - **P-015 编排进入播放（事件级验收）**：新增 E2E `arrange-playback.mjs`：
   导入两轨 MIDI → 编排页 → 等 `song.arrange` 回写 → 校验移动 clip 改变 player.events 起点、
   静音 clip 减少事件数；用例通过，E2E 总数 36。真实声卡听感仍待人工验收。
