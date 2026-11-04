@@ -109,5 +109,33 @@ export default async function (app) {
   await new Promise((r) => setTimeout(r, 150));
   if (await count() !== batchBase - 2) throw new Error('deleteNotes redo 未全部再删');
 
+  // 批量字段修改：selectAll + transpose/setSelVel 也必须走 update 命令
+  await clear();
+  await app.eval("(" + E + ".selectAll(), true)");
+  const midiBefore = await app.eval("(" + S + ".tracks[0].notes || []).map(n => n.midi)");
+  await app.eval("(" + E + ".transposeSelected(2), true)");
+  await new Promise((r) => setTimeout(r, 150));
+  let midiAfter = await app.eval("(" + S + ".tracks[0].notes || []).map(n => n.midi)");
+  if (JSON.stringify(midiAfter) !== JSON.stringify(midiBefore.map((m) => m + 2))) throw new Error('transposeSelected 未批量移调: ' + JSON.stringify(midiAfter));
+  await app.key('Ctrl+Z');
+  await new Promise((r) => setTimeout(r, 150));
+  midiAfter = await app.eval("(" + S + ".tracks[0].notes || []).map(n => n.midi)");
+  if (JSON.stringify(midiAfter) !== JSON.stringify(midiBefore)) throw new Error('transpose undo 未恢复: ' + JSON.stringify(midiAfter));
+  await app.key('Ctrl+Shift+Z');
+  await new Promise((r) => setTimeout(r, 150));
+  midiAfter = await app.eval("(" + S + ".tracks[0].notes || []).map(n => n.midi)");
+  if (JSON.stringify(midiAfter) !== JSON.stringify(midiBefore.map((m) => m + 2))) throw new Error('transpose redo 未恢复: ' + JSON.stringify(midiAfter));
+
+  await app.eval("(" + E + ".selectAll(), true)");
+  const velBefore = await app.eval("(" + S + ".tracks[0].notes || []).map(n => n.vel)");
+  await app.eval("(" + E + ".setSelVel(42), true)");
+  await new Promise((r) => setTimeout(r, 150));
+  const velAfter = await app.eval("(" + S + ".tracks[0].notes || []).map(n => n.vel)");
+  if (!velAfter.every((v) => v === 42)) throw new Error('setSelVel 未批量应用: ' + JSON.stringify(velAfter));
+  await app.key('Ctrl+Z');
+  await new Promise((r) => setTimeout(r, 150));
+  const velUndo = await app.eval("(" + S + ".tracks[0].notes || []).map(n => n.vel)");
+  if (JSON.stringify(velUndo) !== JSON.stringify(velBefore)) throw new Error('setSelVel undo 未恢复: ' + JSON.stringify(velUndo));
+
   // 隐藏窗口下 Page.captureScreenshot 偶发超时；本用例的验收证据是上面的状态断言，不依赖截图。
 }

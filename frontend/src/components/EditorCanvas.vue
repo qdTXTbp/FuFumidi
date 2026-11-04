@@ -411,6 +411,32 @@ function pushNoteCommand(build, ti, noteCount) {
   try { cmd = build(); } catch (e) { cmd = null; }
   return pushCommandEntry(cmd, ti, noteCount);
 }
+/** P-011 第三批：单轨批量字段修改走一条 update 命令；跨轨仍走快照（索引/轨道归属不混）。
+    mutate 在命令工厂之前执行；before 必须先于 mutate 捕获。 */
+function editNotesWithCommand(arr, fields, label, mutate) {
+  const tr = curTrack(); if (!tr || !arr || !arr.length) return 0;
+  const singleTrack = arr.every((n) => tr.notes.includes(n));
+  if (!singleTrack) {
+    pushState(label);
+    mutate();
+    afterEdit();
+    return arr.length;
+  }
+  const before = arr.map((n) => {
+    const vals = {};
+    for (const f of fields) vals[f] = n[f];
+    return { n, vals };
+  });
+  mutate();
+  afterEdit();
+  const updates = before.map((x) => {
+    const after = {};
+    for (const f of fields) after[f] = x.n[f];
+    return { idx: tr.notes.indexOf(x.n), note: x.n, before: x.vals, after };
+  }).filter((u) => u.idx >= 0);
+  if (updates.length) pushNoteCommand(() => makeUpdateNotesCommand(tr, updates, label), props.trackIndex, tr.notes.length);
+  return arr.length;
+}
 
 /** 记录「修改前」的轨道快照；label 只用于历史面板展示，不影响撤销语义 */
 function pushState(label) {
@@ -554,33 +580,33 @@ function quantize(arr, ratio, opts = {}) {
   const s = song(); const st = (s.tpb * (ratio || props.snapRatio)) || 1;
   const strength = opts.strength == null ? 1 : Math.max(0, Math.min(1, Number(opts.strength)));
   const quantizeEnd = opts.end !== false;
-  pushState('量化');
-  for (const n of arr) {
-    const q = tick => Math.max(0, Math.round(tick / st) * st);
-    const len = n.end - n.start;
-    const ns = Math.max(0, Math.round(n.start + (q(n.start) - n.start) * strength));
-    if (quantizeEnd) {
-      const qe = q(n.end);
-      n.end = Math.max(ns + 1, Math.round(n.end + (qe - n.end) * strength));
-    } else {
-      n.end = Math.max(ns + 1, ns + len);
+  editNotesWithCommand(arr, ['start', 'end'], '量化', () => {
+    for (const n of arr) {
+      const q = tick => Math.max(0, Math.round(tick / st) * st);
+      const len = n.end - n.start;
+      const ns = Math.max(0, Math.round(n.start + (q(n.start) - n.start) * strength));
+      if (quantizeEnd) {
+        const qe = q(n.end);
+        n.end = Math.max(ns + 1, Math.round(n.end + (qe - n.end) * strength));
+      } else {
+        n.end = Math.max(ns + 1, ns + len);
+      }
+      n.start = ns;
     }
-    n.start = ns;
-  }
-  afterEdit();
+  });
 }
 function transpose(arr, d) {
   const tr = curTrack(); if (!tr || !arr.length) return;
-  pushState('移调');
-  for (const n of arr) n.midi = clamp(n.midi + d, 0, 127);
-  afterEdit();
+  editNotesWithCommand(arr, ['midi'], '移调', () => {
+    for (const n of arr) n.midi = clamp(n.midi + d, 0, 127);
+  });
 }
 function velRamp(arr, dir) {
   const tr = curTrack(); if (!tr || arr.length < 2) return;
-  pushState('力度');
   const sorted = arr.slice().sort((a, b) => a.start - b.start);
-  sorted.forEach((n, i) => { n.vel = clamp(Math.round(n.vel + dir * i), 1, 127); });
-  afterEdit();
+  editNotesWithCommand(sorted, ['vel'], '力度', () => {
+    sorted.forEach((n, i) => { n.vel = clamp(Math.round(n.vel + dir * i), 1, 127); });
+  });
 }
 /* 音符数组按 start 升序（同起点按音高）：仅在已乱序时才真正排序，代价 O(n) 检查 */
 function sortNotes(ns) {
@@ -591,15 +617,12 @@ function sortNotes(ns) {
 /* 静音：仅影响发声与显示，不改动力度/时值（撤销可回退） */
 function toggleMute(n) {
   const tr = curTrack(); if (!tr || !n) return;
-  pushState('静音');
-  n.muted = !n.muted;
-  afterEdit();
+  editNotesWithCommand([n], ['muted'], '静音', () => { n.muted = !n.muted; });
 }
 function setSelMuted(on) {
   const tr = curTrack(); if (!tr || !selection.size) return;
-  pushState('静音');
-  for (const n of selection) n.muted = !!on;
-  afterEdit();
+  const arr = [...selection];
+  editNotesWithCommand(arr, ['muted'], '静音', () => { for (const n of arr) n.muted = !!on; });
 }
 /* 选区静音状态：全静音返回 true，全不静音返回 false，混合返回 null */
 function selMuted() {
@@ -1953,41 +1976,38 @@ function selInfo() {
 }
 function setSelBend(v) {
   const tr = curTrack(); if (!tr || !selection.size) return;
-  pushState('MPE 弯音');
-  for (const n of selection) n.bend = clamp(Number(v) || 0, -12, 12);
-  afterEdit();
+  const arr = [...selection];
+  editNotesWithCommand(arr, ['bend'], 'MPE 弯音', () => { for (const n of arr) n.bend = clamp(Number(v) || 0, -12, 12); });
 }
 function setSelVel(v) {
   const tr = curTrack(); if (!tr || !selection.size) return;
-  pushState('力度');
-  for (const n of selection) n.vel = clamp(Math.round(v), 1, 127);
-  afterEdit();
+  const arr = [...selection];
+  editNotesWithCommand(arr, ['vel'], '力度', () => { for (const n of arr) n.vel = clamp(Math.round(v), 1, 127); });
 }
 function setSelMidi(m) {
   const tr = curTrack(); if (!tr || !selection.size) return;
-  pushState('移调');
-  for (const n of selection) n.midi = clamp(Math.round(m), 0, 127);
-  afterEdit();
+  const arr = [...selection];
+  editNotesWithCommand(arr, ['midi'], '移调', () => { for (const n of arr) n.midi = clamp(Math.round(m), 0, 127); });
 }
 function setSelStart(t) {
   const tr = curTrack(); if (!tr || !selection.size) return;
-  pushState('移动');
-  for (const n of selection) { const d = Math.round(t) - n.start; n.start = Math.max(0, Math.round(t)); n.end = Math.max(n.start + 1, n.end + d); }
-  afterEdit();
+  const arr = [...selection];
+  editNotesWithCommand(arr, ['start', 'end'], '移动', () => {
+    for (const n of arr) { const d = Math.round(t) - n.start; n.start = Math.max(0, Math.round(t)); n.end = Math.max(n.start + 1, n.end + d); }
+  });
 }
 function setSelLen(l) {
   const tr = curTrack(); if (!tr || !selection.size) return;
-  pushState('编辑');
-  for (const n of selection) n.end = Math.max(n.start + 1, n.start + Math.round(l));
-  afterEdit();
+  const arr = [...selection];
+  editNotesWithCommand(arr, ['end'], '编辑', () => { for (const n of arr) n.end = Math.max(n.start + 1, n.start + Math.round(l)); });
 }
 /* 力度曲线：arr 为按 start 排序后每个选中音符的新力度（1-127） */
 function applyVelCurve(arr) {
   const tr = curTrack(); if (!tr || !selection.size || !arr) return 0;
-  pushState('力度');
   const sorted = [...selection].sort((a, b) => a.start - b.start);
-  sorted.forEach((n, i) => { const v = arr[i]; if (v != null) n.vel = clamp(Math.round(v), 1, 127); });
-  afterEdit();
+  editNotesWithCommand(sorted, ['vel'], '力度', () => {
+    sorted.forEach((n, i) => { const v = arr[i]; if (v != null) n.vel = clamp(Math.round(v), 1, 127); });
+  });
   return sorted.length;
 }
 /* 列表编辑器：用新数组整体替换当前轨道音符（单个撤销点） */
