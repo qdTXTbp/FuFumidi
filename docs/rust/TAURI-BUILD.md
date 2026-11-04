@@ -231,3 +231,9 @@ Tauri 默认从 GitHub 下载 `nsis-3.13.zip`，本机直连超时。已把工�
 - settings 保存改为顶层合并，防止部分保存清掉 data_root_last/音色库；
 - release 2m33s、0 warning；安装目录产物 16,946,688 bytes，SHA-256 `d11147f126f2cd5c1ec64decdef73a794a81b841d4d39ffd1f9a82f54ca949d5`；
 - full E2E 41/41；cargo 121/121；clippy 0。
+
+## 32. 2026-11-04 renderer-ready 计时
+
+- renderer_ready 命令写 logs/tauri-start.log（elapsedMs=自进程启动）；App 恢复曲库后调用；
+- 用于确认冷启动到底卡在 WebView2、渲染还是曲库恢复；
+- release 2m19s、0 warning；安装版 16,950,272 bytes，SHA-256 `92bab2b11e220212cb1b450d9514c6015b5453e880066bedc0d613f0730520d5`。

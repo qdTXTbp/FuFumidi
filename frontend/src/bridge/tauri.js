@@ -178,6 +178,7 @@ export function installTauriBridge() {
       launchUpdater: (channel) => call('launch_updater', { channel }),
     },
     // 主程序检查更新（对比 GitHub latest 与当前版本，有新版才拉起更新器）
+    rendererReady: () => call('renderer_ready'),
     getVersion: () => call('app_version'),
     dataRoot: () => call('data_root'),
     storage: {

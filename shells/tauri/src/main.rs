@@ -1886,6 +1886,13 @@ fn python_selfcheck() -> serde_json::Value {
 }
 
 #[tauri::command]
+fn renderer_ready() -> serde_json::Value {
+    let ms = PROCESS_START.get().map(|s| s.elapsed().as_millis()).unwrap_or(0);
+    tauri_log(&format!("renderer-ready elapsedMs={ms}"));
+    serde_json::json!({ "ok": true, "elapsedMs": ms })
+}
+
+#[tauri::command]
 fn load_settings() -> serde_json::Value {
     read_json(&settings_path())
 }
@@ -5200,6 +5207,8 @@ fn engine_self_check() -> serde_json::Value {
         None => serde_json::json!({ "ok": false, "pid": pid, "error": "engine worker did not return ###RESULT" }),
     }
 }
+static PROCESS_START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
 /// 无窗口排障日志：Tauri 启动/退出/panic 追加到数据根 logs/tauri-start.log。
 fn tauri_log(msg: &str) {
     let dir = data_dir().join("logs");
@@ -5212,6 +5221,7 @@ fn tauri_log(msg: &str) {
 }
 
 fn main() {
+    let _ = PROCESS_START.set(std::time::Instant::now());
     std::panic::set_hook(Box::new(|info| {
         let msg = format!("panic: {}", info);
         let dir = data_dir().join("logs");
@@ -5277,7 +5287,7 @@ fn main() {
         .manage(separation_state)
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
-            load_settings, save_settings, update_sources, update_set_preferred_source, db_kv_get, db_kv_set,
+            renderer_ready, load_settings, save_settings, update_sources, update_set_preferred_source, db_kv_get, db_kv_set,
             tasks_list, tasks_cancel, tasks_clear_finished, db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, cover_singers, cover_pick_audio, cover_pick_dir, cover_open, cover_cancel, cover_run, video_export_begin, video_export_write, video_export_abort, video_export_end, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, wallpaper_set_desktop, gpu_status, gpu_uninstall, gpu_unified_memory_experiment, plugins_list, plugins_rescan, plugins_set_enabled, plugins_installed_list, plugins_platform_info, plugins_catalog, plugins_open_platform, plugins_install_from_platform, plugins_confirm_install, plugins_cancel_install, plugins_open_dir, plugins_open_docs, open_edit_guide, sf_workshop_list, sf_workshop_import, sf_workshop_delete, sf_workshop_open_dir, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
