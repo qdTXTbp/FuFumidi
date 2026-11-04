@@ -1597,6 +1597,71 @@ fn cover_run(state: State<'_, CoverState>, app: AppHandle, opts: serde_json::Val
     serde_json::json!({ "ok": true, "id": id })
 }
 
+struct SeparateJob { child: std::process::Child }
+struct SeparationState(Arc<Mutex<Option<SeparateJob>>>);
+static SEPARATE_CANCELED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn separate_args(opts: &serde_json::Value, models_root: &Path, outdir: &Path) -> Result<Vec<String>, String> {
+    let audio = opts.get("audio").and_then(|v| v.as_str()).unwrap_or("");
+    if audio.is_empty() || !Path::new(audio).is_file() { return Err("请先选择要分离的音频".into()); }
+    let id = opts.get("sep_model").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).unwrap_or("");
+    if id.is_empty() { return Err("请先选择处理模型".into()); }
+    let (model, config, arch) = cover_sep_resolve_at(models_root, id)?;
+    let mut a = vec!["separate".to_string(), audio.to_string(), "--output".into(), oto_path_text(outdir), "--model".into(), model.display().to_string()];
+    if let Some(c) = config { a.extend(["--config".into(), c.display().to_string()]); }
+    a.extend(["--arch".into(), arch]);
+    if let Some(v) = opts.get("chunk_size").and_then(|v| v.as_u64()) { a.extend(["--chunk-size".into(), v.to_string()]); }
+    if let Some(v) = opts.get("num_overlap").and_then(|v| v.as_u64()) { a.extend(["--num-overlap".into(), v.to_string()]); }
+    a.extend(["--batch-size".into(), opts.get("batch_size").and_then(|v| v.as_u64()).unwrap_or(1).to_string()]);
+    if let Some(stems) = opts.get("stems").and_then(|v| v.as_array()) { let v: Vec<String> = stems.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect(); if !v.is_empty() { a.extend(["--stems".into(), v.join(",")]); } }
+    if let Some(f) = opts.get("format").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) { a.extend(["--format".into(), f.to_ascii_lowercase()]); }
+    if opts.get("tta").and_then(|v| v.as_bool()).unwrap_or(false) { a.push("--tta".into()); }
+    if opts.get("normalize").and_then(|v| v.as_bool()).unwrap_or(true) { a.push("--normalize".into()); }
+    Ok(a)
+}
+
+#[tauri::command]
+async fn separate_audio(state: State<'_, SeparationState>, app: AppHandle, opts: serde_json::Value) -> Result<serde_json::Value, String> {
+    if state.0.lock().unwrap_or_else(|e| e.into_inner()).is_some() { return Err("已有一个分离任务在跑".into()); }
+    SEPARATE_CANCELED.store(false, Ordering::SeqCst);
+    let audio = opts.get("audio").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let audio_path = PathBuf::from(&audio);
+    if audio.is_empty() || !audio_path.is_file() { return Err("请先选择要分离的音频".into()); }
+    let outdir = opts.get("out_dir").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(PathBuf::from).unwrap_or_else(|| audio_path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf());
+    if let Err(e) = std::fs::create_dir_all(&outdir) { return Err(format!("输出目录不可写：{e}")); }
+    let args = match separate_args(&opts, &models_dir(), &outdir) { Ok(a) => a, Err(e) => return Err(e) };
+    let id = opts.get("id").and_then(|v| v.as_str()).unwrap_or("sep").to_string();
+    let (Some(py), Some(engine)) = (python_path(), engine_dir()) else { return Err("Python/引擎目录不存在".into()) };
+    let script = engine.join("music2midi.py");
+    if !script.is_file() { return Err("music2midi.py 不存在".into()); }
+    let mut child = match Command::new(&py).current_dir(&engine).arg(&script).args(&args).env("PYTHONIOENCODING", "utf-8").stdout(Stdio::piped()).stderr(Stdio::null()).creation_flags(0x08000000).spawn() { Ok(c) => c, Err(e) => return Err(e.to_string()) };
+    let stdout = child.stdout.take();
+    *state.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(SeparateJob { child });
+    let shared = state.0.clone(); let app2 = app.clone(); let id2 = id.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let mut result: Option<serde_json::Value> = None;
+        if let Some(out) = stdout {
+            for line in BufReader::new(out).lines().map_while(Result::ok) {
+                let t = line.trim();
+                if let Some(rest) = t.strip_prefix("###PROG ") {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(rest) { let _ = app2.emit("engine:separate:progress", v); }
+                    continue;
+                }
+                if let Some(rest) = t.strip_prefix("###RESULT ") { result = serde_json::from_str::<serde_json::Value>(rest).ok(); continue; }
+                let _ = app2.emit("engine:separate:log", serde_json::json!({ "id": id2, "line": t }));
+            }
+        }
+        { let mut g = shared.lock().unwrap_or_else(|e| e.into_inner()); if let Some(mut job) = g.take() { let _ = job.child.wait(); } }
+        let aborted = SEPARATE_CANCELED.load(Ordering::SeqCst);
+        match result {
+            Some(mut v) => { if aborted { v["ok"] = serde_json::json!(false); v["error"] = serde_json::json!("已取消"); v["aborted"] = serde_json::json!(true); } serde_json::json!({ "ok": v.get("ok").and_then(|x| x.as_bool()).unwrap_or(false), "result": v }) },
+            None => serde_json::json!({ "ok": false, "error": if aborted { "已取消" } else { "引擎未返回结果" } }),
+        }
+    }).await.map_err(|e| e.to_string())?;
+    let outputs = result.get("result").and_then(|r| r.get("outputs")).cloned().unwrap_or_else(|| serde_json::json!([]));
+    Ok(serde_json::json!({ "ok": result.get("ok").and_then(|v| v.as_bool()).unwrap_or(false), "outputs": outputs, "out_dir": oto_path_text(&outdir), "error": result.get("error").cloned().unwrap_or(serde_json::Value::Null), "result": result.get("result").cloned().unwrap_or(serde_json::Value::Null) }))
+}
+
 fn data_root_overridden() -> bool {
     std::env::var("FUFUMIDI_DATA_ROOT").map(|p| !p.trim().is_empty()).unwrap_or(false)
 }
@@ -4842,7 +4907,15 @@ fn probe() -> serde_json::Value { engine_probe() }
 ///    和旧前端“忽略 id、砍当前 worker”的行为；
 /// 4. 其余返回 no running worker：**cap>1 的未知 id 不猜、不误杀**。
 #[tauri::command]
-fn cancel(state: State<'_, WorkerState>, id: Option<String>) -> serde_json::Value {
+fn cancel(state: State<'_, WorkerState>, separation: State<'_, SeparationState>, id: Option<String>) -> serde_json::Value {
+    if let Some(raw) = id.as_deref().filter(|x| x.starts_with("sep")) {
+        let mut g = separation.0.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(mut job) = g.take() {
+            SEPARATE_CANCELED.store(true, Ordering::SeqCst);
+            let _ = job.child.kill();
+            return serde_json::json!({ "ok": true, "canceled": true, "id": raw });
+        }
+    }
     let status = state.pool.status();
     let target = {
         let jobs = state.jobs.lock().unwrap_or_else(|err| err.into_inner());
@@ -5003,6 +5076,7 @@ fn main() {
     let update_preferred_state = UpdatePreferredState(Mutex::new(None));
     let video_export_state = VideoExportState(Arc::new(Mutex::new(HashMap::new())));
     let cover_state = CoverState(Arc::new(Mutex::new(None)));
+    let separation_state = SeparationState(Arc::new(Mutex::new(None)));
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(state)
@@ -5011,6 +5085,7 @@ fn main() {
         .manage(update_preferred_state)
         .manage(video_export_state)
         .manage(cover_state)
+        .manage(separation_state)
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, update_sources, update_set_preferred_source, db_kv_get, db_kv_set,
@@ -5020,7 +5095,7 @@ fn main() {
             presets_reorder, presets_reorder_to, presets_restore,
             pick_file, pick_directory, pick_audio, pick_audio_files, pick_image, pick_music_xml,
             list_midi_files, list_audio_files, library_stats, read_soundfont, read_binary, save_binary,
-            convert, probe, refine, cancel, set_transcribe_pause, engine_worker_status,
+            convert, probe, refine, separate_audio, cancel, set_transcribe_pause, engine_worker_status,
             utau_list_voicebanks, voicebank_unified, utau_read_oto, utau_save_oto, utau_delete_voicebank, utau_import_voicebank_zip, utau_export_voicebank, utau_export_voicebank_zip, model_delete, take_pending_open_file, rvc_list, rvc_remove, rvc_pick_folder, rvc_pick_files, rvc_pick_zip, rvc_import_folder, rvc_import_files, rvc_import_zip, rvc_probe, rvc_catalog, rvc_open_catalog_page, rvc_refresh_catalog
         ])
         .setup(move |app| {
@@ -6994,5 +7069,32 @@ mod cover_singers_tests {
         assert_eq!(out[0]["arch"], "RVC · v2 · 40000");
         assert!(out[0]["note"].as_str().unwrap().contains("引用式"));
         assert!(out[1]["note"].as_str().unwrap().contains("m.pth"));
+    }
+}
+
+
+#[cfg(test)]
+mod separate_args_tests {
+    #[test]
+    fn builds_separate_args_and_rejects_unknown() {
+        let root = std::env::temp_dir().join(format!("fufumidi-sep-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let models = root.join("models");
+        let model = models.join("multi/htdemucs4_6stems");
+        std::fs::create_dir_all(&model).unwrap();
+        std::fs::write(model.join("model.safetensors"), b"x").unwrap();
+        std::fs::write(model.join("config.yaml"), b"y").unwrap();
+        let audio = root.join("a.wav"); std::fs::write(&audio, b"x").unwrap();
+        let out = root.join("out");
+        let opts = serde_json::json!({ "audio": audio.display().to_string(), "sep_model": "htdemucs4_6stems", "chunk_size": 44100, "stems": ["vocals", "other"], "format": "WAV" });
+        let a = super::separate_args(&opts, &models, &out).unwrap();
+        assert_eq!(a[0], "separate");
+        assert!(a.contains(&"--model".to_string()));
+        assert!(a.contains(&"--arch".to_string()));
+        assert!(a.contains(&"HTDemucs".to_string()));
+        assert!(a.contains(&"vocals,other".to_string()));
+        assert!(a.contains(&"wav".to_string()));
+        let bad = serde_json::json!({ "audio": audio.display().to_string(), "sep_model": "nope" });
+        assert!(super::separate_args(&bad, &models, &out).is_err());
+        let _ = std::fs::remove_dir_all(root);
     }
 }

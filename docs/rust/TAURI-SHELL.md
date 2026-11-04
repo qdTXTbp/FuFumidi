@@ -77,6 +77,7 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 | audio_duration | 读文件头取时长：WAV RIFF/fmt/data、FLAC STREAMINFO、MP3 逐帧扫描、M4A/MP4 mvhd、OGG Vorbis/Opus 页 granule、AIFF/AIFC COMM；其他格式 unsupported | Rust 单测：1s WAV/FLAC/M4A/OGG/AIFF、100 帧 MP3（约 2.61s）、坏文件 false |
 | export_audio | 渲染端字节落盘：文件名清洗、原子写、sidecar manifest（SHA-256/格式/采样率/时长/ISO createdAt），支持 targetPath 或保存对话框 | Rust 单测：字节落盘、manifest sha256/采样率/ISO 时间、非法名清洗、空字节拒绝 |
 | export_stems_zip | 分轨 ZIP 打包（≤100 轨、总 ≤2GB、文件名清洗、targetPath 或保存对话框） | Rust 单测：两轨 ZIP 条目/字节、非法名清洗、空列表拒绝 |
+| separate_audio | 同步等待 music2midi.py separate：解析 sep_model（复用 RVC 分离解析）、输出目录/命名、chunk/overlap/batch/stems/format/tta/normalize；stdout PROG/RESULT 转发 engine:separate:*；cancel 对 sepN kill 子进程 | Rust 单测 args（HTDemucs/stems/format/未知 id）；真实分离未跑 |
 | video_export_begin / write / abort / end | 流式落盘：begin 建 temp 文件、write 追加、abort 删除、end 保存对话框 + ffmpeg 封装（imageio_ffmpeg，H.264 copy + AAC）；h264/webm | 无单测；真实编码/封装未跑 |
 | pick_cover | 选图片→data URL（png/jpeg/webp/bmp，≤6MB） | Rust 单测：jpeg MIME/base64、gif 拒绝、>6MB 拒绝；真实对话框不在无头会话触发 |
 | export_dawproject | DAWproject ZIP（project.xml/metadata.xml，≤200 文件，拒绝路径穿越，对话框或 filePath） | Rust 单测：两文件 ZIP 内容、../ 条目跳过、空列表拒绝 |
@@ -244,17 +245,17 @@ GPU 环境（未设 `FUFUMIDI_DISABLE_GPU=1`）自动 −1，`FUFUMIDI_MAX_WORKE
 
 - `npm run tauri:coverage` / `node scripts/tauri/ipc-coverage.mjs --write`：
   只解析 preload 与 Tauri 桥的方法名，不启动窗口；
-- 当前：preload 265 方法 / Tauri **178** 方法 / **88 未映射**；preload invoke 250 / tauri call **172**；
+- 当前：preload 265 方法 / Tauri **181** 方法 / **85 未映射**；preload invoke 250 / tauri call **173**；
 - 缺口分类：设置杂项 28、diffsinger 19、utau/voicebank 18、模型/安装 14、导出/渲染 14、
   资源/音频 13、rvc 12、曲库/数据 11、文件/诊断 11、事件/窗口 10、GPU 8、更新/测速 6、其他 4；
 - 明细见 [IPC-COVERAGE.md](IPC-COVERAGE.md)。
 - 前端实际调用审计：`npm run tauri:call-audit`（`docs/rust/BRIDGE-CALLS.md`），
   当前 212 个去重调用 / 104 未找到实现（启发式，含动态调用误报）。
-- 参数契约审计：`npm run tauri:arg-audit`（`docs/rust/ARG-AUDIT.md`），当前 156 命令 / 23 不一致
+- 参数契约审计：`npm run tauri:arg-audit`（`docs/rust/ARG-AUDIT.md`），当前 157 命令 / 23 不一致
   （主要来自尚未实现的 bridge 命令）；已修正 readSidecarLyrics/modelImportLocal/renameMidi/
   projectOpen/autosaveRead/autosaveClear 的 JS camelCase→Rust snake_case 参数错配。
 
-## 4. 当前命令清单（156 条）
+## 4. 当前命令清单（157 条）
 
 host_info, app_version, ping, python_selfcheck, engine_probe, convert, engine_worker_status,
 load_settings, save_settings, update_sources, update_set_preferred_source, utau_list_voicebanks, voicebank_unified, utau_read_oto, utau_save_oto, utau_delete_voicebank, utau_import_voicebank_zip, utau_export_voicebank, utau_export_voicebank_zip, cover_singers, cover_pick_audio, cover_pick_dir, cover_open, cover_cancel, cover_run, rvc_list, rvc_remove, rvc_pick_folder, rvc_pick_files, rvc_import_folder, rvc_import_files, rvc_pick_zip, rvc_import_zip, rvc_catalog, rvc_open_catalog_page, rvc_probe, rvc_refresh_catalog, take_pending_open_file, db_kv_get, db_kv_set, db_status, db_songs_list, db_songs_put,

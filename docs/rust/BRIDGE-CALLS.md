@@ -6,9 +6,9 @@
 | 指标 | 数值 |
 |---|---:|
 | 前端调用的 bridge 方法（去重） | 213 |
-| Tauri 顶层方法 | 130 |
+| Tauri 顶层方法 | 133 |
 | Tauri 嵌套方法 | 61 |
-| **未找到实现** | **62** |
+| **未找到实现** | **59** |
 
 ## 未找到实现的方法
 
@@ -36,8 +36,6 @@
 - `omrEngine.status` — frontend/src/views/ViewResources.vue
 - `onFolderWatch` — frontend/src/components/SettingsPanel.vue
 - `onOpenFile` — frontend/src/App.vue
-- `onSeparateLog` — frontend/src/views/ViewTranscribe.vue
-- `onSeparateProgress` — frontend/src/views/ViewTranscribe.vue
 - `onSpeedtest` — frontend/src/components/SettingsPanel.vue
 - `onStemProgress` — frontend/src/views/ViewTranscribe.vue
 - `onTrayControl` — frontend/src/App.vue
@@ -52,7 +50,6 @@
 - `probeVoicebank` — frontend/src/components/sing/VoicebankPanel.vue
 - `project` — frontend/src/views/ViewEdit.vue
 - `project.autosave` — frontend/src/core/session.js
-- `separateAudio` — frontend/src/views/ViewTranscribe.vue
 - `sfWorkshop` — frontend/src/views/ViewSoundfonts.vue
 - `soundfonts` — frontend/src/audio.js
 - `soundfonts.list` — frontend/src/audio.js

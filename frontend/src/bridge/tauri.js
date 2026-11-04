@@ -262,6 +262,10 @@ export function installTauriBridge() {
       onScript: (cb) => listen('plugins:script', cb),
     },
 
+    separateAudio: (cfg) => call('separate_audio', { opts: cfg || {} }),
+    onSeparateLog: (cb) => listen('engine:separate:log', cb),
+    onSeparateProgress: (cb) => listen('engine:separate:progress', cb),
+
     // ---- 动态壁纸 ----
     coverSingers: () => call('cover_singers'),
     coverPickAudio: () => call('cover_pick_audio'),

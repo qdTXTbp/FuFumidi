@@ -556,3 +556,5 @@
 - **cover 引擎真实 analyze**：新增 `npm run tauri:cover-engine-smoke`，合成 1s WAV 跑 engine_cover.py analyze（vocals/instrumental 跳过分离）；实测 ok=true/status0/###RESULT；验证启动/读音频/协议，不含 RVC/分离/混音。
 
 - **cover 后端后全量 E2E**：隐藏全量 **41/41**（156 命令源码）；cover 桥接不影响现有页面流程。
+
+- **Tauri 人声分离**：separate_audio 同步跑 music2midi.py separate（复用分离模型解析），发 engine:separate:log/progress；cancel sepN kill；Rust args 测试；命令 **157**，覆盖 **181/85**，call 173；真实分离未跑。

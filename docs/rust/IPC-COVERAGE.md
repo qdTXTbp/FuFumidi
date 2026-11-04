@@ -5,10 +5,10 @@
 | 指标 | 数值 |
 |---|---:|
 | preload 暴露方法 | 265 |
-| Tauri 桥已映射方法 | 178 |
-| 尚未映射 | **88** |
+| Tauri 桥已映射方法 | 181 |
+| 尚未映射 | **85** |
 | preload IPC invoke 通道 | 250 |
-| Tauri call 通道 | 172 |
+| Tauri call 通道 | 173 |
 
 ## 缺口分类
 
@@ -21,11 +21,11 @@
 | 导出/渲染 | 7 |
 | 模型/安装/平台 | 6 |
 | 事件/窗口 | 6 |
-| 资源/音频/扩展 | 4 |
 | 更新/测速 | 4 |
 | 文件/诊断 | 3 |
 | 曲库/数据 | 2 |
 | 其他 | 2 |
+| 资源/音频/扩展 | 1 |
 
 ## 尚未映射的方法
 
@@ -79,8 +79,6 @@ onDiffsingerVoicebankProgress
 onHotkeyAction
 onHotkeysState
 onScoreProgress
-onSeparateLog
-onSeparateProgress
 onSpeedtest
 onStemProgress
 onTrayControl
@@ -98,7 +96,6 @@ savePath
 scoreCancel
 scoreToMidi
 searchWallhaven
-separateAudio
 setPreferredSource
 singToPinyin
 sources
