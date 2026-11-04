@@ -558,6 +558,40 @@ fn presets_restore() -> serde_json::Value {
 
 fn midi_root() -> PathBuf { data_dir().join("midi") }
 
+fn desktop_dir() -> Option<PathBuf> {
+    let base = std::env::var("USERPROFILE").ok().map(PathBuf::from)?;
+    let one = base.join("Desktop");
+    if one.is_dir() { return Some(one); }
+    let od = base.join("OneDrive").join("Desktop");
+    if od.is_dir() { return Some(od); }
+    Some(one)
+}
+
+/// 与 Electron wallpaper:defaults 同语义：桌面上的视频，最多 4 个，按名称排序。
+fn desktop_video_files(dir: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let Ok(rd) = std::fs::read_dir(dir) else { return out };
+    for e in rd.flatten() {
+        let p = e.path();
+        if !p.is_file() { continue; }
+        if let Some(ext) = p.extension().and_then(|x| x.to_str()) {
+            let ext = ext.to_ascii_lowercase();
+            if ext == "mp4" || ext == "webm" || ext == "mov" { out.push(p.display().to_string()); }
+        }
+    }
+    out.sort();
+    out.truncate(4);
+    out
+}
+
+#[tauri::command]
+fn wallpaper_defaults() -> serde_json::Value {
+    match desktop_dir() {
+        Some(d) => serde_json::json!({ "ok": true, "files": desktop_video_files(&d) }),
+        None => serde_json::json!({ "ok": false, "files": [] }),
+    }
+}
+
 /// 与 Electron library:checkMidi 同语义：只认数据根 midi/ 内、非空文件；丢失的返回给前端重建。
 fn check_midi_items(items: &[serde_json::Value], root: &Path) -> serde_json::Value {
     let root_canon = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
@@ -1019,7 +1053,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, db_kv_get, db_kv_set,
-            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, check_midi, model_list,
+            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, check_midi, wallpaper_defaults, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
@@ -1051,6 +1085,19 @@ mod check_midi_tests {
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    #[test]
+    fn desktop_videos_sorted_truncated() {
+        let root = tmpdir("wallpaper");
+        for name in ["b.mp4", "a.webm", "c.mov", "d.txt", "e.mp4", "f.mp4", "g.mp4"] {
+            std::fs::write(root.join(name), b"x").unwrap();
+        }
+        let v = super::desktop_video_files(&root);
+        assert_eq!(v.len(), 4);
+        assert!(v[0].ends_with("a.webm"));
+        assert!(v[3].ends_with("d.txt") == false);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
