@@ -84,6 +84,7 @@ export function installTauriBridge() {
     exportAudio: (payload) => call('export_audio', { payload }),
     exportStemsZip: (payload) => call('export_stems_zip', { payload }),
     pickCover: () => call('pick_cover'),
+    exportDawproject: (payload) => call('export_dawproject', { payload }),
     copyAsset: (payload) => call('copy_asset', { src: payload && payload.src, dest: payload && payload.dest }),
     openExternal: (url) => call('open_external', { url }),
     renameMidi: (p, newName) => call('rename_midi', { p, newName }),

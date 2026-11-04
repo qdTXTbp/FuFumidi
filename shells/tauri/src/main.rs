@@ -559,6 +559,45 @@ fn presets_restore() -> serde_json::Value {
 
 fn midi_root() -> PathBuf { data_dir().join("midi") }
 
+fn write_dawproject_at(target: &Path, files: &[serde_json::Value]) -> serde_json::Value {
+    if files.is_empty() { return serde_json::json!({ "ok": false, "error": "没有可导出的内容" }); }
+    if files.len() > 200 { return serde_json::json!({ "ok": false, "error": "文件过多（>200）" }); }
+    let mut items: Vec<(String, String)> = Vec::new();
+    for f in files {
+        let name = f.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let data = f.get("data").and_then(|v| v.as_str()).unwrap_or("");
+        let clean = name.replace('\\', "/");
+        if clean.is_empty() || clean.contains("..") || clean.starts_with('/') { continue; }
+        items.push((clean, data.to_string()));
+    }
+    if items.is_empty() { return serde_json::json!({ "ok": false, "error": "没有可导出的文件" }); }
+    if let Some(parent) = target.parent() { let _ = std::fs::create_dir_all(parent); }
+    let file = match std::fs::File::create(target) { Ok(f) => f, Err(e) => return serde_json::json!({ "ok": false, "error": e.to_string() }) };
+    let mut zip = zip::ZipWriter::new(file);
+    let opts = zip::write::SimpleFileOptions::default();
+    for (name, data) in &items {
+        if let Err(e) = zip.start_file(name, opts) { return serde_json::json!({ "ok": false, "error": e.to_string() }); }
+        if let Err(e) = zip.write_all(data.as_bytes()) { return serde_json::json!({ "ok": false, "error": e.to_string() }); }
+    }
+    if let Err(e) = zip.finish() { return serde_json::json!({ "ok": false, "error": e.to_string() }); }
+    let bytes = std::fs::metadata(target).map(|m| m.len()).unwrap_or(0);
+    serde_json::json!({ "ok": true, "filePath": target.display().to_string(), "bytes": bytes, "files": items.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>() })
+}
+
+#[tauri::command]
+fn export_dawproject(app: AppHandle, payload: serde_json::Value) -> serde_json::Value {
+    let files = payload.get("files").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let suggested = payload.get("suggestedName").and_then(|v| v.as_str()).unwrap_or("project.dawproject");
+    let name = if suggested.to_ascii_lowercase().ends_with(".dawproject") { suggested.to_string() } else { format!("{suggested}.dawproject") };
+    let mut target = payload.get("filePath").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    if target.is_empty() {
+        let picked = app.dialog().file().set_title("导出 DAWproject").set_file_name(&name).add_filter("DAWproject", &["dawproject"]).blocking_save_file();
+        target = match picked.and_then(|p| p.into_path().ok()) { Some(p) => p.display().to_string(), None => return serde_json::json!({ "ok": false, "canceled": true }) };
+    }
+    write_dawproject_at(Path::new(&target), &files)
+}
+
+
 fn cover_data_url(bytes: &[u8], ext: &str) -> serde_json::Value {
     if bytes.len() > 6 * 1024 * 1024 { return serde_json::json!({ "ok": false, "error": "图片过大（>6MB）" }); }
     let e = ext.trim_start_matches('.').to_ascii_lowercase();
@@ -2029,7 +2068,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, db_kv_get, db_kv_set,
-            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, model_list,
+            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
@@ -2063,6 +2102,27 @@ mod check_midi_tests {
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    #[test]
+    fn dawproject_zip_roundtrip() {
+        let root = tmpdir("dawproject");
+        let target = root.join("song.dawproject");
+        let files = vec![
+            serde_json::json!({ "name": "project.xml", "data": "<Project/>" }),
+            serde_json::json!({ "name": "metadata.xml", "data": "<Meta/>" }),
+            serde_json::json!({ "name": "../evil.xml", "data": "x" }),
+        ];
+        let r = super::write_dawproject_at(&target, &files);
+        assert_eq!(r["ok"], true);
+        assert_eq!(r["files"].as_array().unwrap().len(), 2, "traversal skipped");
+        let f = std::fs::File::open(&target).unwrap();
+        let mut z = zip::ZipArchive::new(f).unwrap();
+        let mut e = z.by_name("project.xml").unwrap();
+        let mut buf = String::new(); e.read_to_string(&mut buf).unwrap();
+        assert_eq!(buf, "<Project/>");
+        assert_eq!(super::write_dawproject_at(&target, &[])["ok"], false);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

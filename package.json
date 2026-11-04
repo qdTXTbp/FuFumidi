@@ -83,7 +83,8 @@
     "tauri:release": "npm run build:ui && cd shells/tauri && tauri build --no-bundle",
     "tauri:bundle": "npm run build:ui && npm run tauri:stage && cd shells/tauri && tauri build",
     "tauri:stage": "node scripts/tauri/stage-bundle.mjs",
-    "tauri:coverage": "node scripts/tauri/ipc-coverage.mjs"
+    "tauri:coverage": "node scripts/tauri/ipc-coverage.mjs",
+    "tauri:call-audit": "node scripts/tauri/bridge-call-audit.mjs"
   },
   "dependencies": {
     "adm-zip": "^0.6.0",

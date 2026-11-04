@@ -355,6 +355,10 @@
   桥补 pickCover，并补顶层 copyAsset/openExternal 别名（修复 singer.ts/设置页守卫静默不执行）；
   Rust 测试 base64/MIME/gif 拒绝/超大拒绝；命令总数 **76**，覆盖 121 方法/144 未映射（113 call），
   cargo test **18/18**。
+- **Tauri DAWproject 导出 + 调用审计**：`export_dawproject`（project.xml/metadata.xml ZIP、
+  ≤200 文件、拒绝路径穿越、对话框或 filePath）；桥补 exportDawproject；Rust 测试 ZIP 内容/
+  ../ 跳过/空列表；新增 `npm run tauri:call-audit`（前端 bridge.* 调用 vs Tauri 实现，启发式，
+  当前 212 调用/116 未实现）；命令总数 **77**，覆盖 122 方法/143 未映射（114 call），cargo test **19/19**。
 - **T-117 曲库/设置共享 Electron 数据（重要）**：Rust 用 rusqlite 直读/写
   `%APPDATA%/FuFumidi/fufumidi/fufumidi.sqlite`（songs/playlists/kv），设置优先读 legacy
   settings.json；只读验收实测 **1972 首真实曲目**、57 个设置键、侧栏「全部曲目 1972」正常；
