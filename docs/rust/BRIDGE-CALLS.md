@@ -6,9 +6,9 @@
 | 指标 | 数值 |
 |---|---:|
 | 前端调用的 bridge 方法（去重） | 212 |
-| Tauri 顶层方法 | 108 |
+| Tauri 顶层方法 | 112 |
 | Tauri 嵌套方法 | 50 |
-| **未找到实现** | **93** |
+| **未找到实现** | **89** |
 
 ## 未找到实现的方法
 
@@ -67,12 +67,8 @@
 - `project` — frontend/src/views/ViewEdit.vue
 - `project.autosave` — frontend/src/core/session.js
 - `rvcCatalog` — frontend/src/components/cover/RvcModelPanel.vue
-- `rvcImportFiles` — frontend/src/components/cover/RvcModelPanel.vue, frontend/src/views/ViewCover.vue
-- `rvcImportFolder` — frontend/src/components/cover/RvcModelPanel.vue, frontend/src/views/ViewCover.vue
 - `rvcImportZip` — frontend/src/components/cover/RvcModelPanel.vue, frontend/src/views/ViewCover.vue
 - `rvcOpenCatalogPage` — frontend/src/components/cover/RvcModelPanel.vue
-- `rvcPickFiles` — frontend/src/components/cover/RvcModelPanel.vue, frontend/src/views/ViewCover.vue
-- `rvcPickFolder` — frontend/src/components/cover/RvcModelPanel.vue, frontend/src/views/ViewCover.vue
 - `rvcPickZip` — frontend/src/components/cover/RvcModelPanel.vue, frontend/src/views/ViewCover.vue
 - `rvcProbe` — frontend/src/components/cover/RvcModelPanel.vue
 - `rvcRefreshCatalog` — frontend/src/components/cover/RvcModelPanel.vue

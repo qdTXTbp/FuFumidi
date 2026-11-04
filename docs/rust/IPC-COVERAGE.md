@@ -5,10 +5,10 @@
 | 指标 | 数值 |
 |---|---:|
 | preload 暴露方法 | 265 |
-| Tauri 桥已映射方法 | 147 |
-| 尚未映射 | **119** |
+| Tauri 桥已映射方法 | 151 |
+| 尚未映射 | **115** |
 | preload IPC invoke 通道 | 250 |
-| Tauri call 通道 | 141 |
+| Tauri call 通道 | 145 |
 
 ## 缺口分类
 
@@ -20,9 +20,9 @@
 | 资源/音频/扩展 | 11 |
 | 导出/渲染 | 11 |
 | utau/voicebank | 10 |
-| rvc | 10 |
 | gpu/运行时增强 | 8 |
 | 事件/窗口 | 7 |
+| rvc | 6 |
 | 更新/测速 | 4 |
 | 文件/诊断 | 4 |
 | 其他 | 3 |
@@ -111,12 +111,8 @@ probeVoicebank
 renderFile
 rendererReady
 rvcCatalog
-rvcImportFiles
-rvcImportFolder
 rvcImportZip
 rvcOpenCatalogPage
-rvcPickFiles
-rvcPickFolder
 rvcPickZip
 rvcProbe
 rvcRefreshCatalog
