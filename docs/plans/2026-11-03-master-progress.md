@@ -586,3 +586,5 @@
 - **转录/分轨修复 release**：全量 acceptance ok:true（13 步）；release 2m32/0 warning；dataDir/models 正确；release --stem-smoke ok/6 tracks；产物 SHA cdfd08ad…3286。
 
 - **stem merge fail-closed**：非零退出不报成功；release 2m26/0 warning；SHA b75b77c6…32f2。
+
+- **安装目录切换到 Tauri**：E:/Midi/FuFumidi/FuFumidi.exe 已由 Electron 换为 Tauri release（备份 FuFumidi.electron-6.5.0-beta.1.exe）；同目录 python/engine；无窗口自检 models=13、stem-smoke ok/6 tracks；等用户点快捷方式验收。

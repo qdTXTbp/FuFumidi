@@ -214,3 +214,11 @@ Tauri 默认从 GitHub 下载 `nsis-3.13.zip`，本机直连超时。已把工�
 - stem_merge 非零退出不再报成功；release 2m26s、0 warning；
 - 产物仍 16,935,936 bytes，SHA-256 `b75b77c6905501c6452b76ecb89c6df751e68c61e3485b6b4805572f399032f2`；
 - engine 资源已同步到 target/release。
+
+## 30. 2026-11-04 安装目录切换到 Tauri
+
+- 桌面快捷方式 C:/Users/qdTXTbp/Desktop/FuFumidi.lnk 原指向 E:/Midi/FuFumidi/FuFumidi.exe（Electron 6.5.0-beta.1）；
+- 已备份为 E:/Midi/FuFumidi/FuFumidi.electron-6.5.0-beta.1.exe，并把 Tauri release 复制为 FuFumidi.exe；
+- 同目录新增 python/、engine/（Tauri 资源；resources 下 Electron 资源保留）；
+- 安装目录无窗口自检：dataDir=E:/Midi/FuFumidi/FuFumidiData、models=13、engine worker warm=1、--stem-smoke ok/6 tracks；
+- 未启动可见窗口；等待用户点桌面快捷方式验收。

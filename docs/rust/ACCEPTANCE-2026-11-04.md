@@ -134,3 +134,10 @@ cargo build --release --offline
 - 根因 3：分离只认模型目录，漏 _configs；补 .th 与 yaml 匹配；CPU half→float32、chunk 收敛到 config；真实 6 轨分离 ok（4.2s）。
 - 智能分轨：stem_workflow.rs 真实分轨→逐 stem 转录→合并，release --stem-smoke ok、6 tracks；UI 已接 engine:stem-progress。
 - 无窗口验证：--stem-smoke 不创建窗口；仍不上传。
+
+## 11. 安装目录已切换（2026-11-04）
+
+- 桌面 FuFumidi.lnk 现在启动 E:/Midi/FuFumidi/FuFumidi.exe = Tauri release；
+- Electron 备份：E:/Midi/FuFumidi/FuFumidi.electron-6.5.0-beta.1.exe；
+- 安装目录自检：dataDir=E:/Midi/FuFumidi/FuFumidiData、models=13、engine warm=1、--stem-smoke ok/6 tracks；
+- 可见窗口仍为 0（未在自动化里启动 UI，等你验收）。
