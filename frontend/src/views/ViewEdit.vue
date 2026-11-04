@@ -2264,8 +2264,9 @@ function miniClick(e) {
 function onKey(e) {
   if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
   const mod = e.ctrlKey || e.metaKey;
-  if (mod && e.key === 'z') { e.preventDefault(); undo(); return; }
-  if (mod && e.key === 'y') { e.preventDefault(); redo(); return; }
+  const key = (e.key || '').toLowerCase();
+  if (mod && key === 'z') { e.preventDefault(); if (e.shiftKey) redo(); else undo(); return; }
+  if (mod && key === 'y') { e.preventDefault(); redo(); return; }
   if (mod && e.key === 'a') { e.preventDefault(); selectAll(); return; }
   if (mod && e.key === 'c') { e.preventDefault(); copy(); return; }
   if (mod && e.key === 'v') { e.preventDefault(); paste(); return; }

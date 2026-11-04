@@ -294,12 +294,18 @@
   重打并安装到干净目录，安装版 smoke 仍 **24/24**（renderer=<embedded>，python/engine 来自安装目录，转录 5.3 s）。
   Electron 回退基准：E2E **37/37**、`pack:base` 成功；**Electron NSIS 已重打**
   （排除 Tauri 产物后修复 7.2GB asar/EBUSY，安装包约 614 MiB；无头会话静默安装挂起，待交互桌面手测）。
-- **P-011/T-103 命令式撤销核心（已完成，待接入页面）**：新增 `frontend/src/core/command_history.js`：
+- **P-011/T-103 命令式撤销核心（第一批已接入 EditorCanvas）**：新增 `frontend/src/core/command_history.js`：
   增量命令（undo/redo 闭包）、标签、事务合并、limit/50MB 硬上限、diff 字节估算；
-  `frontend/tests/command-history.test.js` 5 项全过（含 10 万音符 × 50 次增量编辑 < 50MB 的内存验收）。
-  页面尚未切换到该栈（EditorCanvas/Arrange 仍用快照栈），接入属后续步骤，不能宣称 P-011 整体完成。
-  已补 `core/note_commands.js`（新增/删除/修改音符的增量命令 + 批量删除工具）与 4 项单测，
-  为 EditorCanvas 切换准备最小 diff 命令。
+  redo 预算、huge 上限、`seq/dropLast/entries`；`command-history.test.js` 5 项全过
+  （含 10 万音符 × 50 次增量编辑 < 50MB 的内存验收）。
+  `core/note_commands.js` 已修两个会在排序后删错/改错音符的索引缺陷，并补索引纪律回归；
+  `core/editor_history.js` 提供快照+增量共栈的纯逻辑，新增 8 项单测。
+  **第一批接入**：`EditorCanvas` 的 `addNote/deleteNoteExternal/editNote/insertKeySwitch` 改走命令 entry，
+  与快照 entry 共用同一条 `undoStack`（`kind:'command'`），undo/redo 按 entry 类型分派；
+  ViewEdit 支持 Ctrl+Shift+Z 重做。新增隐藏 E2E `edit-undo-commands`，并修掉 `about-ui` 的启动路由竞态；
+  **隐藏窗口全量 E2E 38/38 通过**（无可见窗口）。
+  尚未完成：`deleteNotes`/批量量化/移调/粘贴/步进/CC/踏板/预览提交仍走快照；跨曲目清栈、历史面板行内回退、
+  与 `session.js` 应用级单栈合流未做。**仍不能宣称 P-011 整体完成。**
 - **Tauri check_midi 已补**：Rust 实现与 Electron 同语义（只认数据根 midi/ 内非空文件），
   桥补 `checkMidi`；Tauri 曲库自愈不再因缺命令而跳过。Rust 单测覆盖根内保留/缺失/根外路径。
   命令总数 **44**；本轮全部无头验证（cargo test / typecheck / build / audit）。

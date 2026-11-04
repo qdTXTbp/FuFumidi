@@ -23,6 +23,8 @@ import { followViewTick } from '../core/editor_nav.js';
 import { timelineOfSong, iterBars, secOfTick } from '../core/timeline.js';
 /* 手写笔 / 触控（M9 收尾）：掌侧误触、第二根手指、长按=右键、笔压当力度 */
 import { claimPointer, isPrimaryPointer, releasePointer, penPressure, makeLongPress } from '../core/pointer.js';
+// P-011 第一批：单音符 add/delete/update 走增量命令，其余操作仍走整轨快照
+import { makeAddNotesCommand, makeDeleteNotesCommand, makeUpdateNotesCommand } from '../core/note_commands.js';
 
 const props = defineProps({
   tool: { type: String, default: 'select' },      // select | pencil | erase
@@ -389,6 +391,28 @@ function pushSnapshot(stack, snap) {
   return true;
 }
 /** 记录「修改前」的轨道快照；label 只用于历史面板展示，不影响撤销语义 */
+/** P-011：命令 entry 与快照 entry 共用同一条 undoStack；push 时清 redo。
+    命令必须在该次 afterEdit() 之后构造，索引/对象引用才是最终顺序。 */
+function pushCommandEntry(cmd, ti, noteCount) {
+  if (!cmd) return false;
+  cmd.kind = 'command';
+  cmd.ti = Number.isFinite(ti) ? ti : props.trackIndex;
+  cmd.noteCount = Number.isFinite(noteCount) ? noteCount : null;
+  cmd.at = Date.now();
+  cmd.seq = ++historySeq;
+  undoStack.push(cmd);
+  redoStack.length = 0;
+  trimHistoryStack(undoStack);
+  return true;
+}
+/** 供 addNote/editNote/deleteNoteExternal/insertKeySwitch 使用；命令工厂需在 afterEdit 后调用 */
+function pushNoteCommand(build, ti, noteCount) {
+  let cmd = null;
+  try { cmd = build(); } catch (e) { cmd = null; }
+  return pushCommandEntry(cmd, ti, noteCount);
+}
+
+/** 记录「修改前」的轨道快照；label 只用于历史面板展示，不影响撤销语义 */
 function pushState(label) {
   const tr = curTrack(); if (!tr) return;
   if (isMultiEdit()) { pushStateForTrack(-1, label); return; }   // 跨轨：存全量，撤销才盖得住
@@ -449,6 +473,14 @@ function clearGhostSelection() {
 }
 function undo() {
   const st = undoStack.pop(); if (!st) return;
+  if (st.kind === 'command') {
+    // P-011：增量命令 entry 与快照 entry 共用一条栈；redo 直接复用同一条目
+    redoStack.push(st);
+    st.undo();
+    selection.clear();
+    afterEdit();
+    return;
+  }
   if (st.ti < 0) {
     // 全量快照：当前状态进 redo（label 沿用操作名），再重建整个 tracks（增删轨也盖得住）
     pushSnapshot(redoStack, makeAllSnapshot(st.label));
@@ -466,6 +498,14 @@ function undo() {
 }
 function redo() {
   const st = redoStack.pop(); if (!st) return;
+  if (st.kind === 'command') {
+    undoStack.push(st);
+    st.redo();
+    selection.clear();
+    afterEdit();
+    trimHistoryStack(undoStack);
+    return;
+  }
   if (st.ti < 0) {
     pushSnapshot(undoStack, makeAllSnapshot(st.label));
     restoreAllSnapshot(st);
@@ -484,9 +524,10 @@ function redo() {
 /* ---------------- 编辑操作 ---------------- */
 function addNote(tick, midi, len) {
   const tr = curTrack(); if (!tr) return;
-  pushState('添加音符');
-  tr.notes.push({ start: Math.round(tick), end: Math.round(tick + len), midi: clamp(scaleSnapPitch(Math.round(midi), tick), 0, 127), vel: clamp(Math.round(props.defaultVelocity), 1, 127) });
+  const note = { start: Math.round(tick), end: Math.round(tick + len), midi: clamp(scaleSnapPitch(Math.round(midi), tick), 0, 127), vel: clamp(Math.round(props.defaultVelocity), 1, 127) };
+  tr.notes.push(note);
   afterEdit();
+  pushNoteCommand(() => makeAddNotesCommand(tr, [note], '添加音符'), props.trackIndex, tr.notes.length);
 }
 function deleteNotes(arr) {
   const tr = curTrack(); if (!tr || !arr.length) return;
@@ -2051,12 +2092,17 @@ function cancelPreview() {
 /** 改某个音符的字段（按它实际所在的轨道做快照，跨轨也安全） */
 function editNote(note, patch) {
   const s = song(); if (!s || !note || !patch) return 0;
+  const keys = Object.keys(patch);
+  if (!keys.length) return 0;
   for (let i = 0; i < s.tracks.length; i++) {
     const tr = s.tracks[i];
     if (!tr.notes.includes(note)) continue;
-    pushStateForTrack(i, '编辑');
+    const idx = tr.notes.indexOf(note);
+    const before = {};
+    for (const k of keys) before[k] = note[k];
     Object.assign(note, patch);
     afterEdit();
+    pushNoteCommand(() => makeUpdateNotesCommand(tr, [{ idx, note, before, after: { ...patch } }], '编辑'), i, tr.notes.length);
     return 1;
   }
   return 0;
@@ -2068,10 +2114,10 @@ function deleteNoteExternal(note) {
     const tr = s.tracks[i];
     const k = tr.notes.indexOf(note);
     if (k < 0) continue;
-    pushStateForTrack(i, '删除音符');
     tr.notes.splice(k, 1);
     selection.delete(note);
     afterEdit();
+    pushNoteCommand(() => makeDeleteNotesCommand(tr, [{ idx: k, note }], '删除音符'), i, tr.notes.length);
     return 1;
   }
   return 0;
@@ -2080,10 +2126,11 @@ function deleteNoteExternal(note) {
 function insertKeySwitch(midi, tick, len) {
   const tr = curTrack(), s = song();
   if (!tr || !s) return 0;
-  pushState('添加音符');
   const st = Math.max(0, Math.round(tick || 0));
-  tr.notes.push({ start: st, end: st + Math.max(30, Math.round(len || (s.tpb / 2))), midi: clamp(Math.round(midi), 0, 24), vel: 100 });
+  const note = { start: st, end: st + Math.max(30, Math.round(len || (s.tpb / 2))), midi: clamp(Math.round(midi), 0, 24), vel: 100 };
+  tr.notes.push(note);
   afterEdit();
+  pushNoteCommand(() => makeAddNotesCommand(tr, [note], '添加音符'), props.trackIndex, tr.notes.length);
   return 1;
 }
 
@@ -2129,6 +2176,7 @@ function clearHistory() { undoStack.length = 0; redoStack.length = 0; }
 function historySnapshots() {
   return undoStack.map((s) => ({
     ti: s.ti,
+    kind: s.kind || 'snapshot',
     label: s.label || '编辑',
     notes: s.noteCount != null ? s.noteCount : (s.notes ? s.notes.length : 0),
     bytes: s.bytes || 0,
