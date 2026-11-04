@@ -5,9 +5,9 @@
 
 | 指标 | 数值 |
 |---|---:|
-| Rust command | 110 |
+| Rust command | 112 |
 | bridge call | 129 |
-| 参数不一致 | 26 |
+| 参数不一致 | 24 |
 
 ## 不一致列表
 
@@ -32,7 +32,6 @@
 - export_score_pdf（Rust 未找到命令）
 - transcode_video（Rust 未找到命令）
   - bridge 多参数: opts
-- open_edit_guide（Rust 未找到命令）
 - update_list（Rust 未找到命令）
 - launch_updater（Rust 未找到命令）
   - bridge 多参数: channel
@@ -54,7 +53,6 @@
 - gpu_install_auto（Rust 未找到命令）
 - plugins_invoke（Rust 未找到命令）
   - bridge 多参数: id, cmd, payload
-- plugins_open_docs（Rust 未找到命令）
 - wallpaper_download（Rust 未找到命令）
   - bridge 多参数: url, name
 

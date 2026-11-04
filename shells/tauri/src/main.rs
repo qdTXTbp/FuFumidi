@@ -562,6 +562,38 @@ fn presets_restore() -> serde_json::Value {
 
 fn midi_root() -> PathBuf { data_dir().join("midi") }
 
+fn doc_source(kind: &str) -> Option<PathBuf> {
+    let name = if kind == "plugin" { "plugin-dev.html" } else { "edit-guide.html" };
+    let rel = if kind == "plugin" { Path::new("plugins").join(name) } else { Path::new("renderer").join(name) };
+    if let Some(d) = dev_root() { let p = d.join(&rel); if p.is_file() { return Some(p); } }
+    if let Some(d) = exe_dir() { for base in [d.join("resources/docs"), d.join("docs")] { let p = base.join(name); if p.is_file() { return Some(p); } } }
+    None
+}
+
+fn doc_copy_to_temp(src: &Path, name: &str) -> Result<PathBuf, String> {
+    let dir = data_dir().join("temp").join("FuFumidi-doc");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let dst = dir.join(name);
+    std::fs::copy(src, &dst).map_err(|e| e.to_string())?;
+    Ok(dst)
+}
+
+fn open_doc(kind: &str) -> serde_json::Value {
+    let Some(src) = doc_source(kind) else { return serde_json::json!({ "ok": false, "error": "doc not found" }); };
+    let name = if kind == "plugin" { "plugin-dev.html" } else { "edit-guide.html" };
+    let dst = match doc_copy_to_temp(&src, name) { Ok(p) => p, Err(e) => return serde_json::json!({ "ok": false, "error": e }) };
+    #[cfg(target_os = "windows")]
+    { let _ = Command::new("cmd").args(["/C", "start", "", &dst.display().to_string()]).creation_flags(0x08000000).spawn(); }
+    serde_json::json!({ "ok": true, "path": dst.display().to_string() })
+}
+
+#[tauri::command]
+fn plugins_open_docs() -> serde_json::Value { open_doc("plugin") }
+
+#[tauri::command]
+fn open_edit_guide() -> serde_json::Value { open_doc("edit") }
+
+
 fn model_artifact_path(root: &Path, id: &str) -> Option<PathBuf> {
     let rel: &str = match id {
         "basic_pitch" => "basic_pitch_quant.onnx",
@@ -2939,7 +2971,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, db_kv_get, db_kv_set,
-            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, wallpaper_set_desktop, gpu_status, gpu_uninstall, plugins_list, plugins_rescan, plugins_set_enabled, plugins_open_dir, sf_workshop_list, sf_workshop_import, sf_workshop_delete, sf_workshop_open_dir, model_list,
+            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, wallpaper_set_desktop, gpu_status, gpu_uninstall, plugins_list, plugins_rescan, plugins_set_enabled, plugins_open_dir, plugins_open_docs, open_edit_guide, sf_workshop_list, sf_workshop_import, sf_workshop_delete, sf_workshop_open_dir, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
@@ -2990,6 +3022,12 @@ mod check_midi_tests {
         assert!(plan[0].join(" ").contains("Wallpaper"));
         assert!(plan[0].join(" ").contains("C:\\wall\\a.jpg"));
         assert_eq!(super::wallpaper_set_desktop("C:\\definitely-missing.jpg".into())["ok"], false);
+    }
+
+    #[test]
+    fn doc_sources_exist() {
+        assert!(super::doc_source("plugin").is_some());
+        assert!(super::doc_source("edit").is_some());
     }
 
     #[test]

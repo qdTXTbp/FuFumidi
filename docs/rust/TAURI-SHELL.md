@@ -95,6 +95,7 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 | sf_workshop_list / import / delete / open_dir | 从 main/soundfonts.js 生成 20 条静态注册表；核对 bundled/downloaded 体积、扫描自定义 SF2/SF3；导入/删除/打开目录 | Rust 单测：20 条注册表、bundled GeneralUser builtin、自定义扫描、导入/删除；下载仍未实现 |
 | probe | 复用 engine_probe 的 music2midi.py probe（桥此前调 probe 缺失命令） | 与 engine_probe 共用实现；无独立单测 |
 | model_delete | 按模型 id 删除 models/<dest>（目录/文件 + .oudep/.parts/.tmp/.part 残留）；RVC 删除暂未迁移 | Rust 单测：muscriptor/small 删除、未知 id/RVC 拒绝 |
+| open_edit_guide / plugins_open_docs | 把 plugins/plugin-dev.html、renderer/edit-guide.html 复制到 dataRoot/temp/FuFumidi-doc 并用默认浏览器打开；打包时 stage 到 resources/docs | Rust 单测：两个 dev 源存在；不在测试中打开浏览器 |
 | open_folder | 打开目录（仅目录） | 实际打开资源管理器不在无头会话触发 |
 | soundfont_list | 扫描 renderer/vendor/soundfonts + dataDir/soundfonts（sf2/sf3） | 开发树返回 GeneralUser.sf2 |
 | dep_check | Rust 启动 Python `deps.py check`，解析 `###RESULT` 的 groups | 返回 universal/piano/aria/muscriptor/separate/transkun 6 组 |
@@ -207,11 +208,11 @@ worker running=true seq=1；输出 MIDI 头 `MThd`。剩余：cancel/pause、UI 
 - 明细见 [IPC-COVERAGE.md](IPC-COVERAGE.md)。
 - 前端实际调用审计：`npm run tauri:call-audit`（`docs/rust/BRIDGE-CALLS.md`），
   当前 212 个去重调用 / 104 未找到实现（启发式，含动态调用误报）。
-- 参数契约审计：`npm run tauri:arg-audit`（`docs/rust/ARG-AUDIT.md`），当前 110 命令 / 26 不一致
+- 参数契约审计：`npm run tauri:arg-audit`（`docs/rust/ARG-AUDIT.md`），当前 112 命令 / 24 不一致
   （主要来自尚未实现的 bridge 命令）；已修正 readSidecarLyrics/modelImportLocal/renameMidi/
   projectOpen/autosaveRead/autosaveClear 的 JS camelCase→Rust snake_case 参数错配。
 
-## 4. 当前命令清单（110 条）
+## 4. 当前命令清单（112 条）
 
 host_info, app_version, ping, python_selfcheck, engine_probe, convert, engine_worker_status,
 load_settings, save_settings, db_kv_get, db_kv_set, db_status, db_songs_list, db_songs_put,
@@ -229,7 +230,7 @@ autostart_get, autostart_set, diag_health, pick_model_archive, model_import_loca
 check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin,
 wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc,
 gpu_status, gpu_uninstall, wallpaper_set_desktop, plugins_list, plugins_rescan, plugins_set_enabled, plugins_open_dir,
-sf_workshop_list, sf_workshop_import, sf_workshop_delete, sf_workshop_open_dir, probe, model_delete。
+sf_workshop_list, sf_workshop_import, sf_workshop_delete, sf_workshop_open_dir, probe, model_delete, open_edit_guide, plugins_open_docs。
 
 ## 4.1 下一步
 

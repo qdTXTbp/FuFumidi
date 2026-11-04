@@ -36,7 +36,8 @@
       "bundle/engine/": "engine/",
       "bundle/soundfonts/": "soundfonts/",
       "bundle/models/": "models/",
-      "bundle/elevate.exe": "elevate.exe"
+      "bundle/elevate.exe": "elevate.exe",
+      "bundle/docs/": "docs/"
     },
     "windows": {
       "nsis": {

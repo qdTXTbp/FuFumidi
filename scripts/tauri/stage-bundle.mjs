@@ -38,6 +38,11 @@ fs.mkdirSync(path.join(OUT, "soundfonts"), { recursive: true });
 for (const f of fs.readdirSync(path.join(ROOT, "renderer/vendor/soundfonts"))) {
   if (/\.(sf2|sf3|txt)$/i.test(f)) fs.copyFileSync(path.join(ROOT, "renderer/vendor/soundfonts", f), path.join(OUT, "soundfonts", f));
 }
+fs.mkdirSync(path.join(OUT, "docs"), { recursive: true });
+for (const [srcFile, dstName] of [["plugins/plugin-dev.html", "plugin-dev.html"], ["renderer/edit-guide.html", "edit-guide.html"]]) {
+  const srcPath = path.join(ROOT, srcFile);
+  if (fs.existsSync(srcPath)) fs.copyFileSync(srcPath, path.join(OUT, "docs", dstName));
+}
 fs.mkdirSync(path.join(OUT, "models"), { recursive: true });
 const basic = path.join(ROOT, "resources/models/basic_pitch_quant.onnx");
 if (fs.existsSync(basic)) fs.copyFileSync(basic, path.join(OUT, "models/basic_pitch_quant.onnx"));
