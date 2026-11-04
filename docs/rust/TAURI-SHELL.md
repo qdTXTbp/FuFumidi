@@ -142,7 +142,8 @@ presets_reorder, presets_reorder_to, presets_restore, set_transcribe_pause。
    模型路径/参数契约不变。
 3. **T-117 host 业务迁移**：文件/设置/曲库/任务队列先迁，保持 IPC 语义与双跑回归。
 4. T-118 剩余：cancel/pause、批量并发、UI 队列侧进度绑定、崩溃重启策略（当前是"下次请求重新拉起"）；
-5. T-119 双构建 + Electron 回退；T-114 品牌一致性校验（图标复用 build/icon.ico）。
+5. T-119 双构建 + Electron 回退；**T-114 品牌校验（Tauri 部分）已完成**：
+   `shells/tauri/icons/icon.ico` 与 `build/icon.ico` 字节一致，`npm run check:brand` 增加 equality 断言。
 
 ## 5. 风险与约束
 

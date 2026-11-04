@@ -280,7 +280,10 @@
 - **T-118 暂停已打通**：worker 启动注入 `FUFUMIDI_PAUSE_FILE=dataRoot/engine.pause`；
   `set_transcribe_pause` 写/删文件，引擎 pause_gate 原地等待（120 s WAV 实测：暂停 900 ms 未结束，
   继续后完成，pausedConv.elapsedMs=2255）；桥补 `setTranscribePause`；smoke **24 项**全绿。
-  下一步：T-115 继续补这些 UI 必需通道，T-117 继续 settings/song/task host 化，cancel/pause 与批量并发。
+- **T-114 品牌图标一致性**：Tauri 壳原用另一枚 icon（与 build/icon.ico 像素不一致），
+  已替换为 build/icon.ico 同字节；`check:brand` 新增 shellIconMismatch equality 校验，
+  13 项品牌资产 + Tauri 图标全绿。
+  下一步：T-115 继续补这些 UI 必需通道，T-117 继续 settings/song/task host 化，批量并发与 T-119 双构建。
 
 ## 17. 待收口（下一轮）
 

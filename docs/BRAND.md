@@ -46,7 +46,8 @@
 
 ## 4. 迁移检查清单（Electron → Tauri / 任何打包变更）
 
-- [ ] tauri.conf.json 的 bundle.icon 指向 build/icon.ico / icon.png（或从同一母图生成的新尺寸），不得沿用 src-tauri/icons 旧原型图；
+- [x] tauri.conf.json 的 bundle.icon 指向 build/icon.ico / icon.png（或从同一母图生成的新尺寸），不得沿用 src-tauri/icons 旧原型图；
+  （2026-11-04：`shells/tauri/icons/icon.ico` 与 build/icon.ico 字节一致；check:brand 加 equality 断言）
 - [ ] 安装器（NSIS/update）继续使用 build/installer*.bmp；
 - [ ] splash 品牌位/主窗口图标/托盘图标与 Electron 版逐像素一致（截图对比）；
 - [ ] 官网 docs/pages 引用的 logo 文件路径不变；
@@ -71,3 +72,4 @@ docs/DESIGN.md 的「还没做的」+ 审计遗留，收敛为两条主线：
 |---|---|---|
 | 2026-11-03 | 建立 manifest 与 check:brand 门禁；记录当前 16 个资产哈希 | M0 冻结，用户要求「注意前端设计的完善和工具 logo 的保持」 |
 | 2026-11-04 | 基线切换到 6.5.0-beta.1：资产清单 16 → 13；安装器图更新；移除独立的更新器图标与下载页横幅 | 用户指定「以最新预发行版 6.5.0 beta-1 为基线」；应用 logo/立绘未变，门禁重新登记 |
+| 2026-11-04 | Tauri 壳图标改为与 build/icon.ico 字节一致；check:brand 增加 shellIconMismatch | 用户要求「工具 logo 保持」；迁移检查清单第 1 项落地 |

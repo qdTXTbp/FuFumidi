@@ -47,12 +47,21 @@ function sha256(file) {
   return crypto.createHash('sha256').update(buf).digest('hex');
 }
 
+// Tauri 壳必须复用安装包/任务栏同一枚品牌图标（build/icon.ico），
+// 不允许另起一套。这里做字节级 equality，而不是再登记一份 manifest。
+const SHELL_ICON = 'shells/tauri/icons/icon.ico';
+const shellIconMismatch = [];
+
 const current = {};
 const missing = [];
 for (const rel of ASSETS) {
   const p = path.join(ROOT, rel);
   try { current[rel] = sha256(p); } catch (e) { missing.push(rel); }
 }
+
+try {
+  if (sha256(path.join(ROOT, SHELL_ICON)) !== current['build/icon.ico']) shellIconMismatch.push(SHELL_ICON);
+} catch (e) { shellIconMismatch.push(SHELL_ICON); }
 
 if (UPDATE) {
   const payload = {
@@ -64,7 +73,7 @@ if (UPDATE) {
   };
   fs.mkdirSync(path.dirname(MANIFEST), { recursive: true });
   fs.writeFileSync(MANIFEST, JSON.stringify(payload, null, 2) + '\n', 'utf8');
-  if (JSON_OUT) console.log(JSON.stringify({ ok: true, updated: true, count: Object.keys(current).length }));
+  if (JSON_OUT) console.log(JSON.stringify({ ok: true, updated: true, count: Object.keys(current).length, shellIconMismatch }));
   else console.log('[brand] manifest 已更新：' + Object.keys(current).length + ' 个文件');
   process.exit(0);
 }
@@ -83,15 +92,16 @@ for (const rel of Object.keys(current)) {
   else if (expected[rel] !== current[rel]) changed.push(rel);
 }
 const removed = Object.keys(expected).filter((rel) => !(rel in current));
-const ok = missing.length === 0 && changed.length === 0 && removed.length === 0 && added.length === 0;
-if (JSON_OUT) console.log(JSON.stringify({ ok, missing, changed, removed, added, checked: Object.keys(current).length }));
+const ok = missing.length === 0 && changed.length === 0 && removed.length === 0 && added.length === 0 && shellIconMismatch.length === 0;
+if (JSON_OUT) console.log(JSON.stringify({ ok, missing, changed, removed, added, shellIconMismatch, checked: Object.keys(current).length }));
 else {
   console.log('[brand] 校验 ' + Object.keys(current).length + ' 个品牌资产 / manifest ' + Object.keys(expected).length);
   if (missing.length) console.log('  缺失: ' + missing.join(', '));
   if (changed.length) console.log('  变更: ' + changed.join(', '));
   if (removed.length) console.log('  manifest 有、磁盘无: ' + removed.join(', '));
   if (added.length) console.log('  新增未登记: ' + added.join(', '));
-  if (ok) console.log('[brand] OK: 品牌资产未变（logo / 图标 / 立绘 / 安装器图一致）');
+  if (shellIconMismatch.length) console.log('  Tauri 壳图标与 build/icon.ico 不一致: ' + shellIconMismatch.join(', '));
+  if (ok) console.log('[brand] OK: 品牌资产未变（logo / 图标 / 立绘 / 安装器图一致，Tauri 壳复用同一图标）');
 }
 if (!ok) {
   console.error('[brand] FAIL: 品牌资产漂移。logo/图标只允许由 scripts/gen-logo.py 从母图重生成，且需用户确认；确认后跑 npm run brand:update 并提交 manifest。');
