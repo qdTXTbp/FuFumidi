@@ -5,9 +5,9 @@
 
 | 指标 | 数值 |
 |---|---:|
-| Rust command | 92 |
+| Rust command | 95 |
 | bridge call | 127 |
-| 参数不一致 | 42 |
+| 参数不一致 | 39 |
 
 ## 不一致列表
 
@@ -73,13 +73,8 @@
 - plugins_rescan（Rust 未找到命令）
 - plugins_open_docs（Rust 未找到命令）
 - plugins_open_dir（Rust 未找到命令）
-- wallpaper_list（Rust 未找到命令）
 - wallpaper_download（Rust 未找到命令）
   - bridge 多参数: url, name
-- wallpaper_add_local（Rust 未找到命令）
-  - bridge 多参数: src_path
-- wallpaper_remove_local（Rust 未找到命令）
-  - bridge 多参数: name
 
 ## 说明
 

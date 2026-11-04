@@ -87,6 +87,7 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 | write_midi / write_binary | 曲库真实 .mid 落盘（同名复用/重名 (2)/prev 路径安全）；任意二进制写盘 | Rust 单测：落盘/相同内容复用/不同内容重名、二进制写盘；修复曲目自检写不了文件的问题 |
 | usermeta_list / set / remove / reorder / pin | 资源中心用户元数据（name/author/source/category/tags/order/pinned），dataRoot/usermeta.json，损坏先另存 .corrupt-* | Rust 单测：合并/标签去重/排序/取消 pin/删除/损坏备份 |
 | save_binary（修复） | 原先只认 `{path,bytes}`，前端实际传 `{name,data}` → 保存 MIDI/壁纸导出失败；现支持原生保存对话框 + data/bytes 两种字节 | Rust 单测：data/bytes/空值解析；真实对话框不在无头触发 |
+| wallpaper_list / add_local / remove_local | 本地动态壁纸（Electron legacy wallpapers/，.ok 标记、mp4/webm/mov、删除校验 basename） | Rust 单测：添加/列表/删除、../ 拒绝 |
 | open_folder | 打开目录（仅目录） | 实际打开资源管理器不在无头会话触发 |
 | soundfont_list | 扫描 renderer/vendor/soundfonts + dataDir/soundfonts（sf2/sf3） | 开发树返回 GeneralUser.sf2 |
 | dep_check | Rust 启动 Python `deps.py check`，解析 `###RESULT` 的 groups | 返回 universal/piano/aria/muscriptor/separate/transkun 6 组 |
@@ -199,11 +200,11 @@ worker running=true seq=1；输出 MIDI 头 `MThd`。剩余：cancel/pause、UI 
 - 明细见 [IPC-COVERAGE.md](IPC-COVERAGE.md)。
 - 前端实际调用审计：`npm run tauri:call-audit`（`docs/rust/BRIDGE-CALLS.md`），
   当前 212 个去重调用 / 105 未找到实现（启发式，含动态调用误报）。
-- 参数契约审计：`npm run tauri:arg-audit`（`docs/rust/ARG-AUDIT.md`），当前 92 命令 / 42 不一致
+- 参数契约审计：`npm run tauri:arg-audit`（`docs/rust/ARG-AUDIT.md`），当前 95 命令 / 39 不一致
   （主要来自尚未实现的 bridge 命令）；已修正 readSidecarLyrics/modelImportLocal/renameMidi/
   projectOpen/autosaveRead/autosaveClear 的 JS camelCase→Rust snake_case 参数错配。
 
-## 4. 当前命令清单（92 条）
+## 4. 当前命令清单（95 条）
 
 host_info, app_version, ping, python_selfcheck, engine_probe, convert, engine_worker_status,
 load_settings, save_settings, db_kv_get, db_kv_set, db_status, db_songs_list, db_songs_put,
@@ -218,7 +219,8 @@ get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list
 read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open,
 storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject,
 autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data,
-check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin。
+check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin,
+wallpaper_list, wallpaper_add_local, wallpaper_remove_local。
 
 ## 4.1 下一步
 

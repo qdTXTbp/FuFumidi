@@ -86,6 +86,12 @@ export function installTauriBridge() {
     pickCover: () => call('pick_cover'),
     exportDawproject: (payload) => call('export_dawproject', { payload }),
     writeMidi: (opts) => call('write_midi', { opts }),
+    wallpaper: {
+      defaults: () => call('wallpaper_defaults'),
+      list: () => call('wallpaper_list'),
+      addLocal: (path) => call('wallpaper_add_local', { src_path: path }),
+      removeLocal: (name) => call('wallpaper_remove_local', { name }),
+    },
     usermeta: {
       list: () => call('usermeta_list'),
       set: (kind, id, patch) => call('usermeta_set', { kind, id, patch }),

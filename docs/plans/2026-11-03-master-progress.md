@@ -380,6 +380,7 @@
 - **Tauri 资源用户元数据**：usermeta_list/set/remove/reorder/pin（name/author/source/category/tags/order/pinned，dataRoot/usermeta.json，损坏先另存 .corrupt-*）；桥补 bridge.usermeta；Rust 测试合并/标签去重/排序/取消 pin/删除/损坏备份；命令总数 **92**，覆盖 132 方法/133 未映射（127 call），bridge 未实现 **105**，cargo test **26/26 + 1 ignored**。
 - **Tauri saveBinary 真实调用修复**：前端传 `{name,data}`，原 Rust 只认 `{path,bytes}` 且无对话框，导致 ViewEdit 导出 MIDI/壁纸预览导出直接失败；现支持原生保存对话框、data/bytes 两种字节、自动建父目录；Rust 测试字节解析；cargo test **27/27 + 1 ignored**。
 - **Tauri 参数契约审计 + 真实参数错配修复**：新增 `npm run tauri:arg-audit`（Rust command 参数 vs bridge call 参数；`docs/rust/ARG-AUDIT.md`，当前 42 处不一致，主要来自未实现命令）。已修真实 camelCase→snake_case 错配：read_sidecar_lyrics(file_path)、model_import_local(file_path)、rename_midi(new_name)、project_open(file_path)、autosave_read/clear(doc_id)、notify(payload)；这些此前在真实 GUI 调用会因缺少参数失败。
+- **Tauri 本地动态壁纸**：wallpaper_list/add_local/remove_local（共享 Electron legacy wallpapers/，.ok 标记、mp4/webm/mov、basename 校验）；桥补 bridge.wallpaper；Rust 测试添加/列表/删除/../ 拒绝；命令总数 **95**，arg 审计不一致 42→**39**，cargo test **28/28 + 1 ignored**。
 - **T-117 曲库/设置共享 Electron 数据（重要）**：Rust 用 rusqlite 直读/写
   `%APPDATA%/FuFumidi/fufumidi/fufumidi.sqlite`（songs/playlists/kv），设置优先读 legacy
   settings.json；只读验收实测 **1972 首真实曲目**、57 个设置键、侧栏「全部曲目 1972」正常；

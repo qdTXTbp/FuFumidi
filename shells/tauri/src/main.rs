@@ -562,6 +562,63 @@ fn presets_restore() -> serde_json::Value {
 
 fn midi_root() -> PathBuf { data_dir().join("midi") }
 
+fn wallpaper_dir() -> PathBuf { legacy_dir().unwrap_or_else(data_dir).join("wallpapers") }
+
+fn wallpaper_list_at(dir: &Path) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    let Ok(rd) = std::fs::read_dir(dir) else { return out };
+    for e in rd.flatten() {
+        let p = e.path();
+        if !p.is_file() { continue; }
+        let ext = p.extension().and_then(|x| x.to_str()).unwrap_or("").to_ascii_lowercase();
+        if !matches!(ext.as_str(), "mp4" | "webm" | "mov") { continue; }
+        let ok = std::fs::metadata(&p).map(|m| m.len() > 0).unwrap_or(false);
+        let marker = PathBuf::from(format!("{}.ok", p.display()));
+        if !ok || !marker.exists() { continue; }
+        let name = p.file_name().and_then(|x| x.to_str()).unwrap_or("").to_string();
+        out.push(serde_json::json!({ "name": name, "video": p.display().to_string(), "thumb": "", "local": true }));
+    }
+    out.sort_by(|a, b| a["name"].as_str().unwrap_or("").cmp(b["name"].as_str().unwrap_or("")));
+    out
+}
+
+fn wallpaper_add_local_at(dir: &Path, src_path: &str) -> serde_json::Value {
+    let src = Path::new(src_path);
+    if !src.is_file() { return serde_json::json!({ "ok": false, "error": "文件不存在" }); }
+    let ext = src.extension().and_then(|x| x.to_str()).unwrap_or("").to_ascii_lowercase();
+    if !matches!(ext.as_str(), "mp4" | "webm" | "mov") { return serde_json::json!({ "ok": false, "error": "只支持 mp4/webm/mov" }); }
+    let mut name = src.file_name().and_then(|x| x.to_str()).unwrap_or("wallpaper.mp4").to_string();
+    if name.chars().count() > 120 { name = name.chars().rev().take(120).collect::<String>().chars().rev().collect(); }
+    let _ = std::fs::create_dir_all(dir);
+    let dest = dir.join(&name);
+    if std::fs::copy(src, &dest).is_err() { return serde_json::json!({ "ok": false, "error": "复制失败" }); }
+    let _ = std::fs::write(format!("{}.ok", dest.display()), b"1");
+    serde_json::json!({ "ok": true, "name": name, "video": dest.display().to_string() })
+}
+
+fn wallpaper_remove_local_at(dir: &Path, name: &str) -> serde_json::Value {
+    if name.is_empty() || name.contains('/') || name.contains('\\') || name == "." || name == ".." {
+        return serde_json::json!({ "ok": false, "error": "非法文件名" });
+    }
+    let p = dir.join(name);
+    if !p.is_file() { return serde_json::json!({ "ok": false, "error": "不存在" }); }
+    let _ = std::fs::remove_file(&p);
+    let _ = std::fs::remove_file(format!("{}.ok", p.display()));
+    let thumb = dir.join(Path::new(name).with_extension("jpg"));
+    let _ = std::fs::remove_file(thumb);
+    serde_json::json!({ "ok": true, "removed": true })
+}
+
+#[tauri::command]
+fn wallpaper_list() -> Vec<serde_json::Value> { wallpaper_list_at(&wallpaper_dir()) }
+
+#[tauri::command]
+fn wallpaper_add_local(src_path: String) -> serde_json::Value { wallpaper_add_local_at(&wallpaper_dir(), &src_path) }
+
+#[tauri::command]
+fn wallpaper_remove_local(name: String) -> serde_json::Value { wallpaper_remove_local_at(&wallpaper_dir(), &name) }
+
+
 fn usermeta_path() -> PathBuf { data_dir().join("usermeta.json") }
 
 fn usermeta_blank() -> serde_json::Value { serde_json::json!({ "schema_version": 1, "items": {} }) }
@@ -2504,7 +2561,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, db_kv_get, db_kv_set,
-            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, model_list,
+            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
@@ -2545,6 +2602,24 @@ mod check_midi_tests {
         assert_eq!(super::save_binary_bytes(&serde_json::json!({ "data": [1,2] })), vec![1,2]);
         assert_eq!(super::save_binary_bytes(&serde_json::json!({ "bytes": "ab" })), b"ab".to_vec());
         assert!(super::save_binary_bytes(&serde_json::json!({})).is_empty());
+    }
+
+    #[test]
+    fn wallpaper_local_roundtrip() {
+        let root = tmpdir("wallpaper-local");
+        let src = root.join("src.mp4");
+        std::fs::write(&src, b"video").unwrap();
+        let dir = root.join("wallpapers");
+        let a = super::wallpaper_add_local_at(&dir, src.to_str().unwrap());
+        assert_eq!(a["ok"], true);
+        assert_eq!(a["name"], "src.mp4");
+        let list = super::wallpaper_list_at(&dir);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0]["local"], true);
+        assert_eq!(super::wallpaper_remove_local_at(&dir, "../src.mp4")["ok"], false);
+        assert_eq!(super::wallpaper_remove_local_at(&dir, "src.mp4")["removed"], true);
+        assert!(super::wallpaper_list_at(&dir).is_empty());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
