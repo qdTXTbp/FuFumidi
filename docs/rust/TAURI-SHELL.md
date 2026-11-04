@@ -68,6 +68,7 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 | data_root / open_data_root / clean_temp | 数据根概览（9 个目录大小）、打开数据根、清理 temp | Rust 单测：9 条目、temp 大小 = 文件总和、清理后消失（打开目录不测） |
 | has_midi / verify_midi / dupe_midi | 单文件存在校验；Rust core 解析曲库（轨道/音符/BPM/损坏）；FNV 哈希查重 | Rust 单测：合法 SMF 2 音符、坏文件计入 bad、重复文件 1 组 2 个 |
 | get_zoom_factor / set_zoom_factor / set_full_screen | WebView 缩放（50%–300%，状态记忆）与全屏 | Rust 单测：缩放夹取/NaN 回退 1.0/两位小数；真实窗口行为未在无头会话验证 |
+| autosave_write / list / read / clear | 崩溃恢复草稿（dataRoot/temp/autosave，≤32MB，原子 rename，安全 docId） | Rust 单测：写/列/读/清、非法 docId 文件名安全化 |
 | soundfont_list | 扫描 renderer/vendor/soundfonts + dataDir/soundfonts（sf2/sf3） | 开发树返回 GeneralUser.sf2 |
 | dep_check | Rust 启动 Python `deps.py check`，解析 `###RESULT` 的 groups | 返回 universal/piano/aria/muscriptor/separate/transkun 6 组 |
 | diag_export | 写 dataDir/diagnostics-<ts>.json（host/python/models/soundfonts/dataDir） | 文件生成，ok=true |
@@ -173,12 +174,12 @@ worker running=true seq=1；输出 MIDI 头 `MThd`。剩余：cancel/pause、UI 
 
 - `npm run tauri:coverage` / `node scripts/tauri/ipc-coverage.mjs --write`：
   只解析 preload 与 Tauri 桥的方法名，不启动窗口；
-- 当前：preload 265 方法 / Tauri **107** 方法 / **158 未映射**；preload invoke 250 / tauri call **98**；
+- 当前：preload 265 方法 / Tauri **111** 方法 / **154 未映射**；preload invoke 250 / tauri call **102**；
 - 缺口分类：设置杂项 28、diffsinger 19、utau/voicebank 18、模型/安装 14、导出/渲染 14、
   资源/音频 13、rvc 12、曲库/数据 11、文件/诊断 11、事件/窗口 10、GPU 8、更新/测速 6、其他 4；
 - 明细见 [IPC-COVERAGE.md](IPC-COVERAGE.md)。
 
-## 4. 当前命令清单（60 条）
+## 4. 当前命令清单（64 条）
 
 host_info, app_version, ping, python_selfcheck, engine_probe, convert, engine_worker_status,
 load_settings, save_settings, db_kv_get, db_kv_set, db_status, db_songs_list, db_songs_put,
@@ -189,7 +190,7 @@ presets_reorder, presets_reorder_to, presets_restore, set_transcribe_pause,
 pick_file, pick_directory, pick_audio, pick_audio_files, pick_image, pick_music_xml, check_midi,
 wallpaper_defaults, delete_midi, rename_midi, list_audio_files, library_stats, read_soundfont,
 db_playlists_delete, data_root, open_data_root, clean_temp, has_midi, verify_midi, dupe_midi,
-get_zoom_factor, set_zoom_factor, set_full_screen。
+get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear。
 
 ## 4.1 下一步
 

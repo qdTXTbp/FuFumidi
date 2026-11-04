@@ -5,16 +5,16 @@
 | 指标 | 数值 |
 |---|---:|
 | preload 暴露方法 | 265 |
-| Tauri 桥已映射方法 | 107 |
-| 尚未映射 | **158** |
+| Tauri 桥已映射方法 | 111 |
+| 尚未映射 | **154** |
 | preload IPC invoke 通道 | 250 |
-| Tauri call 通道 | 98 |
+| Tauri call 通道 | 102 |
 
 ## 缺口分类
 
 | 分类 | 数量 |
 |---|---:|
-| 设置/杂项 | 28 |
+| 设置/杂项 | 24 |
 | diffsinger | 19 |
 | utau/voicebank | 18 |
 | 模型/安装/平台 | 14 |
@@ -33,10 +33,6 @@
 ```text
 appUninstall
 audioDuration
-autosaveClear
-autosaveList
-autosaveRead
-autosaveWrite
 autostartGet
 autostartSet
 cancelInstall

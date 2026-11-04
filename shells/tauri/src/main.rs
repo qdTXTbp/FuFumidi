@@ -558,6 +558,96 @@ fn presets_restore() -> serde_json::Value {
 
 fn midi_root() -> PathBuf { data_dir().join("midi") }
 
+fn autosave_root() -> PathBuf { data_dir().join("temp").join("autosave") }
+
+fn autosave_safe_id(doc_id: &str) -> String {
+    let ok = (1..=120).contains(&doc_id.chars().count())
+        && doc_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-');
+    if ok { return doc_id.to_string(); }
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in doc_id.as_bytes() { h ^= *b as u64; h = h.wrapping_mul(0x100000001b3); }
+    format!("h_{h:016x}")
+}
+
+fn autosave_write_at(root: &Path, doc_id: &str, model: &serde_json::Value, meta: &serde_json::Value) -> serde_json::Value {
+    let dir = root.join("autosave");
+    let _ = std::fs::create_dir_all(&dir);
+    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+    let payload = serde_json::json!({
+        "format": "fufumidi-autosave", "version": 1, "docId": doc_id, "ts": ts,
+        "meta": meta, "data": model
+    });
+    let text = match serde_json::to_string(&payload) { Ok(s) => s, Err(e) => return serde_json::json!({ "ok": false, "error": e.to_string() }) };
+    let bytes = text.len();
+    if bytes > 32 * 1024 * 1024 { return serde_json::json!({ "ok": false, "error": "draft too large" }); }
+    let file = dir.join(format!("{}.json", autosave_safe_id(doc_id)));
+    let tmp = file.with_extension("json.tmp");
+    if let Err(e) = std::fs::write(&tmp, &text) { return serde_json::json!({ "ok": false, "error": e.to_string() }); }
+    match std::fs::rename(&tmp, &file) {
+        Ok(_) => serde_json::json!({ "ok": true, "path": file.display().to_string(), "ts": ts, "bytes": bytes }),
+        Err(e) => { let _ = std::fs::remove_file(&tmp); serde_json::json!({ "ok": false, "error": e.to_string() }) }
+    }
+}
+
+fn autosave_entries_at(root: &Path) -> Vec<serde_json::Value> {
+    let dir = root.join("autosave");
+    let mut out = Vec::new();
+    let Ok(rd) = std::fs::read_dir(&dir) else { return out };
+    for e in rd.flatten() {
+        let p = e.path();
+        if !p.is_file() || p.extension().and_then(|x| x.to_str()) != Some("json") { continue; }
+        let Ok(raw) = std::fs::read_to_string(&p) else { continue };
+        let Ok(j) = serde_json::from_str::<serde_json::Value>(&raw) else { continue };
+        if j.get("format").and_then(|v| v.as_str()) != Some("fufumidi-autosave") { continue; }
+        let size = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+        out.push(serde_json::json!({ "docId": j.get("docId").cloned().unwrap_or(serde_json::json!("")), "id": p.file_stem().and_then(|x| x.to_str()).unwrap_or(""), "ts": j.get("ts").cloned().unwrap_or(serde_json::json!(0)), "meta": j.get("meta").cloned().unwrap_or(serde_json::json!({})), "bytes": size, "path": p.display().to_string() }));
+    }
+    out.sort_by(|a, b| b["ts"].as_u64().unwrap_or(0).cmp(&a["ts"].as_u64().unwrap_or(0)));
+    out
+}
+
+fn autosave_read_at(root: &Path, doc_id: &str) -> serde_json::Value {
+    for entry in autosave_entries_at(root) {
+        if entry["docId"].as_str() != Some(doc_id) { continue; }
+        let path = entry["path"].as_str().unwrap_or("");
+        let Ok(raw) = std::fs::read_to_string(path) else { continue };
+        let Ok(j) = serde_json::from_str::<serde_json::Value>(&raw) else { continue };
+        return serde_json::json!({ "ok": true, "docId": doc_id, "ts": j.get("ts").cloned().unwrap_or(serde_json::json!(0)), "meta": j.get("meta").cloned().unwrap_or(serde_json::json!({})), "data": j.get("data").cloned().unwrap_or(serde_json::Value::Null), "path": path });
+    }
+    serde_json::json!({ "ok": false, "error": "not found" })
+}
+
+#[tauri::command]
+fn autosave_write(payload: serde_json::Value) -> serde_json::Value {
+    let doc_id = payload.get("docId").and_then(|v| v.as_str()).unwrap_or("");
+    if doc_id.is_empty() { return serde_json::json!({ "ok": false, "error": "missing docId" }); }
+    let model = payload.get("model").cloned().unwrap_or(serde_json::Value::Null);
+    let meta = payload.get("meta").cloned().unwrap_or_else(|| serde_json::json!({}));
+    autosave_write_at(&data_dir().join("temp"), doc_id, &model, &meta)
+}
+
+#[tauri::command]
+fn autosave_list() -> Vec<serde_json::Value> { autosave_entries_at(&data_dir().join("temp")) }
+
+#[tauri::command]
+fn autosave_read(doc_id: String) -> serde_json::Value { autosave_read_at(&data_dir().join("temp"), &doc_id) }
+
+fn autosave_clear_at(root: &Path, doc_id: &str) -> serde_json::Value {
+    let mut removed = false;
+    for entry in autosave_entries_at(root) {
+        if entry["docId"].as_str() == Some(doc_id) {
+            if let Some(p) = entry["path"].as_str() { if std::fs::remove_file(p).is_ok() { removed = true; } }
+        }
+    }
+    serde_json::json!({ "ok": true, "removed": removed })
+}
+
+#[tauri::command]
+fn autosave_clear(doc_id: String) -> serde_json::Value {
+    autosave_clear_at(&data_dir().join("temp"), &doc_id)
+}
+
+
 fn desktop_dir() -> Option<PathBuf> {
     let base = std::env::var("USERPROFILE").ok().map(PathBuf::from)?;
     let one = base.join("Desktop");
@@ -1383,7 +1473,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, db_kv_get, db_kv_set,
-            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, model_list,
+            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
@@ -1416,6 +1506,26 @@ mod check_midi_tests {
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    #[test]
+    fn autosave_roundtrip() {
+        let root = tmpdir("autosave");
+        let w = super::autosave_write_at(&root, "doc/unsafe id", &serde_json::json!({ "v": 1 }), &serde_json::json!({ "name": "draft" }));
+        assert_eq!(w["ok"], true);
+        assert!(w["bytes"].as_u64().unwrap() > 0);
+        let list = super::autosave_entries_at(&root);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0]["docId"], "doc/unsafe id");
+        assert_eq!(list[0]["meta"]["name"], "draft");
+        let r = super::autosave_read_at(&root, "doc/unsafe id");
+        assert_eq!(r["ok"], true);
+        assert_eq!(r["data"]["v"], 1);
+        assert_eq!(super::autosave_read_at(&root, "missing")["ok"], false);
+        let c = super::autosave_clear_at(&root, "doc/unsafe id");
+        assert_eq!(c["removed"], true);
+        assert!(super::autosave_entries_at(&root).is_empty());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

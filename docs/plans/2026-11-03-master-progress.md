@@ -323,6 +323,9 @@
 - **Tauri 缩放/全屏**：`get_zoom_factor/set_zoom_factor/set_full_screen`（50%–300% 夹取、状态记忆、
   WebView 缩放与全屏）；桥补 getZoomFactor/setZoomFactor/setFullScreen；Rust 测试覆盖缩放夹取；
   命令总数 **60**，覆盖 107 方法/158 未映射（98 call）。真实窗口行为未在无头会话验证。
+- **Tauri 自动保存/崩溃恢复**：`autosave_write/list/read/clear`（dataRoot/temp/autosave，
+  ≤32MB、原子 rename、非法 docId 安全化）；桥补 `project.autosave*`；Rust 测试写/列/读/清；
+  命令总数 **64**，覆盖 111 方法/154 未映射（102 call）。
 - **T-117 曲库/设置共享 Electron 数据（重要）**：Rust 用 rusqlite 直读/写
   `%APPDATA%/FuFumidi/fufumidi/fufumidi.sqlite`（songs/playlists/kv），设置优先读 legacy
   settings.json；只读验收实测 **1972 首真实曲目**、57 个设置键、侧栏「全部曲目 1972」正常；
