@@ -1731,6 +1731,42 @@ fn mp4_duration(b: &[u8]) -> Option<f64> {
     });
     found
 }
+fn ogg_pages(b: &[u8]) -> Vec<(u64, usize, usize)> {
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i + 27 <= b.len() {
+        if &b[i..i+4] != b"OggS" { i += 1; continue; }
+        let granule = u64::from_le_bytes([b[i+6],b[i+7],b[i+8],b[i+9],b[i+10],b[i+11],b[i+12],b[i+13]]);
+        let nseg = b[i+26] as usize;
+        let table = i + 27;
+        if table + nseg > b.len() { break; }
+        let payload: usize = b[table..table+nseg].iter().map(|x| *x as usize).sum();
+        let body = table + nseg;
+        if body + payload > b.len() { break; }
+        out.push((granule, body, payload));
+        i = body + payload;
+    }
+    out
+}
+
+fn ogg_duration(b: &[u8]) -> Option<f64> {
+    let pages = ogg_pages(b);
+    let last = pages.iter().rev().find(|(g, _, _)| *g != u64::MAX).map(|(g, _, _)| *g)?;
+    if let Some(p) = b.windows(7).position(|w| w == b"OpusHead") {
+        if p + 12 <= b.len() {
+            let preskip = u16::from_le_bytes([b[p+10], b[p+11]]) as u64;
+            return Some(last.saturating_sub(preskip) as f64 / 48000.0);
+        }
+        return Some(last as f64 / 48000.0);
+    }
+    if let Some(p) = b.windows(7).position(|w| w == b"\x01vorbis") {
+        if p + 16 <= b.len() {
+            let rate = u32::from_le_bytes([b[p+12],b[p+13],b[p+14],b[p+15]]);
+            if rate > 0 { return Some(last as f64 / rate as f64); }
+        }
+    }
+    None
+}
 fn audio_duration_at(p: &str) -> serde_json::Value {
     let path = Path::new(p);
     let Ok(meta) = std::fs::metadata(path) else { return serde_json::json!({ "ok": false, "error": "not found" }); };
@@ -1743,6 +1779,7 @@ fn audio_duration_at(p: &str) -> serde_json::Value {
         "wav" | "wave" => wav_duration(&head),
         "flac" => flac_duration(&head),
         "m4a" | "mp4" | "m4b" => mp4_duration(&head),
+        "ogg" | "oga" | "opus" => ogg_duration(&head),
         "mp3" => mp3_duration(path),
         _ => None,
     };
@@ -3490,6 +3527,26 @@ mod check_midi_tests {
         assert_eq!(m["audio"]["sampleRate"], 48000);
         assert_eq!(super::sanitize_export_name("a:b/c", "wav"), "a_b_c.wav");
         assert_eq!(super::write_export_at(&root, "empty", "wav", &[], &meta, "test")["ok"], false);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn audio_duration_ogg() {
+        let root = tmpdir("audio-ogg");
+        let f = root.join("clip.ogg");
+        fn page(granule: u64, payload: &[u8]) -> Vec<u8> {
+            let mut b: Vec<u8> = Vec::new();
+            b.extend_from_slice(b"OggS"); b.push(0); b.push(0);
+            b.extend_from_slice(&granule.to_le_bytes());
+            b.extend_from_slice(&1u32.to_le_bytes()); b.extend_from_slice(&0u32.to_le_bytes()); b.extend_from_slice(&0u32.to_le_bytes());
+            b.push(1); b.push(payload.len() as u8); b.extend_from_slice(payload); b
+        }
+        let mut header = vec![1u8]; header.extend_from_slice(b"vorbis"); header.extend_from_slice(&[0,0,0,0,1,0x44,0xAC,0,0]);
+        let mut data: Vec<u8> = Vec::new(); data.extend_from_slice(&page(0, &header)); data.extend_from_slice(&page(44100, &[]));
+        std::fs::write(&f, &data).unwrap();
+        let r = super::audio_duration_at(f.to_str().unwrap());
+        assert_eq!(r["ok"], true, "{}", r);
+        assert!((r["seconds"].as_f64().unwrap() - 1.0).abs() < 0.001);
         let _ = std::fs::remove_dir_all(root);
     }
 

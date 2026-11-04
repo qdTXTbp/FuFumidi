@@ -393,6 +393,7 @@
 - **Tauri 帮助文档打开**：open_edit_guide/plugins_open_docs（复制 plugins/plugin-dev.html、renderer/edit-guide.html 到 dataRoot/temp/FuFumidi-doc 后用默认浏览器打开；stage-bundle 增加 bundle/docs，tauri.conf 增加 resources docs）；Rust 测试 dev 源存在，**不在测试中打开浏览器**；命令总数 **112**，arg 审计 26→**24**，cargo test **37/37 + 1 ignored**。
 - **Tauri 智能修正 refine**：调 engine/smart_midi.py refine（audio/midi/out/mode/stemBalance/窗口参数），逐行 emit engine:refine:log，解析 ###RESULT；Rust 测试参数拼装；**真机引擎冒烟已完成**：合成 2 秒 WAV + 2 音符 MIDI，smart_midi 2.32s 返回 ###RESULT ok、输出 76 字节 MIDI；命令的 stderr 现会并入错误尾部；命令总数 **113**，arg 审计 24→**23**，cargo test **38/38 + 1 ignored**。
 - **Tauri 音频时长补 M4A/MP4**：解析 MP4 box/`mvhd` 得到时长；合成 M4A 2s 单测通过；audio_duration 现覆盖 WAV/FLAC/MP3/M4A，cargo test **39/39 + 1 ignored**。
+- **Tauri 音频时长补 OGG**：解析 OggS 页 granule + Vorbis 采样率 / Opus preskip；合成 1s OGG 单测；audio_duration 覆盖 WAV/FLAC/MP3/M4A/OGG，cargo test **40/40 + 1 ignored**。
 - **T-117 曲库/设置共享 Electron 数据（重要）**：Rust 用 rusqlite 直读/写
   `%APPDATA%/FuFumidi/fufumidi/fufumidi.sqlite`（songs/playlists/kv），设置优先读 legacy
   settings.json；只读验收实测 **1972 首真实曲目**、57 个设置键、侧栏「全部曲目 1972」正常；
