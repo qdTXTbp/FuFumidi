@@ -117,6 +117,10 @@ export function installTauriBridge() {
       openDir: () => call('sf_workshop_open_dir'),
       onProgress: (cb) => listen('sf-workshop:progress', cb),
     },
+    // ---- UTAU / 统一声库（只读；Electron 侧 utau:listVoicebanks / voicebank:unified）----
+    // Tauri 端命令只扫数据目录，不 import / 不删除 / 不下载（那些动作仍未移植，见审计缺口）。
+    utauListVoicebanks: () => call('utau_list_voicebanks'),
+    voicebankUnified: () => call('voicebank_unified'),
     pickZip: () =>
       call('pick_file', {
         opts: { filters: [{ name: t('GPU 增强包'), extensions: ['zip', 'part1', 'part2', 'part3', 'part4', 'part5'] }] },

@@ -66,13 +66,20 @@ fn data_dir() -> PathBuf {
 
 fn models_dir() -> PathBuf { data_dir().join("models") }
 
-fn dir_size(p: &Path) -> u64 {
+fn dir_size(p: &Path) -> u64 { dir_size_depth(p, 0) }
+
+/// 递归统计目录字节数。**不跟随符号链接**（声库里的链接可能成环），深度上限再兜底；
+/// 单个子项读失败只跳过它自己。
+fn dir_size_depth(p: &Path, depth: u32) -> u64 {
+    if depth > 64 { return 0; }
     let Ok(rd) = std::fs::read_dir(p) else { return 0 };
     let mut total = 0u64;
     for e in rd.flatten() {
         let path = e.path();
-        if path.is_dir() { total += dir_size(&path); }
-        else if let Ok(m) = e.metadata() { total += m.len(); }
+        let Ok(md) = std::fs::symlink_metadata(&path) else { continue };
+        if md.file_type().is_symlink() { continue; }
+        if md.is_dir() { total += dir_size_depth(&path, depth + 1); }
+        else { total += md.len(); }
     }
     total
 }
@@ -135,6 +142,189 @@ fn model_list() -> Vec<serde_json::Value> {
     push_model(&mut items, "hnsep", "hnsep (Worldline v11)", "transcribe", dir.join("hnsep"), 100_000, "harmonic separation");
     push_model(&mut items, "htdemucs4_6stems", "HTDemucs4 6stems", "separate", dir.join("multi/htdemucs4_6stems"), 1_000_000, "6-stem separation");
     items
+}
+
+/* ---------------- 声库扫描（只读；对齐 main/utau.js:84 / main/diffsinger.js:1261） ---------------- */
+
+/// 读文本文件：读失败返回 None；UTF-8 非法字节用 U+FFFD 替换（与 Node 读 utf8 的行为一致，且绝不 panic）。
+fn read_text_lossy(path: &Path) -> Option<String> {
+    std::fs::read(path).ok().map(|b| String::from_utf8_lossy(&b).into_owned())
+}
+
+/// 行首/行尾裁剪：Rust 的 `is_whitespace` 不含 U+FEFF，而 JS 的 `trim()` 含 —— 显式补上，
+/// 否则带 UTF-8 BOM 的 character.txt / character.yaml 会被当成没有 name。
+fn trim_text_line(s: &str) -> &str {
+    s.trim_matches(|c: char| c.is_whitespace() || c as u32 == 0xFEFF)
+}
+
+/// 声库根判定（对齐 main/utau.js 的 isBankRoot）：三标记任一存在即为声库根。
+fn utau_is_bank_root(dir: &Path) -> bool {
+    ["character.txt", "character.yaml", "oto.ini"]
+        .iter()
+        .any(|f| dir.join(f).exists())
+}
+
+/// 行首是否为 character.txt 的键（name / 名前，大小写不敏感）；返回键之后的剩余部分。
+fn strip_character_txt_key(line: &str) -> Option<&str> {
+    // `line[..4]` 只在 4 是字符边界时才安全（避免切在多字节汉字中间 panic）
+    if line.len() >= 4 && line.is_char_boundary(4) && line[..4].eq_ignore_ascii_case("name") {
+        return Some(&line[4..]);
+    }
+    line.strip_prefix("名前")
+}
+
+/// character.txt 的显示名：首个 `name=` / `名前=` / `name：` 行，值 trim 后非空。
+fn utau_name_from_character_txt(text: &str) -> Option<String> {
+    for raw in text.lines() {
+        let Some(rest) = strip_character_txt_key(trim_text_line(raw)) else { continue };
+        let rest = rest.trim_start();
+        let Some(value) = rest
+            .strip_prefix('=')
+            .or_else(|| rest.strip_prefix('：'))
+            .or_else(|| rest.strip_prefix(':'))
+        else {
+            continue;
+        };
+        let value = value.trim();
+        if !value.is_empty() {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+/// character.yaml 的显示名：首个 `name:` 行（允许缩进，对齐参考正则），去引号后非空。
+fn utau_name_from_character_yaml(text: &str) -> Option<String> {
+    for raw in text.lines() {
+        let line = raw.trim_start_matches(|c: char| c.is_whitespace() || c as u32 == 0xFEFF);
+        if !(line.len() >= 4 && line.is_char_boundary(4) && line[..4].eq_ignore_ascii_case("name")) {
+            continue;
+        }
+        let Some(rest) = line[4..].trim_start().strip_prefix(':') else { continue };
+        let value = rest.trim();
+        if value.is_empty() {
+            continue;
+        }
+        let value = value.trim_matches(|c| c == '"' || c == '\'').trim();
+        if !value.is_empty() {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+/// 显示名：character.yaml 的 name: 覆盖 character.txt 的 name=/名前=（对齐上游 ApplyConfig 顺序），
+/// 全空返回空串，由调用方回落目录名。
+fn utau_bank_display_name(dir: &Path) -> String {
+    let mut name = String::new();
+    if let Some(txt) = read_text_lossy(&dir.join("character.txt")) {
+        if let Some(n) = utau_name_from_character_txt(&txt) {
+            name = n;
+        }
+    }
+    if let Some(yaml) = read_text_lossy(&dir.join("character.yaml")) {
+        if let Some(n) = utau_name_from_character_yaml(&yaml) {
+            name = n;
+        }
+    }
+    name
+}
+
+/// 已导入 UTAU 声库列表（纯函数，root 由调用方给，便于临时目录单测）：
+/// **只扫 root 一层**，条目读失败只跳过它自己；root 缺失/不可读返回空列表。
+fn utau_list_voicebanks_at(root: &Path) -> serde_json::Value {
+    let mut list = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let dir = entry.path();
+            // metadata 与 Node statSync 一样跟随符号链接；失败只影响这一条
+            let Ok(md) = std::fs::metadata(&dir) else { continue };
+            if !md.is_dir() || !utau_is_bank_root(&dir) {
+                continue;
+            }
+            let name = utau_bank_display_name(&dir);
+            let name = if name.is_empty() {
+                entry.file_name().to_string_lossy().into_owned()
+            } else {
+                name
+            };
+            list.push(serde_json::json!({ "name": name, "dir": dir.display().to_string() }));
+        }
+    }
+    serde_json::json!({ "ok": true, "list": list })
+}
+
+/// DiffSinger 声库判定：dsconfig.yaml 在根或**下一层**（对齐 findInTree(dir, 'dsconfig.yaml', 1)）。
+fn ds_is_voicebank(dir: &Path) -> bool {
+    if dir.join("dsconfig.yaml").exists() {
+        return true;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else { return false };
+    for entry in entries.flatten() {
+        let child = entry.path();
+        if child.is_dir() && child.join("dsconfig.yaml").exists() {
+            return true;
+        }
+    }
+    false
+}
+
+/// 扫描一个声库根：UTAU 侧任意目录都算（对齐 main/diffsinger.js），DiffSinger 侧要有 dsconfig。
+/// root 读失败返回空；条目级失败只跳过自己。
+fn scan_voicebank_dirs(root: &Path, kind: &str) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(root) else { return out };
+    for entry in entries.flatten() {
+        let dir = entry.path();
+        let Ok(md) = std::fs::metadata(&dir) else { continue };
+        if !md.is_dir() {
+            continue;
+        }
+        if kind == "diffsinger" && !ds_is_voicebank(&dir) {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        out.push(serde_json::json!({
+            "kind": kind,
+            "name": name,
+            "dir": dir.display().to_string(),
+            "size": dir_size(&dir),
+            "id": format!("{kind}:{name}"),
+        }));
+    }
+    out
+}
+
+/// 统一声库清单（纯函数）：两侧各自独立容错，任一侧目录缺失都不连累另一侧。
+fn voicebank_unified_at(utau_root: &Path, ds_root: &Path) -> serde_json::Value {
+    let utau = scan_voicebank_dirs(utau_root, "utau");
+    let ds = scan_voicebank_dirs(ds_root, "diffsinger");
+    let mut list = Vec::with_capacity(utau.len() + ds.len());
+    list.extend(utau.iter().cloned());
+    list.extend(ds.iter().cloned());
+    serde_json::json!({
+        "ok": true,
+        "list": list,
+        "utauRoot": utau_root.display().to_string(),
+        "diffsingerRoot": ds_root.display().to_string(),
+        "utauCount": utau.len(),
+        "diffsingerCount": ds.len(),
+    })
+}
+
+/// 已导入 UTAU 声库列表（只读；对齐 Electron `utau:listVoicebanks`）。
+#[tauri::command]
+fn utau_list_voicebanks() -> serde_json::Value {
+    utau_list_voicebanks_at(&data_dir().join("voicebanks"))
+}
+
+/// 统一声库清单（只读；对齐 Electron `voicebank:unified`）。
+#[tauri::command]
+fn voicebank_unified() -> serde_json::Value {
+    voicebank_unified_at(
+        &data_dir().join("voicebanks"),
+        &data_dir().join("diffsinger-voicebanks"),
+    )
 }
 
 fn data_root_overridden() -> bool {
@@ -3253,7 +3443,8 @@ fn main() {
             presets_reorder, presets_reorder_to, presets_restore,
             pick_file, pick_directory, pick_audio, pick_audio_files, pick_image, pick_music_xml,
             list_midi_files, list_audio_files, library_stats, read_soundfont, read_binary, save_binary,
-            convert, probe, refine, cancel, set_transcribe_pause, engine_worker_status
+            convert, probe, refine, cancel, set_transcribe_pause, engine_worker_status,
+            utau_list_voicebanks, voicebank_unified
         ])
         .setup(|_app| {
             println!("[fufumidi-shell] {}", serde_json::to_string(&host_info_json()).unwrap_or_default());
@@ -4166,5 +4357,197 @@ mod update_sources_tests {
         actual.extend(ids(&update_sources_at(Some("beta"), Some("auto"), None)));
         actual.sort();
         assert_eq!(actual, config_ids, "Tauri 更新源 id 必须与 build/kachina.config.json 的 source[].id 一致");
+    }
+}
+
+#[cfg(test)]
+mod voicebank_tests {
+    use super::*;
+    use std::path::{Path, PathBuf};
+
+    fn tmpdir(tag: &str) -> PathBuf {
+        let p = std::env::temp_dir().join(format!("fufumidi-voicebank-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    fn mkdir(p: &Path) {
+        std::fs::create_dir_all(p).unwrap();
+    }
+
+    fn put(p: &Path, text: &str) {
+        if let Some(parent) = p.parent() { mkdir(parent); }
+        std::fs::write(p, text).unwrap();
+    }
+
+    fn put_bytes(p: &Path, bytes: &[u8]) {
+        if let Some(parent) = p.parent() { mkdir(parent); }
+        std::fs::write(p, bytes).unwrap();
+    }
+
+    fn find<'a>(v: &'a serde_json::Value, name: &str) -> Option<&'a serde_json::Value> {
+        v["list"].as_array()?.iter().find(|x| x["name"] == name)
+    }
+
+    fn ids(v: &serde_json::Value) -> Vec<String> {
+        v["list"].as_array().unwrap().iter()
+            .map(|x| x["id"].as_str().unwrap_or_default().to_string())
+            .collect()
+    }
+
+    /// 三标记识别 / yaml 优先 / txt name= 与 名前= / 空名回退目录名 / 非声库跳过 / 只扫一层。
+    #[test]
+    fn utau_markers_names_and_single_level() {
+        let root = tmpdir("markers");
+        mkdir(&root.join("txt-name"));
+        put(&root.join("txt-name/character.txt"), "name=文本声库\n");
+        mkdir(&root.join("jp-name"));
+        put(&root.join("jp-name/character.txt"), "名前：日本語名\n");
+        mkdir(&root.join("yaml-wins"));
+        put(&root.join("yaml-wins/character.txt"), "name=旧名\n");
+        put(&root.join("yaml-wins/character.yaml"), "name: 新名\n");
+        mkdir(&root.join("yaml-only"));
+        put(&root.join("yaml-only/character.yaml"), "name: 仅 Yaml\n");
+        mkdir(&root.join("oto-only"));
+        put(&root.join("oto-only/oto.ini"), "");
+        mkdir(&root.join("empty-name"));
+        put(&root.join("empty-name/character.txt"), "name=\n");
+        mkdir(&root.join("bom-name"));
+        let mut bom_txt = vec![0xEF, 0xBB, 0xBF];
+        bom_txt.extend_from_slice("name=BOM 声库".as_bytes());
+        put_bytes(&root.join("bom-name/character.txt"), &bom_txt);
+        mkdir(&root.join("not-a-bank"));
+        put(&root.join("not-a-bank/readme.md"), "x");
+        put(&root.join("stray.txt"), "x");
+        // 声库根下一层的声库不应被扫到（只扫 root 一层）
+        mkdir(&root.join("txt-name/nested"));
+        put(&root.join("txt-name/nested/character.txt"), "name=嵌套\n");
+
+        let v = utau_list_voicebanks_at(&root);
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["list"].as_array().unwrap().len(), 7, "7 个声库根（三标记、空名回退、BOM 各一个）");
+        assert_eq!(find(&v, "文本声库").unwrap()["dir"], root.join("txt-name").display().to_string());
+        assert_eq!(find(&v, "日本語名").unwrap()["dir"], root.join("jp-name").display().to_string());
+        assert_eq!(find(&v, "新名").unwrap()["dir"], root.join("yaml-wins").display().to_string());
+        assert_eq!(find(&v, "仅 Yaml").unwrap()["dir"], root.join("yaml-only").display().to_string(), "只有 character.yaml 也算声库根");
+        assert!(find(&v, "旧名").is_none(), "yaml 的 name: 必须覆盖 character.txt 的 name=");
+        assert_eq!(find(&v, "oto-only").unwrap()["dir"], root.join("oto-only").display().to_string());
+        assert_eq!(find(&v, "empty-name").unwrap()["dir"], root.join("empty-name").display().to_string());
+        assert_eq!(find(&v, "BOM 声库").unwrap()["dir"], root.join("bom-name").display().to_string(), "UTF-8 BOM 不该吞掉 name=");
+        assert!(find(&v, "嵌套").is_none(), "不递归声库根");
+        assert!(find(&v, "not-a-bank").is_none(), "非声库目录跳过");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn utau_missing_root_is_empty_ok() {
+        let root = tmpdir("missing-root");
+        let v = utau_list_voicebanks_at(&root.join("nope"));
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["list"].as_array().unwrap().len(), 0);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// UTF-8 非法字节走 lossy：不 panic、不丢条目。
+    #[test]
+    fn utau_lossy_utf8_does_not_panic() {
+        let root = tmpdir("lossy");
+        mkdir(&root.join("broken-txt"));
+        put_bytes(&root.join("broken-txt/character.txt"), b"name=\xff\xfe\x80\n");
+        mkdir(&root.join("broken-yaml"));
+        put_bytes(&root.join("broken-yaml/character.yaml"), b"name: \xc3\x28\n");
+        let v = utau_list_voicebanks_at(&root);
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["list"].as_array().unwrap().len(), 2);
+        assert!(
+            v["list"].as_array().unwrap().iter()
+                .any(|x| x["name"].as_str().unwrap_or_default().contains('\u{FFFD}')),
+            "非法字节应替换为 U+FFFD 而不是放弃整条"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// DiffSinger 只看 dsconfig.yaml 的根/下一层；UTAU 侧任意目录；counts 与 id 前缀。
+    #[test]
+    fn unified_dsconfig_root_and_one_level() {
+        let base = tmpdir("unified");
+        let utau_root = base.join("voicebanks");
+        let ds_root = base.join("diffsinger-voicebanks");
+        mkdir(&utau_root.join("ub1"));
+        put(&utau_root.join("ub1/oto.ini"), "");
+        mkdir(&utau_root.join("ub-any-dir"));
+        put(&utau_root.join("stray.txt"), "x");
+        mkdir(&ds_root.join("ds-root"));
+        put(&ds_root.join("ds-root/dsconfig.yaml"), "x");
+        mkdir(&ds_root.join("ds-child/inner"));
+        put(&ds_root.join("ds-child/inner/dsconfig.yaml"), "x");
+        mkdir(&ds_root.join("ds-deep/l2/l3"));
+        put(&ds_root.join("ds-deep/l2/l3/dsconfig.yaml"), "x");
+        mkdir(&ds_root.join("ds-empty"));
+        put(&ds_root.join("ds-empty/readme.md"), "x");
+
+        let v = voicebank_unified_at(&utau_root, &ds_root);
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["utauCount"], 2);
+        assert_eq!(v["diffsingerCount"], 2);
+        assert_eq!(v["list"].as_array().unwrap().len(), 4);
+        assert_eq!(v["utauRoot"], utau_root.display().to_string());
+        assert_eq!(v["diffsingerRoot"], ds_root.display().to_string());
+
+        let all = ids(&v);
+        for want in ["utau:ub1", "utau:ub-any-dir", "diffsinger:ds-root", "diffsinger:ds-child"] {
+            assert!(all.iter().any(|x| x == want), "缺少 {want}");
+        }
+        assert!(!all.iter().any(|x| x == "diffsinger:ds-deep"), "dsconfig 第三层不算");
+        assert!(!all.iter().any(|x| x == "diffsinger:ds-empty"), "无 dsconfig 不算");
+
+        let ds_child = find(&v, "ds-child").unwrap();
+        assert_eq!(ds_child["kind"], "diffsinger");
+        assert_eq!(ds_child["dir"], ds_root.join("ds-child").display().to_string());
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// size 递归求和（含子目录），UTAU 统一清单里也带 size。
+    #[test]
+    fn unified_size_sums_recursively() {
+        let base = tmpdir("size");
+        let utau_root = base.join("vb");
+        mkdir(&utau_root.join("bank/nested"));
+        put_bytes(&utau_root.join("bank/a.bin"), &[0u8; 3]);
+        put_bytes(&utau_root.join("bank/nested/b.bin"), &[0u8; 5]);
+        put_bytes(&utau_root.join("bank/nested/empty.bin"), b"");
+        let v = voicebank_unified_at(&utau_root, &base.join("ds-missing"));
+        let item = &v["list"][0];
+        assert_eq!(item["kind"], "utau");
+        assert_eq!(item["size"], 8);
+        assert_eq!(v["diffsingerCount"], 0);
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// 一侧目录缺失时另一侧照常工作，roots 仍然原样回显。
+    #[test]
+    fn unified_tolerates_one_missing_side() {
+        let base = tmpdir("tolerant");
+        let utau_root = base.join("voicebanks");
+        let ds_root = base.join("diffsinger-voicebanks");
+        mkdir(&utau_root.join("only-utau"));
+        mkdir(&ds_root.join("only-ds"));
+        put(&ds_root.join("only-ds/dsconfig.yaml"), "x");
+
+        let no_ds = base.join("no-ds");
+        let a = voicebank_unified_at(&utau_root, &no_ds);
+        assert_eq!(a["ok"], true);
+        assert_eq!(a["utauCount"], 1);
+        assert_eq!(a["diffsingerCount"], 0);
+        assert_eq!(a["diffsingerRoot"], no_ds.display().to_string());
+
+        let no_utau = base.join("no-utau");
+        let b = voicebank_unified_at(&no_utau, &ds_root);
+        assert_eq!(b["ok"], true);
+        assert_eq!(b["utauCount"], 0);
+        assert_eq!(b["diffsingerCount"], 1);
+        assert_eq!(ids(&b), vec!["diffsinger:only-ds"]);
+        let _ = std::fs::remove_dir_all(base);
     }
 }

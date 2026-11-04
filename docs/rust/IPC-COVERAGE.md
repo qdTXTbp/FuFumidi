@@ -5,18 +5,18 @@
 | 指标 | 数值 |
 |---|---:|
 | preload 暴露方法 | 265 |
-| Tauri 桥已映射方法 | 136 |
-| 尚未映射 | **129** |
+| Tauri 桥已映射方法 | 138 |
+| 尚未映射 | **127** |
 | preload IPC invoke 通道 | 250 |
-| Tauri call 通道 | 131 |
+| Tauri call 通道 | 133 |
 
 ## 缺口分类
 
 | 分类 | 数量 |
 |---|---:|
 | diffsinger | 19 |
-| utau/voicebank | 18 |
 | 设置/杂项 | 17 |
+| utau/voicebank | 16 |
 | 模型/安装/平台 | 13 |
 | rvc | 12 |
 | 资源/音频/扩展 | 11 |
@@ -148,7 +148,6 @@ utauExportVoicebank
 utauExportVoicebankZip
 utauFlags
 utauImportVoicebankZip
-utauListVoicebanks
 utauReadOto
 utauRenderTrack
 utauSaveOto
@@ -158,7 +157,6 @@ videoExportBegin
 videoExportEnd
 videoExportWrite
 view
-voicebankUnified
 webFallback
 ```
 

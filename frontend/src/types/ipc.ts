@@ -395,6 +395,29 @@ export interface VoicebankProgress {
   error?: string;
 }
 
+/** 统一声库清单条目（voicebank:unified / Tauri voicebank_unified） */
+export interface VoicebankUnifiedItem {
+  kind: 'utau' | 'diffsinger';
+  /** 目录名（UTAU 列表接口才用 character.yaml/txt 的显示名） */
+  name: string;
+  dir: string;
+  /** 声库目录递归字节数 */
+  size: number;
+  /** `kind:name`，可直接当列表 key */
+  id: string;
+}
+
+/** 统一声库清单（UTAU + DiffSinger；两侧目录缺失时各自返回空，不互相连累） */
+export interface VoicebankUnifiedResult {
+  ok: boolean;
+  list?: VoicebankUnifiedItem[];
+  utauRoot?: string;
+  diffsingerRoot?: string;
+  utauCount?: number;
+  diffsingerCount?: number;
+  error?: string;
+}
+
 /* ---------------- DiffSinger 模块化集成 ---------------- */
 
 /** DiffSinger 推理后端（GPU）信息（diffsinger:status.gpu） */
@@ -1168,6 +1191,8 @@ export interface FuBridge {
   utauSaveOto(cfg: { voicebank: string; base64: string }): Promise<{ ok: boolean; path?: string; backup?: string; bytes?: number; error?: string }>;
   utauFlags(): Promise<{ ok: boolean; engine_version?: string; supported?: { flag: string; default: number | null; min: number | null; max: number | null; desc: string }[]; unsupported?: { flag: string; desc: string }[]; example?: string; error?: string }>;
   utauListVoicebanks(): Promise<{ ok: boolean; list?: { name: string; dir: string }[]; error?: string }>;
+  /** 统一声库清单（音频制作侧的 UTAU ↔ DiffSinger 切换用） */
+  voicebankUnified(): Promise<VoicebankUnifiedResult>;
   utauImportVoicebankZip(): Promise<{ ok: boolean; canceled?: boolean; name?: string; dir?: string; error?: string }>;
   /** 声库资源中心：可一键安装的开源/免费声库条目 */
   utauVoicebankRegistry(): Promise<{ ok: boolean; dir?: string; list?: VoicebankEntry[]; error?: string }>;
