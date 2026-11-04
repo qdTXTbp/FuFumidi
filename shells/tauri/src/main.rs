@@ -559,6 +559,25 @@ fn presets_restore() -> serde_json::Value {
 
 fn midi_root() -> PathBuf { data_dir().join("midi") }
 
+fn cover_data_url(bytes: &[u8], ext: &str) -> serde_json::Value {
+    if bytes.len() > 6 * 1024 * 1024 { return serde_json::json!({ "ok": false, "error": "图片过大（>6MB）" }); }
+    let e = ext.trim_start_matches('.').to_ascii_lowercase();
+    let mime = if e == "jpg" { "jpeg" } else { e.as_str() };
+    let ok = matches!(mime, "png" | "jpeg" | "webp" | "bmp");
+    if !ok { return serde_json::json!({ "ok": false, "error": "unsupported image type" }); }
+    serde_json::json!({ "ok": true, "dataUrl": format!("data:image/{mime};base64,{}", base64_encode(bytes)) })
+}
+
+#[tauri::command]
+fn pick_cover(app: AppHandle) -> serde_json::Value {
+    let picked = app.dialog().file().set_title("选择封面图片").add_filter("图片", &["png", "jpg", "jpeg", "webp", "bmp"]).blocking_pick_file();
+    let Some(path) = picked.and_then(|p| p.into_path().ok()) else { return serde_json::json!({ "ok": false, "canceled": true }); };
+    let Ok(bytes) = std::fs::read(&path) else { return serde_json::json!({ "ok": false, "error": "read failed" }); };
+    let ext = path.extension().and_then(|x| x.to_str()).unwrap_or("png");
+    cover_data_url(&bytes, ext)
+}
+
+
 fn write_stems_zip_at(target: &Path, files: &[serde_json::Value], suggested: &str) -> serde_json::Value {
     if files.is_empty() { return serde_json::json!({ "ok": false, "error": "没有可打包的分轨文件" }); }
     if files.len() > 100 { return serde_json::json!({ "ok": false, "error": "分轨数量过多（>100）" }); }
@@ -2010,7 +2029,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, db_kv_get, db_kv_set,
-            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, model_list,
+            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
@@ -2044,6 +2063,16 @@ mod check_midi_tests {
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    #[test]
+    fn cover_data_urls() {
+        let r = super::cover_data_url(b"abc", "jpg");
+        assert_eq!(r["ok"], true);
+        assert_eq!(r["dataUrl"], "data:image/jpeg;base64,YWJj");
+        assert_eq!(super::cover_data_url(b"x", "gif")["ok"], false);
+        let big = vec![0u8; 6 * 1024 * 1024 + 1];
+        assert_eq!(super::cover_data_url(&big, "png")["ok"], false);
     }
 
     #[test]

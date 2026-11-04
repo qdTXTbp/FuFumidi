@@ -351,6 +351,10 @@
 - **Tauri 分轨 ZIP 导出**：`export_stems_zip`（≤100 轨/总 ≤2GB/文件名清洗/对话框或 targetPath）；
   桥补 exportStemsZip；Rust 测试两轨 ZIP 条目与字节、非法名、空列表；命令总数 **75**，
   覆盖 120 方法/145 未映射（112 call）；cargo test **17/17**。
+- **Tauri 封面选择 + 顶层别名**：`pick_cover`（图片→data URL，≤6MB，png/jpeg/webp/bmp）；
+  桥补 pickCover，并补顶层 copyAsset/openExternal 别名（修复 singer.ts/设置页守卫静默不执行）；
+  Rust 测试 base64/MIME/gif 拒绝/超大拒绝；命令总数 **76**，覆盖 121 方法/144 未映射（113 call），
+  cargo test **18/18**。
 - **T-117 曲库/设置共享 Electron 数据（重要）**：Rust 用 rusqlite 直读/写
   `%APPDATA%/FuFumidi/fufumidi/fufumidi.sqlite`（songs/playlists/kv），设置优先读 legacy
   settings.json；只读验收实测 **1972 首真实曲目**、57 个设置键、侧栏「全部曲目 1972」正常；
