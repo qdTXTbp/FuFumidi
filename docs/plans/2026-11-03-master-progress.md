@@ -336,6 +336,8 @@
   对话框或指定路径；条目数≤4096、总解压≤4GB、拒绝绝对路径/..，只解压 json.assets 白名单资产）；
   桥补 project.save/open；Rust 测试写包→读包、资产字节一致、非法 id 进 missing。命令总数 **70**，
   覆盖 115 方法/150 未映射（107 call）。无头未验证真实对话框流程。
+- **工程包安全测试**：解包缓存目录参数化（测试写入临时目录，不污染真实数据根）；
+  恶意 ZIP 的 `../evil.txt` 被忽略、只有白名单资产进入 resolved。Rust 测试仍 **13/13**。
 - **T-117 曲库/设置共享 Electron 数据（重要）**：Rust 用 rusqlite 直读/写
   `%APPDATA%/FuFumidi/fufumidi/fufumidi.sqlite`（songs/playlists/kv），设置优先读 legacy
   settings.json；只读验收实测 **1972 首真实曲目**、57 个设置键、侧栏「全部曲目 1972」正常；

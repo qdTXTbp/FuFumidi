@@ -568,11 +568,11 @@ fn asset_ext(name: &str) -> String {
     if clean.is_empty() { "".to_string() } else { format!(".{}", clean.to_ascii_lowercase()) }
 }
 
-fn project_cache_dir(file: &Path) -> PathBuf {
+fn project_cache_dir(base: &Path, file: &Path) -> PathBuf {
     let stem = file.file_stem().and_then(|x| x.to_str()).unwrap_or("project");
     let mut h: u64 = 0xcbf29ce484222325;
     for b in file.display().to_string().as_bytes() { h ^= *b as u64; h = h.wrapping_mul(0x100000001b3); }
-    data_dir().join("cache").join("project-assets").join(format!("{stem}-{h:016x}"))
+    base.join(format!("{stem}-{h:016x}"))
 }
 
 fn project_save_to(target: &Path, json: &serde_json::Value, assets: &[serde_json::Value]) -> serde_json::Value {
@@ -599,7 +599,7 @@ fn project_save_to(target: &Path, json: &serde_json::Value, assets: &[serde_json
     serde_json::json!({ "ok": true, "filePath": target.display().to_string(), "missing": missing })
 }
 
-fn project_open_from(target: &Path) -> serde_json::Value {
+fn project_open_from_at(target: &Path, cache_base: &Path) -> serde_json::Value {
     let file = match std::fs::File::open(target) { Ok(f) => f, Err(e) => return serde_json::json!({ "ok": false, "error": e.to_string() }) };
     let mut zip = match zip::ZipArchive::new(file) { Ok(z) => z, Err(e) => return serde_json::json!({ "ok": false, "error": e.to_string() }) };
     if zip.len() > 4096 { return serde_json::json!({ "ok": false, "error": "too many entries" }); }
@@ -608,14 +608,14 @@ fn project_open_from(target: &Path) -> serde_json::Value {
         if let Ok(e) = zip.by_index(i) { total += e.size(); }
         if total > 4 * 1024 * 1024 * 1024 { return serde_json::json!({ "ok": false, "error": "project too large" }); }
     }
-    let mut json = serde_json::Value::Null;
+    let json: serde_json::Value;
     {
         let mut entry = match zip.by_name("project.json") { Ok(e) => e, Err(_) => return serde_json::json!({ "ok": false, "error": "missing project.json" }) };
         let mut text = String::new();
         if entry.read_to_string(&mut text).is_err() { return serde_json::json!({ "ok": false, "error": "project.json unreadable" }); }
         json = match serde_json::from_str(&text) { Ok(j) => j, Err(e) => return serde_json::json!({ "ok": false, "error": e.to_string() }) };
     }
-    let dir = project_cache_dir(target);
+    let dir = project_cache_dir(cache_base, target);
     let _ = std::fs::create_dir_all(&dir);
     let allowed: std::collections::BTreeSet<String> = json.get("assets").and_then(|v| v.as_object()).map(|o| o.keys().filter(|k| safe_asset_id(k)).map(|k| k.to_ascii_lowercase()).collect()).unwrap_or_default();
     let mut resolved = serde_json::Map::new();
@@ -656,8 +656,10 @@ fn project_open(app: AppHandle, file_path: Option<String>) -> serde_json::Value 
         let picked = app.dialog().file().set_title("打开工程").add_filter("FuFumidi 工程", &["fufumidi"]).blocking_pick_file();
         target = match picked.and_then(|p| p.into_path().ok()) { Some(p) => p.display().to_string(), None => return serde_json::json!({ "ok": false, "cancelled": true }) };
     }
-    project_open_from(Path::new(&target))
+    project_open_from_at(Path::new(&target), &data_dir().join("cache").join("project-assets"))
 }
+
+
 
 
 fn base64_encode(bytes: &[u8]) -> String {
@@ -1683,6 +1685,7 @@ fn main() {
 #[cfg(test)]
 mod check_midi_tests {
     use super::check_midi_items;
+    use std::io::Write;
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn tmpdir(tag: &str) -> std::path::PathBuf {
@@ -1704,13 +1707,32 @@ mod check_midi_tests {
         assert_eq!(saved["ok"], true);
         assert_eq!(saved["missing"].as_array().unwrap().len(), 1, "bad id reported");
         assert!(target.exists());
-        let opened = super::project_open_from(&target);
+        let cache = root.join("cache");
+        let opened = super::project_open_from_at(&target, &cache);
         assert_eq!(opened["ok"], true);
         assert_eq!(opened["json"]["assets"]["a1"]["name"], "track.wav");
         let p = opened["resolved"]["a1"].as_str().unwrap();
         assert_eq!(std::fs::read(p).unwrap(), b"RIFFdata");
-        let no = super::project_open_from(&root.join("nope.fufumidi"));
+        let no = super::project_open_from_at(&root.join("nope.fufumidi"), &cache);
         assert_eq!(no["ok"], false);
+        // 恶意包：路径穿越条目必须被忽略，只有白名单资产被解出
+        let badzip = root.join("bad.fufumidi");
+        {
+            let f = std::fs::File::create(&badzip).unwrap();
+            let mut w = zip::ZipWriter::new(f);
+            let opts = zip::write::SimpleFileOptions::default();
+            w.start_file("project.json", opts).unwrap();
+            w.write_all(br#"{"assets":{"a1":{}}}"#).unwrap();
+            w.start_file("../evil.txt", opts).unwrap();
+            w.write_all(b"evil").unwrap();
+            w.start_file("files/a1.wav", opts).unwrap();
+            w.write_all(b"ok").unwrap();
+            w.finish().unwrap();
+        }
+        let opened2 = super::project_open_from_at(&badzip, &cache);
+        assert_eq!(opened2["ok"], true);
+        assert!(opened2["resolved"]["a1"].as_str().is_some());
+        assert_eq!(opened2["resolved"].as_object().unwrap().len(), 1, "only whitelisted asset is resolved");
         let _ = std::fs::remove_dir_all(root);
     }
 

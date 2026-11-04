@@ -72,7 +72,7 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 | read_sidecar_lyrics | 读取同名 .lrc/.LRC，返回 base64 + 字节数 | Rust 单测：base64 编码、命中 .lrc、缺失返回 not found |
 | reveal_midi | 在资源管理器中定位曲库文件；根外/缺失回退 midi 目录 | Rust 单测：空路径回退；实际打开资源管理器不在无头会话触发 |
 | copy_asset | 复制分轨导出资产（自动建父目录） | Rust 单测：复制字节一致、源缺失报错 |
-| project_save / project_open | .fufumidi ZIP（project.json + files/），对话框/指定路径；开包校验条目数/总大小/路径穿越/资产白名单 | Rust 单测：写包→读包、资产字节一致、非法资产 id 计入 missing |
+| project_save / project_open | .fufumidi ZIP（project.json + files/），对话框/指定路径；开包校验条目数/总大小/路径穿越/资产白名单 | Rust 单测：写包→读包、资产字节一致、非法资产 id 计入 missing；缓存目录隔离；恶意包 ../evil.txt 不产生 resolved |
 | open_folder | 打开目录（仅目录） | 实际打开资源管理器不在无头会话触发 |
 | soundfont_list | 扫描 renderer/vendor/soundfonts + dataDir/soundfonts（sf2/sf3） | 开发树返回 GeneralUser.sf2 |
 | dep_check | Rust 启动 Python `deps.py check`，解析 `###RESULT` 的 groups | 返回 universal/piano/aria/muscriptor/separate/transkun 6 组 |
