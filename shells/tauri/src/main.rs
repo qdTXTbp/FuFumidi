@@ -558,6 +558,60 @@ fn presets_restore() -> serde_json::Value {
 
 fn midi_root() -> PathBuf { data_dir().join("midi") }
 
+fn base64_encode(bytes: &[u8]) -> String {
+    const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for chunk in bytes.chunks(3) {
+        let b = [chunk[0], if chunk.len() > 1 { chunk[1] } else { 0 }, if chunk.len() > 2 { chunk[2] } else { 0 }];
+        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
+        out.push(T[((n >> 18) & 63) as usize] as char);
+        out.push(T[((n >> 12) & 63) as usize] as char);
+        out.push(if chunk.len() > 1 { T[((n >> 6) & 63) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 2 { T[(n & 63) as usize] as char } else { '=' });
+    }
+    out
+}
+
+fn read_sidecar_lyrics_at(file_path: &str) -> serde_json::Value {
+    let path = Path::new(file_path);
+    let dir = match path.parent() { Some(d) => d, None => return serde_json::json!({ "ok": false, "error": "no path" }) };
+    let stem = path.file_stem().and_then(|x| x.to_str()).unwrap_or("");
+    for name in [format!("{stem}.lrc"), format!("{stem}.LRC")] {
+        let cand = dir.join(name);
+        if let Ok(bytes) = std::fs::read(&cand) {
+            return serde_json::json!({ "ok": true, "path": cand.display().to_string(), "b64": base64_encode(&bytes), "bytes": bytes.len() });
+        }
+    }
+    serde_json::json!({ "ok": false, "error": "not found" })
+}
+
+#[tauri::command]
+fn read_sidecar_lyrics(file_path: String) -> serde_json::Value { read_sidecar_lyrics_at(&file_path) }
+
+fn reveal_target(p: &str) -> (String, bool) {
+    if !p.trim().is_empty() && in_midi_root(p) && Path::new(p).exists() {
+        return (p.to_string(), false);
+    }
+    (midi_root().display().to_string(), true)
+}
+
+#[tauri::command]
+fn reveal_midi(p: Option<String>) -> serde_json::Value {
+    let (target, fell_back) = reveal_target(p.as_deref().unwrap_or(""));
+    #[cfg(target_os = "windows")]
+    {
+        let mut cmd = std::process::Command::new("explorer");
+        if !fell_back { cmd.arg("/select,").arg(&target); } else { cmd.arg(&target); }
+        match cmd.spawn() {
+            Ok(_) => serde_json::json!({ "ok": true, "path": target, "fellBackToDir": fell_back }),
+            Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    { serde_json::json!({ "ok": false, "error": "unsupported platform" }) }
+}
+
+
 fn autosave_root() -> PathBuf { data_dir().join("temp").join("autosave") }
 
 fn autosave_safe_id(doc_id: &str) -> String {
@@ -1473,7 +1527,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, db_kv_get, db_kv_set,
-            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, model_list,
+            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
@@ -1506,6 +1560,25 @@ mod check_midi_tests {
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    #[test]
+    fn lyrics_and_reveal_target() {
+        assert_eq!(super::base64_encode(b"hello"), "aGVsbG8=");
+        assert_eq!(super::base64_encode(b""), "");
+        let root = tmpdir("lyrics");
+        std::fs::write(root.join("song.mid"), b"MThd").unwrap();
+        std::fs::write(root.join("song.lrc"), "[00:01.00]hi").unwrap();
+        let r = super::read_sidecar_lyrics_at(root.join("song.mid").to_str().unwrap());
+        assert_eq!(r["ok"], true);
+        assert!(r["path"].as_str().unwrap().ends_with("song.lrc"));
+        assert!(r["b64"].as_str().unwrap().len() > 4);
+        assert_eq!(r["bytes"], 12);
+        assert_eq!(super::read_sidecar_lyrics_at(root.join("none.mid").to_str().unwrap())["ok"], false);
+        let (t, fb) = super::reveal_target("");
+        assert_eq!(fb, true);
+        assert!(!t.is_empty());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

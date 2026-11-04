@@ -5,16 +5,16 @@
 | 指标 | 数值 |
 |---|---:|
 | preload 暴露方法 | 265 |
-| Tauri 桥已映射方法 | 111 |
-| 尚未映射 | **154** |
+| Tauri 桥已映射方法 | 113 |
+| 尚未映射 | **152** |
 | preload IPC invoke 通道 | 250 |
-| Tauri call 通道 | 102 |
+| Tauri call 通道 | 104 |
 
 ## 缺口分类
 
 | 分类 | 数量 |
 |---|---:|
-| 设置/杂项 | 24 |
+| 设置/杂项 | 23 |
 | diffsinger | 19 |
 | utau/voicebank | 18 |
 | 模型/安装/平台 | 14 |
@@ -24,8 +24,8 @@
 | 文件/诊断 | 9 |
 | gpu/运行时增强 | 8 |
 | 事件/窗口 | 7 |
-| 曲库/数据 | 6 |
 | 更新/测速 | 6 |
+| 曲库/数据 | 5 |
 | 其他 | 4 |
 
 ## 尚未映射的方法
@@ -123,11 +123,9 @@ pin
 platformInfo
 preview
 probeVoicebank
-readSidecarLyrics
 renderFile
 rendererReady
 report
-revealMidi
 rvcCatalog
 rvcImportFiles
 rvcImportFolder
