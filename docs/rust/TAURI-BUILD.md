@@ -208,3 +208,9 @@ Tauri 默认从 GitHub 下载 `nsis-3.13.zip`，本机直连超时。已把工�
 - release dataDir=E:/Midi/FuFumidi/FuFumidiData，models=13；
 - release --stem-smoke ok / 6 tracks（分轨→逐 stem→合并）；
 - 发布版 python 经 PYTHONPATH 加载 gpu-enhancements/cuda（torch 2.9.1+cu128）。
+
+## 29. 2026-11-04 转录/分轨 fail-closed
+
+- stem_merge 非零退出不再报成功；release 2m26s、0 warning；
+- 产物仍 16,935,936 bytes，SHA-256 `b75b77c6905501c6452b76ecb89c6df751e68c61e3485b6b4805572f399032f2`；
+- engine 资源已同步到 target/release。
