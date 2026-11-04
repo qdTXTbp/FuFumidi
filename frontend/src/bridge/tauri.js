@@ -229,6 +229,7 @@ export function installTauriBridge() {
       download: (url, name) => call('wallpaper_download', { url, name }),
       addLocal: (path) => call('wallpaper_add_local', { src_path: path }),
       removeLocal: (name) => call('wallpaper_remove_local', { name }),
+      setDesktop: (path) => call('wallpaper_set_desktop', { path }),
       scanFolder: (dir) => call('wallpaper_scan_folder', { dir }),
       onAddLocalProgress: (cb) => listen('wallpaper:addLocalProgress', cb),
       onDownloadProgress: (cb) => listen('wallpaper:downloadProgress', cb),

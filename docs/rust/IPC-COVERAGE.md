@@ -5,18 +5,18 @@
 | 指标 | 数值 |
 |---|---:|
 | preload 暴露方法 | 265 |
-| Tauri 桥已映射方法 | 133 |
-| 尚未映射 | **132** |
+| Tauri 桥已映射方法 | 134 |
+| 尚未映射 | **131** |
 | preload IPC invoke 通道 | 250 |
-| Tauri call 通道 | 128 |
+| Tauri call 通道 | 129 |
 
 ## 缺口分类
 
 | 分类 | 数量 |
 |---|---:|
 | diffsinger | 19 |
-| 设置/杂项 | 18 |
 | utau/voicebank | 18 |
+| 设置/杂项 | 17 |
 | 模型/安装/平台 | 13 |
 | rvc | 12 |
 | 资源/音频/扩展 | 11 |
@@ -128,7 +128,6 @@ scoreCancel
 scoreToMidi
 searchWallhaven
 separateAudio
-setDesktop
 setPreferredSource
 singToPinyin
 sources

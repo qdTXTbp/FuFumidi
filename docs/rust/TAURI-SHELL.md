@@ -90,6 +90,7 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 | wallpaper_list / add_local / remove_local / scan_folder | 本地动态壁纸（Electron legacy wallpapers/，.ok 标记、mp4/webm/mov、删除校验 basename）；扫描文件夹（图片/视频，深度 3、≤600） | Rust 单测：添加/列表/删除、../ 拒绝、扫描过滤 txt/空文件 |
 | file_assoc | MIDI 文件关联开关：HKCU .mid/.midi → FuFumidi.MIDI，图标用 build/icon.ico（开发）或 exe | Rust 单测：开/关注册表命令计划；**测试不写注册表** |
 | gpu_status / gpu_uninstall | 读取 dataRoot/gpu-enhancements 下 cuda/rocm/xpu；返回当前 Python、rocm 是否需 3.12；卸载删除对应目录 | Rust 单测（临时目录）：识别 cuda、卸载删除、非法类型拒绝；真实 Python 版本读取在测试中执行 |
+| wallpaper_set_desktop | 静态图片设为桌面：HKCU Desktop Wallpaper/WallpaperStyle/TileWallpaper + `rundll32 user32.dll,UpdatePerUserSystemParameters` | Rust 单测：注册表命令计划/路径；**测试不改真实桌面** |
 | open_folder | 打开目录（仅目录） | 实际打开资源管理器不在无头会话触发 |
 | soundfont_list | 扫描 renderer/vendor/soundfonts + dataDir/soundfonts（sf2/sf3） | 开发树返回 GeneralUser.sf2 |
 | dep_check | Rust 启动 Python `deps.py check`，解析 `###RESULT` 的 groups | 返回 universal/piano/aria/muscriptor/separate/transkun 6 组 |
@@ -196,7 +197,7 @@ worker running=true seq=1；输出 MIDI 头 `MThd`。剩余：cancel/pause、UI 
 
 - `npm run tauri:coverage` / `node scripts/tauri/ipc-coverage.mjs --write`：
   只解析 preload 与 Tauri 桥的方法名，不启动窗口；
-- 当前：preload 265 方法 / Tauri **133** 方法 / **132 未映射**；preload invoke 250 / tauri call **128**；
+- 当前：preload 265 方法 / Tauri **134** 方法 / **131 未映射**；preload invoke 250 / tauri call **129**；
 - 缺口分类：设置杂项 28、diffsinger 19、utau/voicebank 18、模型/安装 14、导出/渲染 14、
   资源/音频 13、rvc 12、曲库/数据 11、文件/诊断 11、事件/窗口 10、GPU 8、更新/测速 6、其他 4；
 - 明细见 [IPC-COVERAGE.md](IPC-COVERAGE.md)。
@@ -206,7 +207,7 @@ worker running=true seq=1；输出 MIDI 头 `MThd`。剩余：cancel/pause、UI 
   （主要来自尚未实现的 bridge 命令）；已修正 readSidecarLyrics/modelImportLocal/renameMidi/
   projectOpen/autosaveRead/autosaveClear 的 JS camelCase→Rust snake_case 参数错配。
 
-## 4. 当前命令清单（99 条）
+## 4. 当前命令清单（100 条）
 
 host_info, app_version, ping, python_selfcheck, engine_probe, convert, engine_worker_status,
 load_settings, save_settings, db_kv_get, db_kv_set, db_status, db_songs_list, db_songs_put,
@@ -223,7 +224,7 @@ storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip,
 autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data,
 check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin,
 wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc,
-gpu_status, gpu_uninstall。
+gpu_status, gpu_uninstall, wallpaper_set_desktop。
 
 ## 4.1 下一步
 

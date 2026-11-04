@@ -562,6 +562,34 @@ fn presets_restore() -> serde_json::Value {
 
 fn midi_root() -> PathBuf { data_dir().join("midi") }
 
+fn wallpaper_set_desktop_plan(path: &str) -> Vec<Vec<String>> {
+    let key = "HKCU\\Control Panel\\Desktop";
+    vec![
+        vec!["add".into(), key.into(), "/v".into(), "Wallpaper".into(), "/t".into(), "REG_SZ".into(), "/d".into(), path.into(), "/f".into()],
+        vec!["add".into(), key.into(), "/v".into(), "WallpaperStyle".into(), "/t".into(), "REG_SZ".into(), "/d".into(), "10".into(), "/f".into()],
+        vec!["add".into(), key.into(), "/v".into(), "TileWallpaper".into(), "/t".into(), "REG_SZ".into(), "/d".into(), "0".into(), "/f".into()],
+    ]
+}
+
+#[tauri::command]
+fn wallpaper_set_desktop(path: String) -> serde_json::Value {
+    let p = Path::new(&path);
+    if !p.is_file() { return serde_json::json!({ "ok": false, "error": "文件不存在" }); }
+    let ext = p.extension().and_then(|x| x.to_str()).unwrap_or("").to_ascii_lowercase();
+    if !matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "bmp" | "webp") { return serde_json::json!({ "ok": false, "error": "只支持静态图片" }); }
+    #[cfg(target_os = "windows")]
+    {
+        for args in wallpaper_set_desktop_plan(&path) {
+            let _ = Command::new("reg.exe").args(&args).creation_flags(0x08000000).output();
+        }
+        let _ = Command::new("rundll32.exe").args(["user32.dll,UpdatePerUserSystemParameters"]).creation_flags(0x08000000).output();
+        serde_json::json!({ "ok": true })
+    }
+    #[cfg(not(target_os = "windows"))]
+    { serde_json::json!({ "ok": false, "error": "unsupported platform" }) }
+}
+
+
 fn gpu_root() -> PathBuf { data_dir().join("gpu-enhancements") }
 
 fn gpu_installed_kinds_at(root: &Path) -> Vec<String> {
@@ -2687,7 +2715,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, db_kv_get, db_kv_set,
-            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, gpu_status, gpu_uninstall, model_list,
+            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, wallpaper_set_desktop, gpu_status, gpu_uninstall, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
@@ -2728,6 +2756,16 @@ mod check_midi_tests {
         assert_eq!(super::save_binary_bytes(&serde_json::json!({ "data": [1,2] })), vec![1,2]);
         assert_eq!(super::save_binary_bytes(&serde_json::json!({ "bytes": "ab" })), b"ab".to_vec());
         assert!(super::save_binary_bytes(&serde_json::json!({})).is_empty());
+    }
+
+    #[test]
+    fn wallpaper_set_desktop_plan() {
+        let plan = super::wallpaper_set_desktop_plan("C:\\wall\\a.jpg");
+        assert_eq!(plan.len(), 3);
+        assert_eq!(plan[0][0], "add");
+        assert!(plan[0].join(" ").contains("Wallpaper"));
+        assert!(plan[0].join(" ").contains("C:\\wall\\a.jpg"));
+        assert_eq!(super::wallpaper_set_desktop("C:\\definitely-missing.jpg".into())["ok"], false);
     }
 
     #[test]

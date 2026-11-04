@@ -384,6 +384,7 @@
 - **Tauri 壁纸文件夹扫描**：wallpaper_scan_folder（图片/视频，深度 3、≤600、跳过点文件/空文件）；桥 wallpaper.scanFolder（合并重复 wallpaper 对象）；Rust 测试过滤与排序；命令总数 **96**，覆盖 133 方法/132 未映射（128 call），bridge 未实现 **104**，cargo test **29/29 + 1 ignored**。
 - **Tauri MIDI 文件关联**：file_assoc（HKCU .mid/.midi→FuFumidi.MIDI；开发用 build/icon.ico，打包用 exe；隐藏 reg.exe；失败计数回报）；桥补 fileAssoc；Rust 测试开/关命令计划，**测试不写注册表**；命令总数 **97**，arg 审计不一致 39→**38**，cargo test **30/30 + 1 ignored**。
 - **Tauri GPU 状态/卸载**：gpu_status（dataRoot/gpu-enhancements 的 cuda/rocm/xpu、当前 Python、rocm 3.12 判定）、gpu_uninstall（删除对应目录）；桥已有映射；Rust 测试临时目录识别/卸载/非法类型；命令总数 **99**，arg 审计不一致 38→**36**，cargo test **31/31 + 1 ignored**。
+- **Tauri 设桌面壁纸**：wallpaper_set_desktop（静态图片；HKCU Wallpaper/WallpaperStyle/TileWallpaper + rundll32 刷新；扩展名/文件校验）；桥补 setDesktop；Rust 测试注册表计划/路径，**测试不改真实桌面**；命令总数 **100**，覆盖 134 方法/131 未映射（129 call），cargo test **32/32 + 1 ignored**。
 - **T-117 曲库/设置共享 Electron 数据（重要）**：Rust 用 rusqlite 直读/写
   `%APPDATA%/FuFumidi/fufumidi/fufumidi.sqlite`（songs/playlists/kv），设置优先读 legacy
   settings.json；只读验收实测 **1972 首真实曲目**、57 个设置键、侧栏「全部曲目 1972」正常；
