@@ -647,13 +647,13 @@ function copySelected() {
 function pasteAt(tick) {
   if (!clipNotes || !clipNotes.length) return 0;
   const tr = curTrack(); if (!tr) return 0;
-  pushState('粘贴');
   const min = Math.min(...clipNotes.map(n => n.start));
   const newNotes = clipNotes.map(n => ({ start: Math.max(0, n.start - min + tick), end: Math.max(0, n.end - min + tick), midi: n.midi, vel: n.vel }));
   tr.notes.push(...newNotes);
   selection.clear();
-  for (const n of tr.notes.slice(-newNotes.length)) selection.add(n);
+  for (const n of newNotes) selection.add(n);   // 按引用选，afterEdit 排序后不会选错
   afterEdit();
+  pushNoteCommand(() => makeAddNotesCommand(tr, newNotes, '粘贴'), props.trackIndex, tr.notes.length);
   return newNotes.length;
 }
 function duplicateSelected() {
@@ -662,12 +662,12 @@ function duplicateSelected() {
   const arr = [...selection].sort((a, b) => a.start - b.start);
   const lastEnd = Math.max(...arr.map(n => n.end));
   const min = Math.min(...arr.map(n => n.start));
-  pushState('复制');
   const newNotes = arr.map(n => ({ start: lastEnd + (n.start - min), end: lastEnd + (n.end - min), midi: n.midi, vel: n.vel }));
   tr.notes.push(...newNotes);
   selection.clear();
-  for (const n of tr.notes.slice(-newNotes.length)) selection.add(n);
+  for (const n of newNotes) selection.add(n);
   afterEdit();
+  pushNoteCommand(() => makeAddNotesCommand(tr, newNotes, '复制'), props.trackIndex, tr.notes.length);
   return newNotes.length;
 }
 
@@ -1618,7 +1618,6 @@ function onDown(e) {
     if (midi < 0 || midi > 127) return;
     const len = Math.max(30, Math.round(props.stepTicks || 120));
     const st = Math.max(0, Math.round(stepCursor.value));
-    pushState('添加音符');
     const note = { start: st, end: st + len, midi: clamp(scaleSnapPitch(midi, st), 0, 127), vel: velFromPointer(e) };
     tr.notes.push(note);
     selection.clear(); selection.add(note);
@@ -1626,6 +1625,7 @@ function onDown(e) {
     stepCursor.value = st + len;
     emit('step', stepCursor.value);
     afterEdit();
+    pushNoteCommand(() => makeAddNotesCommand(tr, [note], '添加音符'), props.trackIndex, tr.notes.length);
     emit('select');
     return;
   }

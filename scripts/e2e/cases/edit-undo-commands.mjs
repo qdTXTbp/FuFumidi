@@ -137,5 +137,29 @@ export default async function (app) {
   const velUndo = await app.eval("(" + S + ".tracks[0].notes || []).map(n => n.vel)");
   if (JSON.stringify(velUndo) !== JSON.stringify(velBefore)) throw new Error('setSelVel undo 未恢复: ' + JSON.stringify(velUndo));
 
+  // 粘贴/复制：add 命令 + 选区按引用
+  await clear();
+  const clipBase = await count();
+  await app.eval("(" + E + ".selectAll(), true)");
+  await app.eval("(" + E + ".copySelected(), true)");
+  await app.eval("(" + E + ".pasteAt(0), true)");
+  await new Promise((r) => setTimeout(r, 150));
+  if (await count() !== clipBase * 2) throw new Error('pasteAt 未复制全部音符');
+  await app.key('Ctrl+Z');
+  await new Promise((r) => setTimeout(r, 150));
+  if (await count() !== clipBase) throw new Error('paste undo 未恢复');
+  await app.key('Ctrl+Shift+Z');
+  await new Promise((r) => setTimeout(r, 150));
+  if (await count() !== clipBase * 2) throw new Error('paste redo 未恢复');
+
+  await app.eval("(" + E + ".selectAll(), true)");
+  const dupCount = await app.eval("(" + E + ".selCount() || 0)");
+  await app.eval("(" + E + ".duplicateSelected(), true)");
+  await new Promise((r) => setTimeout(r, 150));
+  if (await count() !== clipBase * 2 + dupCount) throw new Error('duplicateSelected 数量不对');
+  await app.key('Ctrl+Z');
+  await new Promise((r) => setTimeout(r, 150));
+  if (await count() !== clipBase * 2) throw new Error('duplicate undo 未恢复');
+
   // 隐藏窗口下 Page.captureScreenshot 偶发超时；本用例的验收证据是上面的状态断言，不依赖截图。
 }
