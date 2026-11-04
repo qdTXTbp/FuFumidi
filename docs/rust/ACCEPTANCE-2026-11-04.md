@@ -8,10 +8,10 @@
 - 分支：`feat/audio-tagger-auto-probe`
 - 最新代码提交：`e24fffa`（验收文档另提交）
 - Electron 原版基线：6.5.0-beta.1（`47f6062`）
-- Tauri 命令：**136**（handler 注册审计 136/136）
-- 前端 bridge 方法：**158 / 265**
-- 未映射：**108**
-- 前端 invoke 通道：**250**，Tauri 已接 **152**
+- Tauri 命令：**143**（handler 注册审计 143/143）
+- 前端 bridge 方法：**165 / 265**
+- 未映射：**101**
+- 前端 invoke 通道：**250**，Tauri 已接 **159**
 - 参数审计不一致：**23**（均为已知/兼容项）
 - 可见窗口：**0**（自本轮起所有验证走隐藏窗口/无窗口）
 
@@ -29,6 +29,7 @@
 | 第二实例文件/聚焦 | 已做（协议级，监听已真实挂到 setup） | TCP 127.0.0.1:47823；Builder 前退出；Rust 单测路径/FOCUS；真实双实例窗口未跑 |
 | UTAU 声库 | 列表/OTO 读写/删除/导入 zip/导出目录/导出 zip | Rust 单测 + bridge |
 | RVC 模型 | 列表/删除/文件夹/文件/zip 导入/内置目录/probe；通用 modelDelete 的 rvc: 前缀委托 RVC 删除 | Rust 单测；probe 真实模型未跑 |
+| 插件中心 | catalog/platformInfo/installedList/openPlatform；两段式 installFromPlatform→confirmInstall→cancelInstall；离线 manifest 缓存；覆盖安装回滚备份 | Rust 单测：manifest/路径穿越/盘符/回滚代码；真实平台下载/插件执行未跑 |
 
 ## 3. 门禁结果（当前源码）
 
@@ -36,14 +37,14 @@
 - 前端单测：**589/589**（`npm run test:ui`）
 - `npm run typecheck`：0
 - `npm run audit`：0
-- `cargo test --offline`：**110 passed / 0 failed / 1 ignored**
-- `npm run tauri:handler-audit`：**136/136** 已注册（本轮修掉 `model_delete` 漏挂）
+- `cargo test --offline`：**113 passed / 0 failed / 1 ignored**
+- `npm run tauri:handler-audit`：**143/143** 已注册，并已并入 `npm run audit`
 - release build：通过（2m19s，见 `TAURI-BUILD.md` §8）
 - release `--self-check` / `--engine-self-check`：通过
 
 ## 4. 仍需完成的重型缺口
 
-### 4.1 IPC 主要分组（108）
+### 4.1 IPC 主要分组（101）
 
 - DiffSinger：19（catalog/download/render/status 等，依赖 ML 资产）
 - OMR：16（Audiveris/Homr 安装、状态、语言包、进度）
@@ -70,7 +71,7 @@ npm run test:ui                              # 589/589
 npm run typecheck
 npm run audit
 cd shells/tauri
-cargo test --offline                        # 110/110 + 1 ignored
+cargo test --offline                        # 113/113 + 1 ignored
 cargo build --release --offline
 .\poc\tauri-poc\target\release\fufumidi-shell.exe --self-check
 .\poc\tauri-poc\target\release\fufumidi-shell.exe --engine-self-check
