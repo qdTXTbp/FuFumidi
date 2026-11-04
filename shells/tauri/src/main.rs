@@ -562,6 +562,54 @@ fn presets_restore() -> serde_json::Value {
 
 fn midi_root() -> PathBuf { data_dir().join("midi") }
 
+fn gpu_root() -> PathBuf { data_dir().join("gpu-enhancements") }
+
+fn gpu_installed_kinds_at(root: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    for k in ["cuda", "rocm", "xpu"] {
+        if root.join(k).is_dir() { out.push(k.to_string()); }
+    }
+    out
+}
+
+fn current_python_minor() -> String {
+    let Some(py) = python_path() else { return String::new(); };
+    let out = Command::new(&py).args(["-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"]).creation_flags(0x08000000).output();
+    out.ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default()
+}
+
+fn gpu_status_at(root: &Path) -> serde_json::Value {
+    let kinds = gpu_installed_kinds_at(root);
+    let py = current_python_minor();
+    let rocm_ok = py == "3.12";
+    serde_json::json!({
+        "ok": true, "isolated": true, "paths": kinds.iter().map(|k| root.join(k).display().to_string()).collect::<Vec<_>>(),
+        "kinds": kinds, "currentPython": py.clone(),
+        "cuda": kinds.iter().any(|k| k == "cuda"), "rocm": kinds.iter().any(|k| k == "rocm"), "xpu": kinds.iter().any(|k| k == "xpu"),
+        "cudaActive": true, "rocmActive": rocm_ok, "xpuActive": true,
+        "needsPython312": kinds.iter().any(|k| k == "rocm") && !rocm_ok,
+        "canPython312": py == "3.12"
+    })
+}
+
+#[tauri::command]
+fn gpu_status() -> serde_json::Value { gpu_status_at(&gpu_root()) }
+
+fn gpu_uninstall_at(root: &Path, kind: &str) -> serde_json::Value {
+    let k = kind.to_ascii_lowercase();
+    if !matches!(k.as_str(), "cuda" | "rocm" | "xpu") { return serde_json::json!({ "ok": false, "error": "未知的增强包类型" }); }
+    let dir = root.join(&k);
+    let existed = dir.is_dir();
+    if existed {
+        if let Err(e) = std::fs::remove_dir_all(&dir) { return serde_json::json!({ "ok": false, "error": e.to_string() }); }
+    }
+    serde_json::json!({ "ok": true, "removed": existed, "restored": false })
+}
+
+#[tauri::command]
+fn gpu_uninstall(kind: String) -> serde_json::Value { gpu_uninstall_at(&gpu_root(), &kind) }
+
+
 fn file_assoc_icon() -> String {
     if let Some(d) = dev_root() {
         let ico = d.join("build/icon.ico");
@@ -2639,7 +2687,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, db_kv_get, db_kv_set,
-            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, model_list,
+            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, gpu_status, gpu_uninstall, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
@@ -2680,6 +2728,21 @@ mod check_midi_tests {
         assert_eq!(super::save_binary_bytes(&serde_json::json!({ "data": [1,2] })), vec![1,2]);
         assert_eq!(super::save_binary_bytes(&serde_json::json!({ "bytes": "ab" })), b"ab".to_vec());
         assert!(super::save_binary_bytes(&serde_json::json!({})).is_empty());
+    }
+
+    #[test]
+    fn gpu_status_and_uninstall() {
+        let root = tmpdir("gpu");
+        std::fs::create_dir_all(root.join("cuda")).unwrap();
+        let st = super::gpu_status_at(&root);
+        assert_eq!(st["ok"], true);
+        assert_eq!(st["kinds"].as_array().unwrap().len(), 1);
+        assert_eq!(st["kinds"][0], "cuda");
+        assert_eq!(st["cuda"], true);
+        assert_eq!(super::gpu_uninstall_at(&root, "cuda")["removed"], true);
+        assert!(!root.join("cuda").exists());
+        assert_eq!(super::gpu_uninstall_at(&root, "nope")["ok"], false);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

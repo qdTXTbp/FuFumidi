@@ -5,9 +5,9 @@
 
 | 指标 | 数值 |
 |---|---:|
-| Rust command | 97 |
+| Rust command | 99 |
 | bridge call | 128 |
-| 参数不一致 | 38 |
+| 参数不一致 | 36 |
 
 ## 不一致列表
 
@@ -52,9 +52,6 @@
   - bridge 多参数: url, channel, name, size
 - update_open（Rust 未找到命令）
   - bridge 多参数: p
-- gpu_status（Rust 未找到命令）
-- gpu_uninstall（Rust 未找到命令）
-  - bridge 多参数: kind
 - gpu_list_packages（Rust 未找到命令）
 - gpu_package_url（Rust 未找到命令）
   - bridge 多参数: kind
