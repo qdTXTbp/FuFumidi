@@ -87,3 +87,10 @@ Tauri 默认从 GitHub 下载 `nsis-3.13.zip`，本机直连超时。已把工�
 
 - `npm run tauri:handler-audit`：扫描所有 `#[tauri::command]` 与 `generate_handler![]`，缺一即退出 1。
 - 当前 **136/136** 已注册；本轮修掉 `model_delete` 漏挂（桥 `modelDelete` 原本会运行时失败）。
+
+## 10. 2026-11-04 复验（单实例修复后）
+
+- 修复 `.setup` 未启动 accept 线程后重新 release 构建：2m24s；
+- release `--self-check`：host ok / renderer embedded；
+- release `--engine-self-check`：真实 worker / warm=1 / 无残留；
+- 测试构建已无 unused 警告；隐藏 smoke 1/1；无 Python/壳残留。

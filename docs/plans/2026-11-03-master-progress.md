@@ -503,3 +503,5 @@
 - **modelDelete 委托 RVC**：`model_delete_at` 遇到 `rvc:` 前缀时转 `rvc_remove_at`，通用模型列表删除 RVC 不再报“尚未迁移”；测试覆盖物理目录删除。
 
 - **修复单实例监听未挂**：编译警告显示 `start_single_instance_listener` 未使用——此前 `.setup` 仍是 `|_app|`，首实例只 bind 不 accept，第二实例转发会丢。现 `.setup(move |app| ...)` 真正启动 accept 线程；build 无 unused 警告。
+
+- **单实例修复后复验**：release 2m24s；host/engine self-check 通过；测试构建无 unused 警告；无 Python/壳残留。

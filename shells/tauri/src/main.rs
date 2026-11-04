@@ -5111,15 +5111,11 @@ mod check_midi_tests {
     fn audio_duration_m4a() {
         let root = tmpdir("audio-m4a");
         let f = root.join("clip.m4a");
-        let mut b: Vec<u8> = Vec::new();
-        b.extend_from_slice(&16u32.to_be_bytes()); b.extend_from_slice(b"ftyp"); b.extend_from_slice(b"M4A "); b.extend_from_slice(&[0,0,0,0]);
         let mut mvhd: Vec<u8> = Vec::new();
         mvhd.extend_from_slice(&[0,0,0,0]);
         mvhd.extend_from_slice(&[0,0,0,0]); mvhd.extend_from_slice(&[0,0,0,0]);
         mvhd.extend_from_slice(&1000u32.to_be_bytes());
         mvhd.extend_from_slice(&2000u32.to_be_bytes());
-        b.extend_from_slice(&((8 + mvhd.len()) as u32).to_be_bytes()); b.extend_from_slice(b"mvhd"); b.extend_from_slice(&mvhd);
-        let size = b.len() as u32 + 8;
         // 包一层 moov（需要把 mvhd 放进 moov：重建）
         let mut mvhd_box = Vec::new(); mvhd_box.extend_from_slice(&((8 + mvhd.len()) as u32).to_be_bytes()); mvhd_box.extend_from_slice(b"mvhd"); mvhd_box.extend_from_slice(&mvhd);
         let mut out: Vec<u8> = Vec::new();
