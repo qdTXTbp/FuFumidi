@@ -8,10 +8,10 @@
 - 分支：`feat/audio-tagger-auto-probe`
 - 最新代码提交：`e24fffa`（验收文档另提交）
 - Electron 原版基线：6.5.0-beta.1（`47f6062`）
-- Tauri 命令：**145**（handler 注册审计 145/145）
+- Tauri 命令：**146**（handler 注册审计 146/146）
 - 前端 bridge 方法：**167 / 265**
 - 未映射：**99**
-- 前端 invoke 通道：**250**，Tauri 已接 **161**
+- 前端 invoke 通道：**250**，Tauri 已接 **162**
 - 参数审计不一致：**23**（均为已知/兼容项）
 - 可见窗口：**0**（自本轮起所有验证走隐藏窗口/无窗口）
 
@@ -38,8 +38,8 @@
 - `npm run typecheck`：0
 - `npm run audit`：0
 - `cargo test --offline`：**114 passed / 0 failed / 1 ignored**
-- `npm run tauri:handler-audit`：**145/145** 已注册，并已并入 `npm run audit`
-- release build：通过（插件安装后 2m21s、0 warning，见 `TAURI-BUILD.md` §11）
+- `npm run tauri:handler-audit`：**146/146** 已注册，并已并入 `npm run audit`
+- release build：通过（146 命令，2m16s、0 warning，见 `TAURI-BUILD.md` §13）
 - release `--self-check` / `--engine-self-check`：通过（143 命令源码）
 
 ## 4. 仍需完成的重型缺口

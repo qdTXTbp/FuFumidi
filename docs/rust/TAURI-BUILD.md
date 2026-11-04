@@ -107,3 +107,10 @@ Tauri 默认从 GitHub 下载 `nsis-3.13.zip`，本机直连超时。已把工�
 
 - run_convert 补 tasks 参数与 ConvertTask guard，release 重新构建 2m18s、**0 warning**；
 - engine self-check 真实 worker/warm=1/无残留；任务中心自此才会真实发 `tasks:update`。
+
+## 13. 2026-11-04 146 命令 release（任务取消后）
+
+- release 构建 2m16s、0 warning；
+- host `--self-check` 通过（embedded renderer）；
+- `--engine-self-check` 通过（真实 worker / warm=1 / 无 Python/壳残留）；
+- 任务中心含 tasks_cancel；隐藏 E2E 40/40、test:ui 589/589、cargo 114/114 (+1 ignored)。

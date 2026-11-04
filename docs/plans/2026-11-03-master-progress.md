@@ -527,3 +527,5 @@
 - **任务中心真正接线**：release 警告暴露 ConvertTask::start 未使用——run_convert 仍未接 tasks 参数/guard；现补签名、clone、start 调用，release 无 unused 警告（2m18s）；tasks:update 才会真实发出。
 
 - **任务取消**：`tasks_cancel` 按 job id 取消转录并标 cancelled/finishedAt + emit；桥补 tasks.cancel；命令 **146**，call 162，cargo **114/114 + 1 ignored**。
+
+- **146 命令 release（任务取消后）**：2m16s、0 warning；host/engine self-check 通过；无窗口/残留。
