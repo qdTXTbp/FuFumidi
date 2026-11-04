@@ -554,3 +554,5 @@
 - **cover CLI smoke**：新增 `npm run tauri:cover-smoke`，校验 engine_cover.py all 的参数面（rvc-model/sep-model/no-separate）；实测 ok/status0；不跑推理。
 
 - **cover 引擎真实 analyze**：新增 `npm run tauri:cover-engine-smoke`，合成 1s WAV 跑 engine_cover.py analyze（vocals/instrumental 跳过分离）；实测 ok=true/status0/###RESULT；验证启动/读音频/协议，不含 RVC/分离/混音。
+
+- **cover 后端后全量 E2E**：隐藏全量 **41/41**（156 命令源码）；cover 桥接不影响现有页面流程。
