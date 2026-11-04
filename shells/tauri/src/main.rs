@@ -559,6 +559,47 @@ fn presets_restore() -> serde_json::Value {
 
 fn midi_root() -> PathBuf { data_dir().join("midi") }
 
+fn write_stems_zip_at(target: &Path, files: &[serde_json::Value], suggested: &str) -> serde_json::Value {
+    if files.is_empty() { return serde_json::json!({ "ok": false, "error": "没有可打包的分轨文件" }); }
+    if files.len() > 100 { return serde_json::json!({ "ok": false, "error": "分轨数量过多（>100）" }); }
+    let mut items: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut total = 0usize;
+    for f in files {
+        let name = f.get("name").and_then(|v| v.as_str()).unwrap_or("stem");
+        let ext = f.get("ext").and_then(|v| v.as_str()).unwrap_or("wav");
+        let bytes: Vec<u8> = f.get("bytes").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_u64().map(|n| n as u8)).collect()).unwrap_or_default();
+        if bytes.is_empty() { continue; }
+        total += bytes.len();
+        if total > 2 * 1024 * 1024 * 1024 { return serde_json::json!({ "ok": false, "error": "分轨总大小超过 2GB" }); }
+        items.push((sanitize_export_name(name, ext), bytes));
+    }
+    if items.is_empty() { return serde_json::json!({ "ok": false, "error": "没有可打包的音频数据" }); }
+    let target = if target.as_os_str().is_empty() { Path::new(suggested) } else { target };
+    if let Some(parent) = target.parent() { let _ = std::fs::create_dir_all(parent); }
+    let file = match std::fs::File::create(target) { Ok(f) => f, Err(e) => return serde_json::json!({ "ok": false, "error": e.to_string() }) };
+    let mut zip = zip::ZipWriter::new(file);
+    let opts = zip::write::SimpleFileOptions::default();
+    for (name, bytes) in &items {
+        if let Err(e) = zip.start_file(name, opts) { return serde_json::json!({ "ok": false, "error": e.to_string() }); }
+        if let Err(e) = zip.write_all(bytes) { return serde_json::json!({ "ok": false, "error": e.to_string() }); }
+    }
+    if let Err(e) = zip.finish() { return serde_json::json!({ "ok": false, "error": e.to_string() }); }
+    serde_json::json!({ "ok": true, "path": target.display().to_string(), "count": items.len(), "bytes": total })
+}
+
+#[tauri::command]
+fn export_stems_zip(app: AppHandle, payload: serde_json::Value) -> serde_json::Value {
+    let files = payload.get("files").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let suggested = sanitize_export_name(payload.get("suggestedName").and_then(|v| v.as_str()).unwrap_or("stems"), "zip");
+    let mut target = payload.get("targetPath").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    if target.is_empty() {
+        let picked = app.dialog().file().set_title("分轨打包导出").set_file_name(&suggested).add_filter("ZIP", &["zip"]).blocking_save_file();
+        target = match picked.and_then(|p| p.into_path().ok()) { Some(p) => p.display().to_string(), None => return serde_json::json!({ "ok": false, "canceled": true }) };
+    }
+    write_stems_zip_at(Path::new(&target), &files, &suggested)
+}
+
+
 fn unix_to_iso(ts: u64) -> String {
     let days = (ts / 86400) as i64;
     let secs = (ts % 86400) as u64;
@@ -1969,7 +2010,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, db_kv_get, db_kv_set,
-            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, model_list,
+            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
@@ -1995,7 +2036,7 @@ fn main() {
 #[cfg(test)]
 mod check_midi_tests {
     use super::check_midi_items;
-    use std::io::Write;
+    use std::io::{Read, Write};
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn tmpdir(tag: &str) -> std::path::PathBuf {
@@ -2003,6 +2044,27 @@ mod check_midi_tests {
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    #[test]
+    fn stems_zip_roundtrip() {
+        let root = tmpdir("stems-zip");
+        let target = root.join("stems.zip");
+        let files = vec![
+            serde_json::json!({ "name": "a:b", "ext": "wav", "bytes": [1,2,3] }),
+            serde_json::json!({ "name": "b", "ext": "mp3", "bytes": [4] }),
+        ];
+        let r = super::write_stems_zip_at(&target, &files, "stems.zip");
+        assert_eq!(r["ok"], true);
+        assert_eq!(r["count"], 2);
+        let f = std::fs::File::open(&target).unwrap();
+        let mut z = zip::ZipArchive::new(f).unwrap();
+        assert_eq!(z.len(), 2);
+        let mut e = z.by_name("a_b.wav").unwrap();
+        let mut buf = Vec::new(); e.read_to_end(&mut buf).unwrap();
+        assert_eq!(buf, vec![1,2,3]);
+        assert_eq!(super::write_stems_zip_at(&target, &[], "stems.zip")["ok"], false);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

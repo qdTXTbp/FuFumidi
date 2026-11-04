@@ -348,6 +348,9 @@
   采样率/时长；支持 targetPath 或保存对话框）；桥补 exportAudio；Rust 测试字节/manifest/清洗/空字节；
   命令总数 **74**，覆盖 119 方法/146 未映射（111 call）。manifest `createdAt` 已统一为
   ISO 8601 UTC（自实现 Unix→ISO，测 1970/2023 两个基准点），与 Electron 格式一致。
+- **Tauri 分轨 ZIP 导出**：`export_stems_zip`（≤100 轨/总 ≤2GB/文件名清洗/对话框或 targetPath）；
+  桥补 exportStemsZip；Rust 测试两轨 ZIP 条目与字节、非法名、空列表；命令总数 **75**，
+  覆盖 120 方法/145 未映射（112 call）；cargo test **17/17**。
 - **T-117 曲库/设置共享 Electron 数据（重要）**：Rust 用 rusqlite 直读/写
   `%APPDATA%/FuFumidi/fufumidi/fufumidi.sqlite`（songs/playlists/kv），设置优先读 legacy
   settings.json；只读验收实测 **1972 首真实曲目**、57 个设置键、侧栏「全部曲目 1972」正常；

@@ -82,6 +82,7 @@ export function installTauriBridge() {
     readSidecarLyrics: (filePath) => call('read_sidecar_lyrics', { filePath }),
     audioDuration: (p) => call('audio_duration', { p }),
     exportAudio: (payload) => call('export_audio', { payload }),
+    exportStemsZip: (payload) => call('export_stems_zip', { payload }),
     renameMidi: (p, newName) => call('rename_midi', { p, newName }),
     readBinary: (p) => call('read_binary', { p }),
     readSoundFont: (p) => call('read_soundfont', { p }),

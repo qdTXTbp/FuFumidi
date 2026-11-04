@@ -76,6 +76,7 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 | storage_report / storage_cleanup | 存储治理：10 类占用（曲库 protected、资产显式 includeAssets、日志保留 5 份） | Rust 单测：分类/总字节、默认只清 safe、资产需显式、midi 永不清 |
 | audio_duration | 读文件头取时长：WAV RIFF/fmt/data、FLAC STREAMINFO、MP3 逐帧扫描；其他格式返回 unsupported | Rust 单测：1s WAV、1s FLAC、100 帧 MP3（约 2.61s）、坏文件 false |
 | export_audio | 渲染端字节落盘：文件名清洗、原子写、sidecar manifest（SHA-256/格式/采样率/时长/ISO createdAt），支持 targetPath 或保存对话框 | Rust 单测：字节落盘、manifest sha256/采样率/ISO 时间、非法名清洗、空字节拒绝 |
+| export_stems_zip | 分轨 ZIP 打包（≤100 轨、总 ≤2GB、文件名清洗、targetPath 或保存对话框） | Rust 单测：两轨 ZIP 条目/字节、非法名清洗、空列表拒绝 |
 | open_folder | 打开目录（仅目录） | 实际打开资源管理器不在无头会话触发 |
 | soundfont_list | 扫描 renderer/vendor/soundfonts + dataDir/soundfonts（sf2/sf3） | 开发树返回 GeneralUser.sf2 |
 | dep_check | Rust 启动 Python `deps.py check`，解析 `###RESULT` 的 groups | 返回 universal/piano/aria/muscriptor/separate/transkun 6 组 |
@@ -182,12 +183,12 @@ worker running=true seq=1；输出 MIDI 头 `MThd`。剩余：cancel/pause、UI 
 
 - `npm run tauri:coverage` / `node scripts/tauri/ipc-coverage.mjs --write`：
   只解析 preload 与 Tauri 桥的方法名，不启动窗口；
-- 当前：preload 265 方法 / Tauri **119** 方法 / **146 未映射**；preload invoke 250 / tauri call **111**；
+- 当前：preload 265 方法 / Tauri **120** 方法 / **145 未映射**；preload invoke 250 / tauri call **112**；
 - 缺口分类：设置杂项 28、diffsinger 19、utau/voicebank 18、模型/安装 14、导出/渲染 14、
   资源/音频 13、rvc 12、曲库/数据 11、文件/诊断 11、事件/窗口 10、GPU 8、更新/测速 6、其他 4；
 - 明细见 [IPC-COVERAGE.md](IPC-COVERAGE.md)。
 
-## 4. 当前命令清单（74 条）
+## 4. 当前命令清单（75 条）
 
 host_info, app_version, ping, python_selfcheck, engine_probe, convert, engine_worker_status,
 load_settings, save_settings, db_kv_get, db_kv_set, db_status, db_songs_list, db_songs_put,
@@ -200,7 +201,7 @@ wallpaper_defaults, delete_midi, rename_midi, list_audio_files, library_stats, r
 db_playlists_delete, data_root, open_data_root, clean_temp, has_midi, verify_midi, dupe_midi,
 get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear,
 read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open,
-storage_report, storage_cleanup, audio_duration, export_audio。
+storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip。
 
 ## 4.1 下一步
 
