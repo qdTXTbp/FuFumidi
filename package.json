@@ -86,6 +86,7 @@
     "tauri:coverage": "node scripts/tauri/ipc-coverage.mjs",
     "tauri:call-audit": "node scripts/tauri/bridge-call-audit.mjs",
     "tauri:arg-audit": "node scripts/tauri/arg-audit.mjs",
+    "tauri:handler-audit": "node scripts/tauri/handler-audit.mjs",
     "tauri:sf-registry": "node scripts/tauri/gen-soundfont-registry.mjs"
   },
   "dependencies": {

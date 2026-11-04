@@ -496,3 +496,5 @@
 - **无窗口生产 worker 自检**：新增 `--engine-self-check`，在 Builder 前早退，真实拉起生产 `spawn_worker` 并读 `###RESULT`；实测 ok=true/warm=1，无窗口/无 Python 残留，作为 P1/P2 安装产物验收入口。
 
 - **2026-11-04 终验（当前源码）**：release build 通过（2m19s）；release `--self-check` 与 `--engine-self-check` 通过（真实 worker、warm=1、无窗口/残留）；隐藏全量 E2E **40/40**、test:ui **589/589**、typecheck/audit 0、cargo **102/102 + 1 ignored**。
+
+- **Tauri 命令注册审计**：新增 `scripts/tauri/handler-audit.mjs` + `npm run tauri:handler-audit`；修掉 `model_delete` 漏挂（modelDelete 桥调用会失败）；当前 **136/136** 注册。
