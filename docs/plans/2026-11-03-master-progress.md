@@ -480,3 +480,5 @@
 3. 3D 钢琴/智能分轨继续打磨（键位持久化、延迟校准、分轨结果面板）。
 4. Tauri 外壳是否继续（更新链、172 条 IPC、rquickjs/printToPDF）需用户确认后再动。
 5. 模型兼容矩阵随每次模型/引擎改动更新，并跑一次真实模型冒烟。
+
+- **无窗口生产 worker 自检**：新增 `--engine-self-check`，在 Builder 前早退，真实拉起生产 `spawn_worker` 并读 `###RESULT`；实测 ok=true/warm=1，无窗口/无 Python 残留，作为 P1/P2 安装产物验收入口。

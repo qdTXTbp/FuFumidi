@@ -69,3 +69,9 @@ Tauri 默认从 GitHub 下载 `nsis-3.13.zip`，本机直连超时。已把工�
 - `poc/tauri-poc/target/release/fufumidi-shell.exe` 约 15 MiB；
 - 清理未使用的 autosave_root 警告；cargo test 33/33 + 1 ignored 通过；
 - 只编译，不启动窗口/安装器。
+
+## 7. 无窗口生产 worker 自检（2026-11-04）
+
+- `fufumidi-shell.exe --engine-self-check` 在 Tauri Builder 之前早退，不创建 WebView 窗口；
+- 真实走生产 `spawn_worker`/WorkerPool，发缺文件请求并读取 `###RESULT`，打印 pid/result/warm 后 `pool.shutdown()`；
+- 实测 `ok:true, warm:1`，无 Python/壳残留；用于 P1/P2 安装产物验收。

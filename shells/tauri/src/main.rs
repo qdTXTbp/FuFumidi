@@ -3704,9 +3704,48 @@ fn engine_worker_status(state: State<'_, WorkerState>) -> serde_json::Value {
 }
 
 
+/// 无窗口验收：真实拉起生产 `spawn_worker`，发一个缺文件请求，读到 ###RESULT 后关闭池。
+/// 不加载模型、不创建 Tauri/WebView 窗口；用于安装版/构建产物自检。
+fn engine_self_check() -> serde_json::Value {
+    let pool = match worker_pool::WorkerPool::with_reuse(1) { Ok(p) => p, Err(e) => return serde_json::json!({ "ok": false, "error": e.to_string() }) };
+    let lease = match pool.acquire(|_id, _cancel| spawn_worker()) {
+        Ok(l) => l,
+        Err(e) => return serde_json::json!({ "ok": false, "error": e.to_string() }),
+    };
+    let req = serde_json::json!({ "audio": "__fufumidi_selfcheck_missing__.wav", "out": "__fufumidi_selfcheck_missing__.mid", "_id": "selfcheck" });
+    if let Err(e) = lease.send(&req.to_string()) {
+        return serde_json::json!({ "ok": false, "error": format!("write: {e}") });
+    }
+    let mut result = None;
+    for _ in 0..200 {
+        match lease.read_line() {
+            Ok(Some(line)) => {
+                if let Some(rest) = line.trim().strip_prefix("###RESULT ") {
+                    result = serde_json::from_str::<serde_json::Value>(rest).ok();
+                    break;
+                }
+            }
+            Ok(None) => break,
+            Err(e) => return serde_json::json!({ "ok": false, "error": e.to_string() }),
+        }
+    }
+    let pid = lease.pid();
+    drop(lease);
+    let status = pool.status();
+    pool.shutdown();
+    match result {
+        Some(r) => serde_json::json!({ "ok": r.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) || r.get("error").is_some(), "pid": pid, "warm": status.warm, "result": r }),
+        None => serde_json::json!({ "ok": false, "pid": pid, "error": "engine worker did not return ###RESULT" }),
+    }
+}
 fn main() {
     if std::env::args().any(|a| a == "--self-check") {
         println!("{}", serde_json::to_string_pretty(&host_info_json()).unwrap_or_default());
+        return;
+    }
+    if std::env::args().any(|a| a == "--engine-self-check") {
+        // 只跑 worker 协议，不创建 Tauri Builder/WebView 窗口。
+        println!("{}", serde_json::to_string_pretty(&engine_self_check()).unwrap_or_default());
         return;
     }
     let state = WorkerState {
