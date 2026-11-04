@@ -1396,17 +1396,75 @@ struct CoverJob { child: std::process::Child }
 struct CoverState(Arc<Mutex<Option<CoverJob>>>);
 static COVER_CANCELED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-fn cover_args(opts: &serde_json::Value) -> Result<Vec<String>, String> {
+fn cover_sep_arch(name: &str) -> String {
+    let n = name.to_ascii_lowercase();
+    if n.contains("htdemucs") || n.contains("demucs") { "HTDemucs".into() }
+    else if n.contains("bs_roformer") || n.contains("bs-roformer") { "BS-Roformer".into() }
+    else if n.contains("roformer") { "Mel-Band Roformer".into() }
+    else if n.contains("mdx") { "MDX23C".into() }
+    else if n.contains("scnet") { "SCNet".into() }
+    else if n.ends_with(".pth") || n.ends_with(".pt") || n.contains("uvr") { "UVR-VR".into() }
+    else { String::new() }
+}
+
+fn cover_sep_resolve_at(root: &Path, id: &str) -> Result<(PathBuf, Option<PathBuf>, String), String> {
+    let name = Path::new(id).file_name().and_then(|x| x.to_str()).unwrap_or("").trim().to_string();
+    if name.is_empty() || name == "." || name == ".." { return Err("分离模型 id 非法".into()); }
+    let mut base: Option<PathBuf> = None;
+    for c in [root.join(&name), root.join("multi").join(&name), root.join("separate").join(&name)] {
+        if c.exists() { base = Some(c); break; }
+    }
+    if base.is_none() {
+        fn walk(d: &Path, name: &str, depth: u32, hit: &mut Option<PathBuf>) {
+            if depth > 3 || hit.is_some() { return; }
+            let Ok(rd) = std::fs::read_dir(d) else { return };
+            for e in rd.flatten() { if e.file_name().to_string_lossy() == name { *hit = Some(e.path()); return; } }
+            for e in std::fs::read_dir(d).into_iter().flatten().flatten() {
+                let p = e.path(); if p.is_dir() { walk(&p, name, depth + 1, hit); if hit.is_some() { return; } }
+            }
+        }
+        let mut hit = None; walk(root, &name, 0, &mut hit); base = hit;
+    }
+    let Some(base) = base else { return Err(format!("找不到分离模型：{name}")) };
+    let (weight, dir) = if base.is_file() { (base.clone(), base.parent().unwrap_or(root).to_path_buf()) } else {
+        let mut best: Option<(u64, PathBuf)> = None;
+        fn find_weights(d: &Path, depth: u32, best: &mut Option<(u64, PathBuf)>) {
+            if depth > 2 { return; }
+            let Ok(rd) = std::fs::read_dir(d) else { return };
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.is_file() {
+                    let ext = p.extension().and_then(|x| x.to_str()).unwrap_or("").to_ascii_lowercase();
+                    if matches!(ext.as_str(), "safetensors" | "pth" | "pt" | "ckpt") {
+                        let sz = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+                        if best.as_ref().map(|(b, _)| sz > *b).unwrap_or(true) { *best = Some((sz, p)); }
+                    }
+                } else if p.is_dir() { find_weights(&p, depth + 1, best); }
+            }
+        }
+        let mut best = None; find_weights(&base, 0, &mut best);
+        let Some((_, w)) = best else { return Err(format!("分离模型目录里没有权重：{name}")) };
+        (w, base.clone())
+    };
+    let config = std::fs::read_dir(&dir).ok().and_then(|rd| rd.flatten().map(|e| e.path()).find(|p| p.extension().and_then(|x| x.to_str()).map(|x| x.eq_ignore_ascii_case("yaml") || x.eq_ignore_ascii_case("yml")).unwrap_or(false)));
+    let arch = cover_sep_arch(weight.to_string_lossy().as_ref());
+    Ok((weight, config, arch))
+}
+fn cover_args(opts: &serde_json::Value, models_root: &Path) -> Result<Vec<String>, String> {
     let audio = opts.get("audio").and_then(|v| v.as_str()).unwrap_or("");
     if audio.is_empty() || !Path::new(audio).is_file() { return Err("请先选择源音频".into()); }
     let outdir = opts.get("outdir").and_then(|v| v.as_str()).unwrap_or("");
     if outdir.is_empty() { return Err("请选择输出目录".into()); }
     let singer_id = opts.get("singer").and_then(|v| v.get("id")).and_then(|v| v.as_str()).unwrap_or("");
     if singer_id.is_empty() { return Err("请选择一个导入的翻唱模型".into()); }
-    if opts.get("sepModel").and_then(|v| v.get("id")).and_then(|v| v.as_str()).filter(|s| !s.is_empty()).is_some() {
-        return Err("人声分离模型路径解析尚未迁移；请先在音频处理中分离，或选择不分离".into());
-    }
+    let sep_id = opts.get("sepModel").and_then(|v| v.get("id")).and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(|s| s.to_string());
     let mut a: Vec<String> = vec!["all".into(), audio.into(), "--outdir".into(), outdir.into(), "--rvc-model".into(), singer_id.into()];
+    if let Some(sep) = sep_id {
+        let (model, config, arch) = cover_sep_resolve_at(models_root, &sep)?;
+        a.extend(["--sep-model".into(), model.display().to_string()]);
+        if let Some(c) = config { a.extend(["--sep-config".into(), c.display().to_string()]); }
+        if !arch.is_empty() { a.extend(["--sep-arch".into(), arch]); }
+    }
     if let Some(n) = opts.get("name").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) { a.extend(["--name".into(), n.into()]); }
     if opts.get("sepMode").and_then(|v| v.as_str()) == Some("off") { a.push("--no-separate".into()); }
     let num = |k: &str, d: f64| opts.get(k).and_then(|v| v.as_f64()).unwrap_or(d);
@@ -1494,7 +1552,7 @@ fn cover_cancel(state: State<'_, CoverState>) -> serde_json::Value {
 fn cover_run(state: State<'_, CoverState>, app: AppHandle, opts: serde_json::Value) -> serde_json::Value {
     if state.0.lock().unwrap_or_else(|e| e.into_inner()).is_some() { return oto_err("已有一个翻唱任务在跑，先取消它"); }
     COVER_CANCELED.store(false, Ordering::SeqCst);
-    let args = match cover_args(&opts) { Ok(a) => a, Err(e) => return oto_err(&e) };
+    let args = match cover_args(&opts, &models_dir()) { Ok(a) => a, Err(e) => return oto_err(&e) };
     let outdir = opts.get("outdir").and_then(|v| v.as_str()).unwrap_or("");
     if let Err(e) = std::fs::create_dir_all(outdir) { return oto_err(&format!("输出目录不可写：{e}")); }
     let (Some(py), Some(engine)) = (python_path(), engine_dir()) else { return oto_err("Python/引擎目录不存在") };
@@ -6894,20 +6952,30 @@ mod plugin_confirm_tests {
 #[cfg(test)]
 mod cover_args_tests {
     #[test]
-    fn rejects_missing_and_builds_offline_sep_args() {
-        assert!(super::cover_args(&serde_json::json!({})).is_err());
+    fn rejects_missing_and_builds_sep_args() {
         let dir = std::env::temp_dir().join(format!("fufumidi-cover-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         std::fs::create_dir_all(&dir).unwrap();
+        assert!(super::cover_args(&serde_json::json!({}), &dir).is_err());
         let audio = dir.join("a.wav"); std::fs::write(&audio, b"x").unwrap();
         let out = dir.join("out");
         let opts = serde_json::json!({ "audio": audio.display().to_string(), "outdir": out.display().to_string(), "singer": { "id": "m1" }, "sepMode": "off", "transpose": 2, "f0Method": "rmvpe" });
-        let args = super::cover_args(&opts).unwrap();
+        let args = super::cover_args(&opts, &dir).unwrap();
         assert_eq!(args[0], "all");
         assert!(args.contains(&"--no-separate".to_string()));
         assert!(args.contains(&"--rvc-model".to_string()));
         assert!(args.contains(&"2".to_string()));
         let sep = serde_json::json!({ "audio": audio.display().to_string(), "outdir": out.display().to_string(), "singer": { "id": "m1" }, "sepModel": { "id": "htdemucs4_6stems" } });
-        assert!(super::cover_args(&sep).is_err());
+        let models = dir.join("models");
+        let sep_src = models.join("multi/htdemucs4_6stems");
+        std::fs::create_dir_all(&sep_src).unwrap();
+        std::fs::write(sep_src.join("model.safetensors"), b"x").unwrap();
+        std::fs::write(sep_src.join("config.yaml"), b"y").unwrap();
+        let sep_args = super::cover_args(&sep, &models).unwrap();
+        assert!(sep_args.contains(&"--sep-model".to_string()));
+        assert!(sep_args.contains(&"--sep-arch".to_string()));
+        assert!(sep_args.contains(&"HTDemucs".to_string()));
+        let unknown = serde_json::json!({ "audio": audio.display().to_string(), "outdir": out.display().to_string(), "singer": { "id": "m1" }, "sepModel": { "id": "nope" } });
+        assert!(super::cover_args(&unknown, &models).is_err());
         let _ = std::fs::remove_dir_all(dir);
     }
 }
