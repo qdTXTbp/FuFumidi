@@ -5,23 +5,23 @@
 | 指标 | 数值 |
 |---|---:|
 | preload 暴露方法 | 265 |
-| Tauri 桥已映射方法 | 183 |
-| 尚未映射 | **83** |
+| Tauri 桥已映射方法 | 191 |
+| 尚未映射 | **75** |
 | preload IPC invoke 通道 | 250 |
-| Tauri call 通道 | 174 |
+| Tauri call 通道 | 184 |
 
 ## 缺口分类
 
 | 分类 | 数量 |
 |---|---:|
 | diffsinger | 19 |
-| 设置/杂项 | 17 |
+| 设置/杂项 | 14 |
 | utau/voicebank | 10 |
-| 导出/渲染 | 7 |
-| gpu/运行时增强 | 7 |
 | 模型/安装/平台 | 6 |
+| 导出/渲染 | 6 |
 | 事件/窗口 | 6 |
 | 更新/测速 | 4 |
+| gpu/运行时增强 | 3 |
 | 文件/诊断 | 3 |
 | 曲库/数据 | 2 |
 | 其他 | 2 |
@@ -59,16 +59,12 @@ exportUstx
 generate
 gpuCancelInstall
 homrInstall
-homrRemove
-homrStatus
 hotkeysApply
 hotkeysGet
 importUstx
 install
 inventory
 langInstall
-langRemove
-langStatus
 modelEnsureConfig
 onDiffsingerMsProgress
 onDiffsingerRenderProgress
@@ -87,7 +83,6 @@ pickDir
 preview
 probeVoicebank
 renderFile
-rendererReady
 saveLocal
 savePath
 scoreCancel
@@ -98,9 +93,6 @@ singToPinyin
 sources
 speedtest
 srInstall
-srRemove
-srStatus
-status
 submit
 updateSpeedtest
 utauAliasRange

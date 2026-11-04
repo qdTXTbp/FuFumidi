@@ -246,6 +246,17 @@ export function installTauriBridge() {
     rvcRemove: (id) => call('rvc_remove', { id }),
 
     // ---- 插件 ----
+    omrEngine: {
+      status: () => call('omr_engine_status'),
+      openDir: () => call('omr_engine_open_dir'),
+      remove: () => call('omr_engine_remove'),
+      langStatus: () => call('omr_lang_status'),
+      langRemove: (code) => call('omr_lang_remove', { code }),
+      homrStatus: () => call('omr_homr_status'),
+      homrRemove: () => call('omr_homr_remove'),
+      srStatus: () => call('omr_sr_status'),
+      srRemove: () => call('omr_sr_remove'),
+    },
     plugins: {
       list: () => call('plugins_list'),
       setEnabled: (id, enabled) => call('plugins_set_enabled', { id, enabled }),

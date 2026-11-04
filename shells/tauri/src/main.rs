@@ -1748,6 +1748,90 @@ async fn separate_audio(state: State<'_, SeparationState>, app: AppHandle, opts:
     Ok(serde_json::json!({ "ok": result.get("ok").and_then(|v| v.as_bool()).unwrap_or(false), "outputs": outputs, "out_dir": oto_path_text(&outdir), "error": result.get("error").cloned().unwrap_or(serde_json::Value::Null), "result": result.get("result").cloned().unwrap_or(serde_json::Value::Null) }))
 }
 
+fn omr_root() -> PathBuf { data_dir().join("omr") }
+
+fn omr_lang_catalog() -> serde_json::Value {
+    serde_json::json!([
+        { "code": "eng", "name": "英语（速度记号、力度、乐器名多为英文缩写）" },
+        { "code": "chi_sim", "name": "简体中文（标题、中文乐器名）" },
+        { "code": "chi_tra", "name": "繁体中文" },
+        { "code": "jpn", "name": "日语" }
+    ])
+}
+
+fn omr_lang_status_at(root: &Path) -> serde_json::Value {
+    let dir = root.join("tessdata");
+    let mut installed = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(&dir) {
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if !name.to_ascii_lowercase().ends_with(".traineddata") { continue; }
+            let Ok(md) = e.metadata() else { continue };
+            if md.len() < 5 * 1024 * 1024 { continue; }
+            installed.push(serde_json::json!({ "code": name.trim_end_matches(".traineddata"), "bytes": md.len() }));
+        }
+    }
+    serde_json::json!({ "ok": true, "dir": dir.display().to_string(), "installed": installed, "catalog": omr_lang_catalog() })
+}
+
+fn homr_status_at(root: &Path) -> serde_json::Value {
+    let dir = root.join("homr");
+    let venv_py = dir.join("venv").join("Scripts").join("python.exe");
+    let site = dir.join("venv").join("Lib").join("site-packages").join("homr");
+    let installed = venv_py.is_file() || site.is_dir();
+    let bytes = if site.is_dir() { dir_size(&site) } else { 0 };
+    serde_json::json!({ "ok": true, "installed": installed, "ready": installed && site.is_dir(), "dir": dir.display().to_string(), "weightBytes": bytes, "weights": [], "missing": 0, "reason": if installed { "" } else { "未安装" }, "license": "AGPL-3.0" })
+}
+
+fn sr_status_at(root: &Path) -> serde_json::Value {
+    let dir = root.join("waifu2x");
+    let installed = dir.is_dir() && std::fs::read_dir(&dir).map(|mut rd| rd.next().is_some()).unwrap_or(false);
+    serde_json::json!({ "ok": true, "installed": installed, "dir": dir.display().to_string(), "bytes": if installed { dir_size(&dir) } else { 0 } })
+}
+
+#[tauri::command]
+fn omr_engine_status() -> serde_json::Value {
+    let exe = omr_root().join("audiveris").join("Audiveris").join("Audiveris.exe");
+    let installed = exe.is_file();
+    let bytes = std::fs::metadata(&exe).map(|m| m.len()).unwrap_or(0);
+    serde_json::json!({ "ok": true, "installed": installed, "exe": exe.display().to_string(), "version": "5.5", "bytes": bytes, "url": "https://github.com/Audiveris/audiveris/releases" })
+}
+
+#[tauri::command]
+fn omr_engine_open_dir() -> serde_json::Value {
+    let dir = omr_root(); let _ = std::fs::create_dir_all(&dir);
+    #[cfg(target_os = "windows")] { match Command::new("explorer").arg(&dir).spawn() { Ok(_) => serde_json::json!({ "ok": true }), Err(e) => oto_err(&e.to_string()) } }
+    #[cfg(not(target_os = "windows"))] { oto_err("not supported") }
+}
+
+#[tauri::command]
+fn omr_engine_remove() -> serde_json::Value {
+    let _ = std::fs::remove_dir_all(omr_root().join("audiveris"));
+    omr_engine_status()
+}
+
+#[tauri::command]
+fn omr_lang_status() -> serde_json::Value { omr_lang_status_at(&omr_root()) }
+
+#[tauri::command]
+fn omr_lang_remove(code: String) -> serde_json::Value {
+    if !code.chars().all(|c| c.is_ascii_lowercase() || c == '_') || code.len() < 2 || code.len() > 12 { return oto_err("语言代码非法"); }
+    let _ = std::fs::remove_file(omr_root().join("tessdata").join(format!("{code}.traineddata")));
+    omr_lang_status()
+}
+
+#[tauri::command]
+fn omr_homr_status() -> serde_json::Value { homr_status_at(&omr_root()) }
+
+#[tauri::command]
+fn omr_homr_remove() -> serde_json::Value { let _ = std::fs::remove_dir_all(omr_root().join("homr")); omr_homr_status() }
+
+#[tauri::command]
+fn omr_sr_status() -> serde_json::Value { sr_status_at(&omr_root()) }
+
+#[tauri::command]
+fn omr_sr_remove() -> serde_json::Value { let _ = std::fs::remove_dir_all(omr_root().join("waifu2x")); omr_sr_status() }
+
 fn data_root_overridden() -> bool {
     std::env::var("FUFUMIDI_DATA_ROOT").map(|p| !p.trim().is_empty()).unwrap_or(false)
 }
@@ -5293,7 +5377,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             renderer_ready, load_settings, save_settings, update_sources, update_set_preferred_source, db_kv_get, db_kv_set,
-            tasks_list, tasks_cancel, tasks_clear_finished, db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, cover_singers, cover_pick_audio, cover_pick_dir, cover_open, cover_cancel, cover_run, video_export_begin, video_export_write, video_export_abort, video_export_end, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, wallpaper_set_desktop, gpu_status, gpu_uninstall, gpu_unified_memory_experiment, plugins_list, plugins_rescan, plugins_set_enabled, plugins_installed_list, plugins_platform_info, plugins_catalog, plugins_open_platform, plugins_install_from_platform, plugins_confirm_install, plugins_cancel_install, plugins_open_dir, plugins_open_docs, open_edit_guide, sf_workshop_list, sf_workshop_import, sf_workshop_delete, sf_workshop_open_dir, model_list,
+            tasks_list, tasks_cancel, tasks_clear_finished, db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, cover_singers, cover_pick_audio, cover_pick_dir, cover_open, cover_cancel, cover_run, video_export_begin, video_export_write, video_export_abort, video_export_end, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, wallpaper_set_desktop, gpu_status, gpu_uninstall, gpu_unified_memory_experiment, plugins_list, plugins_rescan, plugins_set_enabled, plugins_installed_list, plugins_platform_info, plugins_catalog, plugins_open_platform, plugins_install_from_platform, plugins_confirm_install, plugins_cancel_install, plugins_open_dir, plugins_open_docs, open_edit_guide, sf_workshop_list, sf_workshop_import, sf_workshop_delete, sf_workshop_open_dir, model_list, omr_engine_status, omr_engine_open_dir, omr_engine_remove, omr_lang_status, omr_lang_remove, omr_homr_status, omr_homr_remove, omr_sr_status, omr_sr_remove,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,

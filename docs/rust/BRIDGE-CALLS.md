@@ -6,9 +6,9 @@
 | 指标 | 数值 |
 |---|---:|
 | 前端调用的 bridge 方法（去重） | 213 |
-| Tauri 顶层方法 | 134 |
-| Tauri 嵌套方法 | 61 |
-| **未找到实现** | **58** |
+| Tauri 顶层方法 | 136 |
+| Tauri 嵌套方法 | 70 |
+| **未找到实现** | **48** |
 
 ## 未找到实现的方法
 
@@ -20,23 +20,13 @@
 - `gpuCancelInstall` — frontend/src/components/SettingsPanel.vue
 - `omrEngine` — frontend/src/views/ViewResources.vue
 - `omrEngine.homrInstall` — frontend/src/views/ViewResources.vue
-- `omrEngine.homrRemove` — frontend/src/views/ViewResources.vue
-- `omrEngine.homrStatus` — frontend/src/views/ViewResources.vue
 - `omrEngine.install` — frontend/src/views/ViewResources.vue
 - `omrEngine.langInstall` — frontend/src/views/ViewResources.vue
-- `omrEngine.langRemove` — frontend/src/views/ViewResources.vue
-- `omrEngine.langStatus` — frontend/src/views/ViewResources.vue
 - `omrEngine.onProgress` — frontend/src/views/ViewResources.vue
-- `omrEngine.openDir` — frontend/src/views/ViewResources.vue
-- `omrEngine.remove` — frontend/src/views/ViewResources.vue
 - `omrEngine.srInstall` — frontend/src/views/ViewResources.vue
-- `omrEngine.srRemove` — frontend/src/views/ViewResources.vue
-- `omrEngine.srStatus` — frontend/src/views/ViewResources.vue
-- `omrEngine.status` — frontend/src/views/ViewResources.vue
 - `onFolderWatch` — frontend/src/components/SettingsPanel.vue
 - `onOpenFile` — frontend/src/App.vue
 - `onSpeedtest` — frontend/src/components/SettingsPanel.vue
-- `onStemProgress` — frontend/src/views/ViewTranscribe.vue
 - `onTrayControl` — frontend/src/App.vue
 - `onVoicebankProgress` — frontend/src/components/utau/UtauVoicebankStore.vue
 - `plugin` — frontend/src/views/ViewConvert.vue

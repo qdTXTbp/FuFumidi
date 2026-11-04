@@ -101,6 +101,7 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 | plugins_list / rescan / set_enabled / open_dir | 调 engine/plugin_render.py list（--dir 来自 settings/env），按 settings.plugins_enabled 标 enabled；开关写 settings | Rust 单测：输出解析/启用映射、设置写入 |
 | plugins_install_from_platform / confirm_install / cancel_install | 两段式：curl 下载 zip 到 temp token 目录并检查 plugin.json/路径/体积；确认后安全解压到 plugins/<id>，重扫；取消删 token | Rust 单测：manifest/路径穿越/绝对路径；真实平台下载未跑 |
 | plugins_installed_list / platform_info / catalog / open_platform | 已装列表复用 plugins_list；平台基址 env/默认；catalog 用 curl 拉 manifest（15s）；open_platform 仅 http/https | Rust 单测：manifest 解析/缺字段；网络未在测试中跑 |
+| omr_engine_status / open_dir / remove；omr_lang_status / lang_remove；omr_homr_status / homr_remove；omr_sr_status / sr_remove | OMR 组件管理（Audiveris/tessdata/homr/waifu2x）状态、打开目录、卸载/删语言包；这是资源中心已有组件的真实状态，不含安装/识别 | 编译/单测；安装目录无窗口 status 未单独 CLI 验证 |
 | utau_list_voicebanks / voicebank_unified | 只读扫描 dataRoot/voicebanks（一层、三标记、character.yaml/txt 显示名）与 diffsinger-voicebanks（dsconfig 根/下一层、递归 size）；两侧独立容错 | Rust 单测：名称优先级/BOM/UTF-8 lossy/一层/缺根/dsconfig 根与一层/size/counts；dir_size 不再跟随 symlink（全仓生效） |
 | utau_export_voicebank_zip | 原生保存 zip → 写入 files[{name,data(base64)}]（Deflated）；文件名清洗、空名跳过、总量 512MB | Rust 单测：zip 条目/内容、traversal 清洗、空名跳过 |
 | rvc_probe | 等 id 找 model.json/index 条目；spawn_blocking 调 engine_rvc.py probe --model，解析 ###RESULT，回写 version/sr/f0/engine 并保存；无模型/脚本时明确错误 | Rust 单测：查找/字段 patch；真实 probe 需模型，未跑 |
@@ -252,11 +253,11 @@ GPU 环境（未设 `FUFUMIDI_DISABLE_GPU=1`）自动 −1，`FUFUMIDI_MAX_WORKE
 - 明细见 [IPC-COVERAGE.md](IPC-COVERAGE.md)。
 - 前端实际调用审计：`npm run tauri:call-audit`（`docs/rust/BRIDGE-CALLS.md`），
   当前 212 个去重调用 / 104 未找到实现（启发式，含动态调用误报）。
-- 参数契约审计：`npm run tauri:arg-audit`（`docs/rust/ARG-AUDIT.md`），当前 158 命令 / 23 不一致
+- 参数契约审计：`npm run tauri:arg-audit`（`docs/rust/ARG-AUDIT.md`），当前 168 命令 / 23 不一致
   （主要来自尚未实现的 bridge 命令）；已修正 readSidecarLyrics/modelImportLocal/renameMidi/
   projectOpen/autosaveRead/autosaveClear 的 JS camelCase→Rust snake_case 参数错配。
 
-## 4. 当前命令清单（158 条）
+## 4. 当前命令清单（168 条）
 
 host_info, app_version, ping, python_selfcheck, engine_probe, convert, engine_worker_status,
 load_settings, save_settings, update_sources, update_set_preferred_source, utau_list_voicebanks, voicebank_unified, utau_read_oto, utau_save_oto, utau_delete_voicebank, utau_import_voicebank_zip, utau_export_voicebank, utau_export_voicebank_zip, cover_singers, cover_pick_audio, cover_pick_dir, cover_open, cover_cancel, cover_run, rvc_list, rvc_remove, rvc_pick_folder, rvc_pick_files, rvc_import_folder, rvc_import_files, rvc_pick_zip, rvc_import_zip, rvc_catalog, rvc_open_catalog_page, rvc_probe, rvc_refresh_catalog, take_pending_open_file, db_kv_get, db_kv_set, db_status, db_songs_list, db_songs_put,

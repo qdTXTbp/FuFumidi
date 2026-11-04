@@ -243,3 +243,10 @@ Tauri 默认从 GitHub 下载 `nsis-3.13.zip`，本机直连超时。已把工�
 - db_songs_list 改为 async + spawn_blocking；65MB 曲库 JSON 反序列化不再占 IPC/主线程；
 - release 2m09s、0 warning；安装版 16,965,120 bytes，SHA-256 `9880410fa2d4f66b2833df086558f19425d49b9b52c72548fec8ede022b4d1c2`；
 - startup log 仍记录 renderer-ready；等用户冷启动体感复测。
+
+## 34. 2026-11-04 OMR 组件状态
+
+- 新增 9 个 OMR 组件管理命令（Audiveris 状态/打开/卸载、语言包状态/删除、homr 状态/删除、waifu2x 状态/删除）；
+- 桥补 omrEngine；资源中心现在能显示本机已安装的 OMR 组件；安装/识别仍未接；
+- release 3m00s、0 warning；安装版 16,998,400 bytes，SHA-256 `26ca78ab27105f0b7b63a32d61b21df6738c06a82b29c1b90b0e4d688d77e9ed`；
+- typecheck/build/smoke/audit 通过；commands 168 / coverage 191/75 / call 184。

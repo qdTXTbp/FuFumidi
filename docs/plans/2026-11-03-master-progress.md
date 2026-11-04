@@ -594,3 +594,5 @@
 - **renderer-ready 计时**：logs/tauri-start.log 记录进程启动→渲染就绪毫秒；release 92bab2b1/16,950,272；用于定位冷启动。
 
 - **db_songs_list 移出主线程**：async spawn_blocking；release 9880410f/16,965,120；冷启动曲库卡顿候选已处理。
+
+- **OMR 组件状态**：9 个命令/桥；资源中心显示 Audiveris/语言包/homr/waifu2x；安装/识别未接；commands 168、覆盖 191/75、call184；release 26ca78ab/16,998,400。
