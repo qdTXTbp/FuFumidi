@@ -121,3 +121,9 @@ Tauri 默认从 GitHub 下载 `nsis-3.13.zip`，本机直连超时。已把工�
 - host/engine self-check 通过，无窗口/残留；
 - bundled Python 已确认可 import `imageio_ffmpeg` 并返回 ffmpeg 7.1 路径；
 - `npm run tauri:video-smoke`（合成 1s H.264 + WAV，按 `video_export_end` 参数封装 MP4）：**ok=true / 15827 bytes**；验证 stream copy + AAC + `-t` + faststart；WebCodecs 编码本身仍未跑。
+
+## 15. WebCodecs 编码验证（hidden E2E）
+
+- 新增 `scripts/e2e/cases/video-webcodecs.mjs`：隐藏窗口内 VideoEncoder 配置 H.264 Annex B，编码 6 帧，要求 chunks/bytes > 0；
+- 隐藏全量 **41/41** 通过；
+- 覆盖渲染端编码能力（Electron/Chromium）；Tauri WebView2 内同一路径仍需真实窗口验证。

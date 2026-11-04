@@ -538,3 +538,5 @@
 - **视频封装 smoke**：新增 `npm run tauri:video-smoke`（合成 H.264+WAV，按 video_export_end 参数封装）；实测 ok=true / 15827 bytes；WebCodecs 编码未跑。
 
 - **视频导出后全量 E2E**：隐藏全量 **40/40**（150 命令源码）；视频桥接不影响现有页面流程。
+
+- **WebCodecs E2E**：新增隐藏用例 `video-webcodecs`，实际创建 VideoEncoder、编码 6 帧 H.264 Annex B，确认 chunks/bytes > 0；隐藏全量 **41/41**；这验证的是 Electron/Chromium 渲染端，WebView2 内同代码仍未直接跑。

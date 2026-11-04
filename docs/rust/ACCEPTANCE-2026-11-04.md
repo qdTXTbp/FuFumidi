@@ -33,14 +33,15 @@
 
 ## 3. 门禁结果（当前源码）
 
-- 隐藏全量 E2E：**40/40**（视频导出桥接后复跑，`show:false`）
+- 隐藏全量 E2E：**41/41**（新增 video-webcodecs：真实 H.264 编码 6 帧，`show:false`）
 - 前端单测：**589/589**（`npm run test:ui`）
 - `npm run typecheck`：0
 - `npm run audit`：0
 - `cargo test --offline`：**114 passed / 0 failed / 1 ignored**
 - `npm run tauri:handler-audit`：**150/150** 已注册，并已并入 `npm run audit`
 - release build：通过（150 命令，2m11s、0 warning，见 `TAURI-BUILD.md` §14）
-- `npm run tauri:video-smoke`：ok=true / 15827 bytes（合成 H.264+WAV 封装；WebCodecs 编码未跑）
+- `npm run tauri:video-smoke`：ok=true / 15827 bytes（合成 H.264+WAV 封装）
+- hidden `video-webcodecs`：VideoEncoder 实际编码 6 帧 H.264 Annex B，chunks/bytes > 0（Electron/Chromium；WebView2 未直接验证）
 - release `--self-check` / `--engine-self-check`：通过（143 命令源码）
 
 ## 4. 仍需完成的重型缺口
