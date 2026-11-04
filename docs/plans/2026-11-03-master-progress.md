@@ -137,6 +137,19 @@
     提示独占第二行（flex-basis 100% + order），第一行只留开关与预算。
 - 视觉证据：scripts/design/artifacts/{edit,sing,transcribe}-{980,1280,1585}.png（本地产物，gitignored）。
 
+### 11.1 全量 E2E 基线（2026-11-04）
+
+- 6.5.0-beta.1 上全量 `node scripts/e2e/run.mjs`：**29/29 通过**（首轮 26/29）。
+- 修掉 3 个真实问题（不是改断言绕过）：
+  · `transcribe-queue-chain`：`ReferenceError: quality is not defined` —— ViewTranscribe 的
+    analyzeQuality/长音修复引用了一个从未声明的 ref，队列收尾即崩；
+  · `tasks-ui`：TaskCenter 的 FAB 只绑 pointerup，没有 click 语义（键盘/自动化都打不开面板）
+    —— 去掉 pointerdown 的 preventDefault，click 打开，拖动后抑制一次 click；
+  · `convert-ui`：导入流程会晚一步抢 hash，测试在首页采样到空 labels —— 测试改为重试导航直到
+    `.convert-view` 真正挂载。
+- E2E 基础设施：`Page.addScriptToEvaluateOnNewDocument` 持久注入浮层关闭器，`location.reload()`
+  后不再被动态壁纸/更新浮层挡住。
+
 ## 12. 待收口（下一轮）
 
 - Tauri POC（子代理 B）**已收口**：docs/rust/TAURI-POC.md。结论——外壳可行（cargo check 37s / build 44s；
