@@ -22,7 +22,7 @@
 | P-009 轨道 CRUD | 未做 | 属 6.7 |
 | P-012 快捷键可配置 | 未做 | 属 6.7（SettingsPanel 仍只读） |
 | P-013 量化体系 | 未做 | 属 6.7 |
-| P-015 编排进入播放 | **部分已满足，待实测验收** | core/arrange.js + ViewArrange 已接线 |
+| P-015 编排进入播放 | **已完成（事件级验收）** | core/arrange.js + player.js 真源；E2E arrange-playback 验证移动/静音改变 player.events |
 
 > 结论：M0 产品止血的实际剩余项远少于计划；本轮把可验证的剩余项做了，其余移到 6.7。
 
@@ -293,6 +293,9 @@
 - **T-119 收尾进展**：`mainBinaryName: FuFumidi`，安装包主程序改为 **FuFumidi.exe**；
   重打并安装到干净目录，安装版 smoke 仍 **24/24**（renderer=<embedded>，python/engine 来自安装目录，转录 5.3 s）。
   Electron 回退基准：E2E **35/35**、`pack:base` 成功（28 GB base 数据包，已删除不入库）。
+- **P-015 编排进入播放（事件级验收）**：新增 E2E `arrange-playback.mjs`：
+  导入两轨 MIDI → 编排页 → 等 `song.arrange` 回写 → 校验移动 clip 改变 player.events 起点、
+  静音 clip 减少事件数；用例通过，E2E 总数 36。真实声卡听感仍待人工验收。
 - **原生文件对话框已接入（T-115/T-117 之间）**：`tauri-plugin-dialog 2.8.4`，
   新增 pick_file/pick_directory/pick_audio/pick_audio_files/pick_image/pick_music_xml（命令共 **43 条**）；
   安装版 smoke **25 项**全绿（新增 dialogs 接线断言）；用户实际点选操作仍待验收。
