@@ -93,7 +93,8 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 | take_pending_open_file | 冷启动从 argv 取第一个存在的 .mid/.midi（跳过 -flag），读字节返回 {name,bytes} 并清空；App.vue 兜底主动取一次后 importFiles | Rust 单测：MID 选中/非 MID 跳过/缺失忽略 |
 | gpu_status / gpu_uninstall | 读取 dataRoot/gpu-enhancements 下 cuda/rocm/xpu；返回当前 Python、rocm 是否需 3.12；卸载删除对应目录 | Rust 单测（临时目录）：识别 cuda、卸载删除、非法类型拒绝；真实 Python 版本读取在测试中执行 |
 | wallpaper_set_desktop | 静态图片设为桌面：HKCU Desktop Wallpaper/WallpaperStyle/TileWallpaper + `rundll32 user32.dll,UpdatePerUserSystemParameters` | Rust 单测：注册表命令计划/路径；**测试不改真实桌面** |
-| plugins_list / rescan / set_enabled / open_dir | 调 engine/plugin_render.py list（--dir 来自 settings/env），按 settings.plugins_enabled 标 enabled；开关写 settings；打开插件目录 | Rust 单测：输出解析/启用映射、设置写入；真实 Python 插件列表未在测试中跑（手工无窗口跑过返回空列表） |
+| plugins_list / rescan / set_enabled / open_dir | 调 engine/plugin_render.py list（--dir 来自 settings/env），按 settings.plugins_enabled 标 enabled；开关写 settings | Rust 单测：输出解析/启用映射、设置写入 |
+| plugins_installed_list / platform_info / catalog / open_platform | 已装列表复用 plugins_list；平台基址 env/默认；catalog 用 curl 拉 manifest（15s）；open_platform 仅 http/https | Rust 单测：manifest 解析/缺字段；网络未在测试中跑 |
 | utau_list_voicebanks / voicebank_unified | 只读扫描 dataRoot/voicebanks（一层、三标记、character.yaml/txt 显示名）与 diffsinger-voicebanks（dsconfig 根/下一层、递归 size）；两侧独立容错 | Rust 单测：名称优先级/BOM/UTF-8 lossy/一层/缺根/dsconfig 根与一层/size/counts；dir_size 不再跟随 symlink（全仓生效） |
 | utau_export_voicebank_zip | 原生保存 zip → 写入 files[{name,data(base64)}]（Deflated）；文件名清洗、空名跳过、总量 512MB | Rust 单测：zip 条目/内容、traversal 清洗、空名跳过 |
 | rvc_probe | 等 id 找 model.json/index 条目；spawn_blocking 调 engine_rvc.py probe --model，解析 ###RESULT，回写 version/sr/f0/engine 并保存；无模型/脚本时明确错误 | Rust 单测：查找/字段 patch；真实 probe 需模型，未跑 |
