@@ -139,7 +139,7 @@
 
 ### 11.1 全量 E2E 基线（2026-11-04）
 
-- 6.5.0-beta.1 上全量 `node scripts/e2e/run.mjs`：**29/29 通过**（首轮 26/29）。
+- 6.5.0-beta.1 上全量 `node scripts/e2e/run.mjs`：**33/33 通过**（首轮 26/29；新增用例后复核）。
 - 修掉 3 个真实问题（不是改断言绕过）：
   · `transcribe-queue-chain`：`ReferenceError: quality is not defined` —— ViewTranscribe 的
     analyzeQuality/长音修复引用了一个从未声明的 ref，队列收尾即崩；
@@ -191,18 +191,35 @@
   新增 `onStemProgress`（preload + ipc.ts 类型），转录页实时显示分轨阶段/百分比。
 - 转录页智能分轨行新增：分轨模型状态（已安装/未安装 + 模型名 + 去资源中心下载）、
   预算选择 tooltip（auto = 6–12 轨，按音符数/置信度评分，核心角色优先）、关闭开关时预算禁用。
-- 契约：preload 事件 29 → **30**，schema 重新生成、零漂移。
+- 契约：新增 `onStemProgress` 订阅后重新生成 schema，`check:contracts` 零漂移。
 - E2E `transcribe-stem-ui`：预算 5 档、状态徽标、开关联动禁用，全绿。
 
-## 15. 待收口（下一轮）
+## 15. 范围变更：取消 Rust/ONNX 替换 Python 引擎（2026-11-04）
 
-## 13. 待收口（下一轮）
+- 用户决定（原话）：「Rust/ONNX 替换 Python 引擎,这一项改动不执行了」；同时要求「注意让现有的模型都能使用」。
+- 决策记录：docs/decisions/ADR-0001-cancel-python-engine-replacement.md。
+- 冻结项：R-007…R-011、T-306…T-308、W-E0…W-E4、M3/M4 的「移除 Python/删 Electron 清理」；
+  不再以「去 Python / 安装包 ≤250 MiB / 首任务 ≤1.5 s」作为验收。
+- 保留项：产品专业化升级（6.6/6.7/6.8）、契约/门禁、设计/品牌约束继续；
+  Rust 非 ML 核心（crates/、main/rust.js）作为可选加速保留，不删除；Tauri 外壳去 Electron 是否继续另行确认。
+- 已同步：master-integrated-plan（G4/M3/M4/W-E/风险表）、master-ai-spec（R/T-3xx + R-014 硬约束）、
+  rust-fullstack-plan、rust-rewrite-plan 顶部均加了取消横幅。
 
-- Tauri POC（子代理 B）**已收口**：docs/rust/TAURI-POC.md。结论——外壳可行（cargo check 37s / build 44s；
-  debug 12.58 MiB、release 5.87 MiB；开窗 0.73–0.86s；IPC 1.7–6.2ms；WebView2 156 已装）；
-  两个阻塞：① crates.io 直连拉 407 crate 用 580s 且多次超时 → CI/开发需镜像或 vendor 缓存；
-  ② tauri-plugin-updater 无增量、验签是 minisign 而非现有 Ed25519/Kachina → 更新链必须自研重做（P1 POC 结论）。
-  待深挖：NSIS 打包、rquickjs 插件、printToPDF、视频导出、250 IPC 代码生成。
-- 品牌/设计：docs/BRAND.md + check:brand（16 资产未变），CI 已接线；P-026/P-027/T-113/T-114 入规格。
-- 6.7 第一组（轨道 CRUD / 拍号编辑）尚未动；先按 RUST-PROJECT-MODEL v2 冻结细节。
-- 把 cargo fmt/clippy 加入 CI（本机缺组件）。
+## 16. 现有模型可用性（硬约束 R-014）
+
+- 约束：转录/分轨/OMR/调教/翻唱的**模型格式、路径、ID、下载源不变**；Python 引擎随包保留。
+- 本轮实测：`window.fuBridge.modelList()` 返回 **91 个模型条目**，覆盖 basic_pitch / piano_transcription /
+  hft_transformer / miros / yourmt3 / muscriptor（3 规格）/ beat_this / audio_tagger / aria /
+  separation（29 项，含 4 个 demucs 家族）；模型注册表未做任何删除或改格式。
+- 真实推理回归：E2E `transcribe-queue-chain` 仍用 Basic Pitch 跑真实转录；`transcribe-stem-ui` 校验分轨入口；
+  全量 33/33 通过。
+- 新增 `scripts/e2e/cases/models-catalog.mjs`：守住模型家族与字段完整性，防止后续改动悄悄删模型/改 ID。
+- 兼容矩阵与变更流程：docs/MODELS-COMPATIBILITY.md。
+
+## 17. 待收口（下一轮）
+
+1. 6.7 剩余：可配置快捷键、命令式撤销、量化增强（强度/终点）、编排参与播放。
+2. 安装版冒烟：需要先产出 6.5.0-beta.1 的 win-unpacked / 安装包，再按 AGENTS 部署到 E:\Midi\FuFumidi 验证。
+3. 3D 钢琴/智能分轨继续打磨（键位持久化、延迟校准、分轨结果面板）。
+4. Tauri 外壳是否继续（更新链、172 条 IPC、rquickjs/printToPDF）需用户确认后再动。
+5. 模型兼容矩阵随每次模型/引擎改动更新，并跑一次真实模型冒烟。

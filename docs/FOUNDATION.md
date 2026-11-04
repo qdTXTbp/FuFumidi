@@ -45,6 +45,14 @@
 6. **验收钩子**
    - 需要自动化的界面在 `localStorage.fufumidi_debug === '1'` 时挂 `window.__xxxDebug`，并且只读、不改变默认行为。
 
+## 2.5 模型兼容（硬约束，2026-11-04）
+
+- **现有转录/分轨/OMR/调教/翻唱模型的格式、ID、路径、下载源冻结**：不得以「重写 / 换运行时」为由换格式、改 ID 或删模型。
+- **Python 引擎保留**：[ADR-0001](decisions/ADR-0001-cancel-python-engine-replacement.md) 已取消「Rust/ONNX 替换 Python 引擎」；
+  `resources/python`、torch/onnxruntime 依赖与全部模型随包分发，不删除。
+- 改动模型注册表 / loader / 下载 URL 时：更新 [docs/MODELS-COMPATIBILITY.md](MODELS-COMPATIBILITY.md)，
+  并跑 `node scripts/e2e/run.mjs models-catalog transcribe-queue-chain transcribe-stem-ui`。
+
 ## 3. 命名与落点（新文件放哪）
 
 | 你要加的东西 | 放这里 | 说明 |

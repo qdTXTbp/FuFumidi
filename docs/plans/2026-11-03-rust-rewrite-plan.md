@@ -5,6 +5,7 @@
 > 功能升级见 [专业化音乐制作工具升级方案](./2026-11-03-pro-daw-upgrade-plan.md)。
 > 本文件保留为「性能证据 + 引擎边界 + 为什么不做全量/换壳」的决策依据。
 > 版本基线：**6.5.0-beta.1**（2026-11-04 用户指定；分支 feat/audio-tagger-auto-probe，base commit 47f6062；原 6.4.2/99cbe75 口径的体积与性能实测保留作历史参照）
+> **已取消（2026-11-04，用户决定）**：其中「Rust/ONNX 替换 Python 引擎」不再执行，见 [ADR-0001](../decisions/ADR-0001-cancel-python-engine-replacement.md)。性能/体积证据保留作历史记录；Python 引擎与全部现有模型继续随包分发。
 > 证据附件（分项调研，全部为本日夜完成，可独立阅读）：
 > - 01 性能/体积/启动证据与可量化目标 —— ./rust-rewrite/01-perf-evidence.md
 > - 02 渲染进程热路径与 WASM/napi 候选 —— ./rust-rewrite/02-frontend-hotpaths.md

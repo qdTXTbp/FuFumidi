@@ -3,7 +3,9 @@ spec_id: FUFUMIDI-MASTER-2026-11
 status: proposed
 baseline: 6.5.0-beta.1
 baseline_commit: 47f6062
-target: 6.6 + 6.7 + 6.8 + 7.0
+target: 6.6 + 6.7 + 6.8
+engine_replacement: canceled (2026-11-04, ADR-0001)
+model_compatibility: required (all existing models must stay usable)
 platform: win32-x64
 canonical_for_ai: true
 human_doc: docs/plans/2026-11-03-master-integrated-plan.md
@@ -25,7 +27,11 @@ non_goals:
 
 # FuFumidi 整合总方案 — AI 实现规格（机器优先）
 
-> 本文件是「专业化升级 + 全 Rust 重写」的执行层。AI 按本文件干活；人类背景读 human_doc。
+> 本文件是「产品专业化升级」的执行层。AI 按本文件干活；人类背景读 human_doc。
+>
+> **范围变更（2026-11-04，用户决定，见 [ADR-0001](../decisions/ADR-0001-cancel-python-engine-replacement.md)）**：
+> **取消「Rust/ONNX 替换 Python 引擎」**。R-007…R-011、T-306…T-308 冻结，不再执行；
+> Python 引擎与**全部现有模型必须继续可用**（R-014）。Tauri 外壳去 Electron 是否继续另行确认。
 > 所有任务有 ID、依赖、文件范围、验收命令、回滚方式；任何一条不满足都不算完成。
 
 ## 0. AI 使用规则（硬规则）
@@ -163,11 +169,12 @@ non_goals:
 | R-004 | 迁移桥：最后一个 Electron 版可下载并安装 Tauri 版 | 老用户演练升级成功 |
 | R-005 | 插件宿主 rquickjs 保 CommonJS 兼容 | 真实插件集零改动跑通 |
 | R-006 | printToPDF 等价方案（COM 或替代） | 页数/边距/字号逐页对比通过 |
-| R-007 | Rust 引擎 A 类（SMF/SF2/MusicXML/ustx/UTAU 渲染） | 对拍 100% |
-| R-008 | Rust 音频链（解码/重采样/DSP/LUFS/编码） | 解码覆盖 m4a/mp3/flac/wav；null test 通过 |
-| R-009 | ONNX 推理（Basic/audio-tagger/DiffSinger/hnsep/rmvpe） | 质量对拍通过；warm ≤300 ms |
-| R-010 | 去 Python：base 无 Python 全功能可用 | 安装包 ≤250 MiB；首任务 ≤1.5 s |
-| R-011 | 原生 probe/deps | 资源中心 <100 ms；0 Python 进程 |
+| ~~R-007~~ | ~~Rust 引擎 A 类~~（**已取消** 2026-11-04） | — |
+| ~~R-008~~ | ~~Rust 音频链~~（**已取消**） | — |
+| ~~R-009~~ | ~~ONNX 推理~~（**已取消**） | — |
+| ~~R-010~~ | ~~去 Python~~（**已取消**） | — |
+| ~~R-011~~ | ~~原生 probe/deps~~（**已取消**） | — |
+| R-014 | **现有模型全部可用（硬约束）**：转录/分轨/OMR/调教/翻唱模型格式、路径、下载源不变 | 现有模型回归用例通过；无模型失效；不得改格式/路径 |
 | R-012 | 包体/启动/内存达标 | 见 human_doc §0.3 |
 | R-013 | Tauri 壳可加载现有 renderer/dist 并渲染（POC 已验证；正式化） | 开窗后 #app 挂载、Vue Router #/home、window.fuBridge 为 object；无业务 command 时明确提示 |
 
@@ -266,9 +273,9 @@ non_goals:
 | T-303 | 导出格式/选区/marker P-025 | T-106 | export_audio.js、export_options.js、main/export.js | 手测 + 单测 | 3–5 |
 | T-304 | 插件宿主生产化 R-005 | T-020 | crates/shell/plugins/ | 插件集通过 | 8–12 |
 | T-305 | PDF/视频/壁纸落地 R-006 | T-021,T-022 | crates/shell/ | 逐页/逐帧对比 | 5–8 |
-| T-306 | ML 裁决执行 R-009（DiffSinger/hnsep/rmvpe/RVC/piano） | T-211 | crates/ml/、AI pack | 对拍 + 体积 | 8–15 |
-| T-307 | 移除 Python + AI Pack R-010 | T-306 | resources/、build/、main/models.js | 无 Python 全功能冒烟 | 5–8 |
-| T-308 | 包体/首启验收 R-012 | T-307 | 构建配置 | 实测达标 | 2–3 |
+| ~~T-306~~ | ~~ML 裁决执行 R-009~~（**已取消** 2026-11-04） | — | — | — | — |
+| ~~T-307~~ | ~~移除 Python + AI Pack R-010~~（**已取消**） | — | — | — | — |
+| ~~T-308~~ | ~~包体/首启验收~~（**已取消**） | — | — | — | — |
 
 ### M4（第 11–14 月）
 

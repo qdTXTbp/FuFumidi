@@ -1,6 +1,7 @@
 # FuFumidi 全 Rust 技术栈重写方案（A 口径 · v3）
 
 > 版本基线：**6.5.0-beta.1**（2026-11-04 用户指定；base commit 47f6062）。
+> **已取消（2026-11-04，用户决定）**：其中「Rust/ONNX 替换 Python 引擎」不再执行，见 [ADR-0001](../decisions/ADR-0001-cancel-python-engine-replacement.md)。Python 引擎与全部现有模型保留并必须继续可用；本文件仅保留 Tauri 外壳/系统集成参考。
 > 决策记录：**2026-11-03 用户选定 A 口径** —— 外壳与业务后端全部 Rust，运行时不再有 Electron 与 Python；UI 保留 Web（Vue 3）跑在 WebView2 里。
 > 配套方案：**功能升级见 [专业化音乐制作工具升级方案](./2026-11-03-pro-daw-upgrade-plan.md)**；**两者已合并为 [整合总方案](./2026-11-03-master-integrated-plan.md) + [AI 实现规格](./2026-11-03-master-ai-spec.md)**（本文件保留为 A 口径技术细节）。
 > 前置阅读：[主方案 v2](./2026-11-03-rust-rewrite-plan.md) + 证据附件 [01](./rust-rewrite/01-perf-evidence.md) / [02](./rust-rewrite/02-frontend-hotpaths.md) / [03](./rust-rewrite/03-engine-ml-boundary.md) / [04](./rust-rewrite/04-shell-decision.md) / [05](./rust-rewrite/05-ecosystem.md)。
