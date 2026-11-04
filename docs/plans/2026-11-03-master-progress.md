@@ -267,7 +267,10 @@
   （Tauri 把 renderer/dist 嵌进 exe，只 build:ui 不会更新壳）。
 - **uiLibrary 验收通过**：写入 `Smoke UI Song` → 真刷新 → storeSongs=1、曲库 1 首、
   首页"继续上次的工作"出现该曲；smoke **17 项**全绿。
-- 页面数据仍缺 `presets_list/soundfont_list/dep_check` 等通道；
+- **T-115 又一批（6 条 → 共 27 条）**：`soundfont_list`（GeneralUser.sf2）、`dep_check`（Python `deps.py check`，
+  返回 universal/piano/aria/muscriptor/separate/transkun 6 组）、`diag_export`（diagnostics-<ts>.json）、
+  `notify`（明确 delivered=false）、`open_output/open_external`（校验路径/协议，非法安全失败）。
+  smoke 增至 **21 项**全绿；页面数据仍缺 `presets_*`；
   下一步：T-115 继续补这些 UI 必需通道，T-117 继续 settings/song/task host 化，cancel/pause 与批量并发。
 
 ## 17. 待收口（下一轮）

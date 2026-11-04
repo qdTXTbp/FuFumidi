@@ -186,6 +186,11 @@ fn host_info_json() -> serde_json::Value {
     })
 }
 
+fn tail(s: &str, n: usize) -> String {
+    let v: Vec<char> = s.chars().collect();
+    v[v.len().saturating_sub(n)..].iter().collect()
+}
+
 fn read_json(path: &Path) -> serde_json::Value {
     match std::fs::read_to_string(path) {
         Ok(s) => serde_json::from_str(&s).unwrap_or(serde_json::json!({})),
@@ -259,6 +264,109 @@ fn db_kv_set(key: String, value: serde_json::Value) -> serde_json::Value {
         Ok(_) => serde_json::json!({ "ok": true }),
         Err(e) => serde_json::json!({ "ok": false, "error": e }),
     }
+}
+
+fn soundfont_dirs() -> Vec<PathBuf> {
+    let mut dirs = vec![repo_root_from_manifest().join("renderer/vendor/soundfonts")];
+    if let Some(d) = exe_dir() {
+        dirs.push(d.join("../renderer/vendor/soundfonts"));
+        dirs.push(d.join("../soundfonts"));
+    }
+    dirs.push(data_dir().join("soundfonts"));
+    dirs
+}
+
+#[tauri::command]
+fn soundfont_list() -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    for dir in soundfont_dirs() {
+        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        for e in rd.flatten() {
+            let p = e.path();
+            let Some(ext) = p.extension().and_then(|x| x.to_str()) else { continue };
+            let ext = ext.to_ascii_lowercase();
+            if ext != "sf2" && ext != "sf3" { continue; }
+            let id = p.file_name().and_then(|x| x.to_str()).unwrap_or("").to_string();
+            let name = p.file_stem().and_then(|x| x.to_str()).unwrap_or("").to_string();
+            out.push(serde_json::json!({ "id": id, "name": name, "path": p.display().to_string() }));
+        }
+    }
+    out
+}
+
+/// 依赖检查：Python 只做解释器/依赖自检（不是推理），返回 ###RESULT 里的 groups。
+#[tauri::command]
+fn dep_check() -> serde_json::Value {
+    let Some(py) = python_path() else { return serde_json::json!({ "ok": false, "error": "python runtime not found" }); };
+    let Some(eng) = engine_dir() else { return serde_json::json!({ "ok": false, "error": "engine directory not found" }); };
+    let out = match Command::new(&py).current_dir(&eng).args(["deps.py", "check"]).output() {
+        Ok(o) => o,
+        Err(e) => return serde_json::json!({ "ok": false, "error": e.to_string() }),
+    };
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let payload = stdout.lines().find_map(|l| l.trim().strip_prefix("###RESULT ").and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()));
+    match payload {
+        Some(v) => serde_json::json!({ "ok": true, "result": v }),
+        None => serde_json::json!({ "ok": false, "error": "deps.py produced no ###RESULT", "raw": tail(&String::from_utf8_lossy(&out.stderr), 400) }),
+    }
+}
+
+#[tauri::command]
+fn diag_export() -> serde_json::Value {
+    let py = python_selfcheck();
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+    let path = data_dir().join(format!("diagnostics-{stamp}.json"));
+    let payload = serde_json::json!({
+        "generatedAt": stamp,
+        "host": host_info_json(),
+        "python": py,
+        "models": model_list().into_iter().filter(|m| m.get("exists").and_then(|v| v.as_bool()).unwrap_or(false)).count(),
+        "soundfonts": soundfont_list().len(),
+        "dataDir": data_dir().display().to_string(),
+    });
+    match std::fs::write(&path, serde_json::to_string_pretty(&payload).unwrap_or_default()) {
+        Ok(_) => serde_json::json!({ "ok": true, "path": path.display().to_string() }),
+        Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
+    }
+}
+
+#[tauri::command]
+fn notify(_title: Option<String>, _body: Option<String>) -> serde_json::Value {
+    // 系统通知插件尚未接入；命令先返回成功，避免 UI 报错（不伪造通知行为）。
+    serde_json::json!({ "ok": true, "delivered": false })
+}
+
+#[tauri::command]
+fn open_output(p: String) -> serde_json::Value {
+    if p.trim().is_empty() || !Path::new(&p).exists() {
+        return serde_json::json!({ "ok": false, "error": "path not found" });
+    }
+    #[cfg(target_os = "windows")]
+    {
+        match Command::new("explorer").arg(&p).spawn() {
+            Ok(_) => serde_json::json!({ "ok": true }),
+            Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    { serde_json::json!({ "ok": false, "error": "unsupported platform" }) }
+}
+
+#[tauri::command]
+fn open_external(url: String) -> serde_json::Value {
+    let u = url.trim();
+    if !(u.starts_with("http://") || u.starts_with("https://")) {
+        return serde_json::json!({ "ok": false, "error": "unsupported scheme" });
+    }
+    #[cfg(target_os = "windows")]
+    {
+        match Command::new("cmd").args(["/C", "start", "", u]).spawn() {
+            Ok(_) => serde_json::json!({ "ok": true }),
+            Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    { serde_json::json!({ "ok": false, "error": "unsupported platform" }) }
 }
 
 #[tauri::command]
@@ -536,6 +644,7 @@ fn main() {
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, db_kv_get, db_kv_set,
             db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, model_list,
+            soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             list_midi_files, read_binary, save_binary,
             convert, engine_worker_status
         ])

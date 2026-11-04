@@ -53,6 +53,11 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 | model_list | 13 个核心模型条目（basic/piano/hft/MuScriptor×3/yourmt3/miros/aria/beat_this/audio_tagger/hnsep/HTDemucs4_6stems）；exists 按 models 目录真实大小判断 | smoke 断言 13 条、id 齐全、含 separate 条目 |
 | db_status / db_songs_list / db_songs_put / db_songs_delete | JSON 曲库（dataDir/songs.json），按 id upsert/删除 | 写 smoke-song → 列表 1 条 → 删除 → 0 条 |
 | db_playlists_list / db_playlists_put | JSON 歌单（dataDir/playlists.json） | 默认歌单 + smoke-pl 出现 |
+| soundfont_list | 扫描 renderer/vendor/soundfonts + dataDir/soundfonts（sf2/sf3） | 开发树返回 GeneralUser.sf2 |
+| dep_check | Rust 启动 Python `deps.py check`，解析 `###RESULT` 的 groups | 返回 universal/piano/aria/muscriptor/separate/transkun 6 组 |
+| diag_export | 写 dataDir/diagnostics-<ts>.json（host/python/models/soundfonts/dataDir） | 文件生成，ok=true |
+| notify | 通知插件未接；明确返回 delivered=false | ok=true（不伪造系统通知） |
+| open_output / open_external | 校验路径/协议后调 explorer / cmd start | 非法路径/协议返回 ok=false（冒烟只测安全失败） |
 
 ### 3.2 T-118 Python 常驻 supervisor（2026-11-04）
 
@@ -95,18 +100,20 @@ worker running=true seq=1；输出 MIDI 头 `MThd`。剩余：cancel/pause、UI 
 **冒烟命令**：`npm run tauri:smoke`（`scripts/tauri/smoke.mjs`）：
 
 - 启动真实壳 + WebView2 CDP（`--remote-debugging-port`）；
-- 断言 **17 项全绿**：host / engineProbe / convert / worker / dbSongs / dbPlaylists / **modelList** /
-  version / python / settings / kv / listMidi / readBinary / saveBinary / ui / uiRoutes / **uiLibrary**；
+- 断言 **21 项全绿**：host / engineProbe / convert / worker / dbSongs / dbPlaylists / **soundfonts** /
+  **depCheck** / **diagExport** / **safeShellOps** / modelList / version / python / settings / kv /
+  listMidi / readBinary / saveBinary / ui / uiRoutes / **uiLibrary**；
   `uiLibrary` = 写入曲库 → 真刷新 → 侧栏/首页出现该曲（storeSongs=1，曲库 1 首）；
 - UI 断言：title、#app 已挂载、`window.fuBridge` 与 `window.__TAURI__` 均为 object、正文 >200 字；
 - 实测输出：version 6.5.0-beta.1、Python 3.12.10、settings 42 往返、MIDI 头 `MThd`、字节 4 往返；
 - 截图：`shells/tauri/artifacts/smoke.png`（真实 UI）。
 
-## 4. 当前命令清单（21 条）
+## 4. 当前命令清单（27 条）
 
 host_info, app_version, ping, python_selfcheck, engine_probe, convert, engine_worker_status,
 load_settings, save_settings, db_kv_get, db_kv_set, db_status, db_songs_list, db_songs_put,
-db_songs_delete, db_playlists_list, db_playlists_put, model_list, list_midi_files, read_binary, save_binary。
+db_songs_delete, db_playlists_list, db_playlists_put, model_list, list_midi_files, read_binary,
+save_binary, soundfont_list, dep_check, diag_export, notify, open_output, open_external。
 
 ## 4.1 下一步
 
