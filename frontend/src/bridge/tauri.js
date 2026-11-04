@@ -223,6 +223,10 @@ export function installTauriBridge() {
     gpuInstallAuto: () => call('gpu_install_auto'),
     onGpuProgress: (cb) => listen('gpu:progress', cb),
 
+    // ---- 翻唱模型（本地）----
+    rvcList: () => call('rvc_list'),
+    rvcRemove: (id) => call('rvc_remove', { id }),
+
     // ---- 插件 ----
     plugins: {
       list: () => call('plugins_list'),

@@ -432,6 +432,7 @@
 - **Tauri 本地动态壁纸**：wallpaper_list/add_local/remove_local（共享 Electron legacy wallpapers/，.ok 标记、mp4/webm/mov、basename 校验）；桥补 bridge.wallpaper；Rust 测试添加/列表/删除/../ 拒绝；命令总数 **95**，arg 审计不一致 42→**39**，cargo test **28/28 + 1 ignored**。
 - **Tauri 壁纸文件夹扫描**：wallpaper_scan_folder（图片/视频，深度 3、≤600、跳过点文件/空文件）；桥 wallpaper.scanFolder（合并重复 wallpaper 对象）；Rust 测试过滤与排序；命令总数 **96**，覆盖 133 方法/132 未映射（128 call），bridge 未实现 **104**，cargo test **29/29 + 1 ignored**。
 - **Tauri MIDI 文件关联**：file_assoc（HKCU .mid/.midi→FuFumidi.MIDI；开发用 build/icon.ico，打包用 exe；隐藏 reg.exe；失败计数回报）；桥补 fileAssoc；Rust 测试开/关命令计划，**测试不写注册表**；命令总数 **97**，arg 审计不一致 39→**38**，cargo test **30/30 + 1 ignored**。
+- **Tauri RVC 列表/删除**：`rvc_list` 扫 models/rvc 的 model.json + index.json 引用式条目，计算 size/missing/ready/external；`rvc_remove` 物理目录+index 条目，外部引用只注销不删源；桥补 rvcList/rvcRemove；3 项 Rust 测试；命令 **125**，cargo test **102/102 + 1 ignored**。
 - **Tauri UTAU 导出 zip**：`utau_export_voicebank_zip(files)` 原生保存 zip，Deflated 写入 base64 文件，清洗/空名/512MB；桥补；Rust 测试 zip 条目/内容/traversal；命令 **123**，cargo test **99/99 + 1 ignored**。
 - **Tauri UTAU 导出声库**：`utau_export_voicebank(dir, files)` 写 base64 文件到已有目录，文件名清洗/空名跳过/总量 512MB；桥补 utauExportVoicebank；Rust 测试写入/traversal/目录缺失；命令 **122**，cargo test **98/98 + 1 ignored**。
 - **Tauri UTAU 导入 zip**：`utau_import_voicebank_zip` 原生选包→临时安全解压→定位声库根→移到 voicebanks/<zip名>，重名加 _2；裸 oto 包补 character 文件；桥补 utauImportVoicebankZip；Rust 测试嵌套/重名/traversal/裸 oto/无 bank；命令 **121**，cargo test **97/97 + 1 ignored**。

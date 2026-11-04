@@ -6,9 +6,9 @@
 | 指标 | 数值 |
 |---|---:|
 | 前端调用的 bridge 方法（去重） | 212 |
-| Tauri 顶层方法 | 106 |
+| Tauri 顶层方法 | 108 |
 | Tauri 嵌套方法 | 50 |
-| **未找到实现** | **95** |
+| **未找到实现** | **93** |
 
 ## 未找到实现的方法
 
@@ -70,14 +70,12 @@
 - `rvcImportFiles` — frontend/src/components/cover/RvcModelPanel.vue, frontend/src/views/ViewCover.vue
 - `rvcImportFolder` — frontend/src/components/cover/RvcModelPanel.vue, frontend/src/views/ViewCover.vue
 - `rvcImportZip` — frontend/src/components/cover/RvcModelPanel.vue, frontend/src/views/ViewCover.vue
-- `rvcList` — frontend/src/components/cover/RvcModelPanel.vue
 - `rvcOpenCatalogPage` — frontend/src/components/cover/RvcModelPanel.vue
 - `rvcPickFiles` — frontend/src/components/cover/RvcModelPanel.vue, frontend/src/views/ViewCover.vue
 - `rvcPickFolder` — frontend/src/components/cover/RvcModelPanel.vue, frontend/src/views/ViewCover.vue
 - `rvcPickZip` — frontend/src/components/cover/RvcModelPanel.vue, frontend/src/views/ViewCover.vue
 - `rvcProbe` — frontend/src/components/cover/RvcModelPanel.vue
 - `rvcRefreshCatalog` — frontend/src/components/cover/RvcModelPanel.vue
-- `rvcRemove` — frontend/src/components/cover/RvcModelPanel.vue
 - `separateAudio` — frontend/src/views/ViewTranscribe.vue
 - `sfWorkshop` — frontend/src/views/ViewSoundfonts.vue
 - `soundfonts` — frontend/src/audio.js

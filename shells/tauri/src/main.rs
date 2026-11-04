@@ -563,6 +563,111 @@ fn utau_export_voicebank_zip(app: AppHandle, files: Vec<serde_json::Value>) -> s
     write_voicebank_zip_at(&path, &files)
 }
 
+fn rvc_root() -> PathBuf { data_dir().join("models").join("rvc") }
+
+fn rvc_file_state(m: &serde_json::Value, dir: &Path) -> (u64, Vec<String>) {
+    let mut size = 0u64;
+    let mut missing = Vec::new();
+    if let Some(files) = m.get("files").and_then(|v| v.as_object()) {
+        for v in files.values() {
+            let Some(name) = v.as_str().filter(|x| !x.is_empty()) else { continue };
+            let raw = PathBuf::from(name);
+            let path = if raw.is_absolute() { raw } else { dir.join(raw) };
+            match std::fs::metadata(&path) {
+                Ok(md) if md.is_file() => size += md.len(),
+                _ => missing.push(name.to_string()),
+            }
+        }
+    }
+    (size, missing)
+}
+
+fn rvc_list_at(root: &Path) -> serde_json::Value {
+    let mut out: Vec<serde_json::Value> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for e in entries.flatten() {
+            let dir = e.path();
+            if !dir.is_dir() { continue; }
+            let m = match std::fs::read_to_string(dir.join("model.json")).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()) { Some(m) => m, None => continue };
+            let id = m.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            if id.is_empty() { continue; }
+            let (size, missing) = rvc_file_state(&m, &dir);
+            let external = !dir.starts_with(root);
+            let mut item = m.clone();
+            if let Some(o) = item.as_object_mut() {
+                o.insert("dir".into(), serde_json::json!(oto_path_text(&dir)));
+                o.insert("size".into(), serde_json::json!(size));
+                o.insert("missing".into(), serde_json::json!(missing));
+                o.insert("ready".into(), serde_json::json!(missing.is_empty() && m.get("engine").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false)));
+                o.insert("external".into(), serde_json::json!(external));
+            }
+            out.push(item);
+        }
+    }
+    // 引用式导入：index.json 里的 external 条目
+    if let Ok(t) = std::fs::read_to_string(root.join("index.json")) {
+        if let Ok(idx) = serde_json::from_str::<serde_json::Value>(&t) {
+            if let Some(models) = idx.get("models").and_then(|v| v.as_object()) {
+                for (_id, m) in models {
+                    let id = m.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                    if id.is_empty() || out.iter().any(|x| x.get("id").and_then(|v| v.as_str()) == Some(id)) { continue; }
+                    let dir_text = m.get("dir").and_then(|v| v.as_str()).unwrap_or("");
+                    let dir = Path::new(dir_text);
+                    let (size, missing) = rvc_file_state(m, dir);
+                    let mut item = m.clone();
+                    if let Some(o) = item.as_object_mut() {
+                        o.insert("size".into(), serde_json::json!(size));
+                        o.insert("missing".into(), serde_json::json!(missing));
+                        o.insert("ready".into(), serde_json::json!(missing.is_empty() && m.get("engine").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false)));
+                        o.insert("external".into(), serde_json::json!(true));
+                    }
+                    out.push(item);
+                }
+            }
+        }
+    }
+    out.sort_by(|a, b| a.get("name").and_then(|v| v.as_str()).unwrap_or("").cmp(b.get("name").and_then(|v| v.as_str()).unwrap_or("")));
+    serde_json::json!({ "ok": true, "models": out, "root": oto_path_text(root) })
+}
+
+fn rvc_remove_at(root: &Path, id: &str) -> serde_json::Value {
+    if id.trim().is_empty() { return oto_err("缺少模型 id"); }
+    let mut dir: Option<PathBuf> = None;
+    let mut in_index = false;
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for e in entries.flatten() {
+            let d = e.path();
+            let m = std::fs::read_to_string(d.join("model.json")).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
+            if m.and_then(|v| v.get("id").and_then(|x| x.as_str()).map(|s| s == id)).unwrap_or(false) { dir = Some(d); break; }
+        }
+    }
+    let idx_path = root.join("index.json");
+    let mut idx = std::fs::read_to_string(&idx_path).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()).unwrap_or_else(|| serde_json::json!({ "models": {} }));
+    if idx.get("models").and_then(|v| v.as_object()).map(|m| m.contains_key(id)).unwrap_or(false) {
+        in_index = true;
+        if dir.is_none() { dir = idx.get("models").and_then(|m| m.get(id)).and_then(|m| m.get("dir")).and_then(|v| v.as_str()).map(PathBuf::from); }
+    }
+    if dir.is_none() && !in_index { return oto_err("not found"); }
+    let mut removed_physical = false;
+    if let Some(d) = dir {
+        if d.starts_with(root) && d.is_dir() {
+            if let Err(e) = std::fs::remove_dir_all(&d) { return oto_err(&e.to_string()); }
+            removed_physical = true;
+        }
+    }
+    if in_index {
+        if let Some(models) = idx.get_mut("models").and_then(|v| v.as_object_mut()) { models.remove(id); }
+        if let Ok(t) = serde_json::to_string_pretty(&idx) { let _ = std::fs::write(&idx_path, t); }
+    }
+    serde_json::json!({ "ok": true, "removedPhysical": removed_physical })
+}
+
+#[tauri::command]
+fn rvc_list() -> serde_json::Value { rvc_list_at(&rvc_root()) }
+
+#[tauri::command]
+fn rvc_remove(id: String) -> serde_json::Value { rvc_remove_at(&rvc_root(), &id) }
+
 fn data_root_overridden() -> bool {
     std::env::var("FUFUMIDI_DATA_ROOT").map(|p| !p.trim().is_empty()).unwrap_or(false)
 }
@@ -3902,7 +4007,7 @@ fn main() {
             pick_file, pick_directory, pick_audio, pick_audio_files, pick_image, pick_music_xml,
             list_midi_files, list_audio_files, library_stats, read_soundfont, read_binary, save_binary,
             convert, probe, refine, cancel, set_transcribe_pause, engine_worker_status,
-            utau_list_voicebanks, voicebank_unified, utau_read_oto, utau_save_oto, utau_delete_voicebank, utau_import_voicebank_zip, utau_export_voicebank, utau_export_voicebank_zip
+            utau_list_voicebanks, voicebank_unified, utau_read_oto, utau_save_oto, utau_delete_voicebank, utau_import_voicebank_zip, utau_export_voicebank, utau_export_voicebank_zip, rvc_list, rvc_remove
         ])
         .setup(|_app| {
             println!("[fufumidi-shell] {}", serde_json::to_string(&host_info_json()).unwrap_or_default());
@@ -5452,5 +5557,72 @@ mod oto_tests {
         assert_eq!(utau_delete_voicebank_at(&root, Some(outside.to_str().unwrap()))["ok"], false);
         let _ = std::fs::remove_dir_all(root);
         let _ = std::fs::remove_dir_all(outside);
+    }
+}
+
+
+#[cfg(test)]
+mod rvc_tests {
+    use super::{rvc_list_at, rvc_remove_at};
+
+    fn tmpdir(tag: &str) -> std::path::PathBuf {
+        let uniq = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+        let p = std::env::temp_dir().join(format!("fufumidi-rvc-{tag}-{}-{uniq}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn list_and_remove_physical_model() {
+        let root = tmpdir("list");
+        let d = root.join("m1");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("w.pth"), b"12345").unwrap();
+        std::fs::write(d.join("model.json"), serde_json::to_string(&serde_json::json!({ "id": "m1", "name": "Model One", "engine": "rvc", "files": { "model": "w.pth" } })).unwrap()).unwrap();
+        let r = rvc_list_at(&root);
+        assert_eq!(r["ok"], true, "{}", r);
+        let models = r["models"].as_array().unwrap();
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0]["id"], "m1");
+        assert_eq!(models[0]["ready"], true);
+        assert_eq!(models[0]["size"], 5);
+        assert_eq!(rvc_remove_at(&root, "m1")["ok"], true);
+        assert!(!d.exists());
+        assert_eq!(rvc_list_at(&root)["models"].as_array().unwrap().len(), 0);
+        assert_eq!(rvc_remove_at(&root, "nope")["ok"], false);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn list_external_index_and_remove_keeps_source() {
+        let root = tmpdir("index");
+        let outside = tmpdir("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("w.pth"), b"x").unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("index.json"), serde_json::to_string(&serde_json::json!({ "models": { "ext": { "id": "ext", "name": "External", "dir": outside.display().to_string(), "engine": "rvc", "files": { "model": "w.pth" } } } })).unwrap()).unwrap();
+        let r = rvc_list_at(&root);
+        let models = r["models"].as_array().unwrap();
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0]["external"], true);
+        assert_eq!(models[0]["ready"], true);
+        assert_eq!(rvc_remove_at(&root, "ext")["ok"], true);
+        assert!(outside.join("w.pth").exists(), "external files must remain");
+        assert_eq!(rvc_list_at(&root)["models"].as_array().unwrap().len(), 0);
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(outside);
+    }
+
+    #[test]
+    fn missing_files_mark_not_ready() {
+        let root = tmpdir("missing");
+        let d = root.join("m1");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("model.json"), serde_json::to_string(&serde_json::json!({ "id": "m1", "engine": "rvc", "files": { "model": "absent.pth" } })).unwrap()).unwrap();
+        let r = rvc_list_at(&root);
+        assert_eq!(r["models"][0]["ready"], false);
+        assert_eq!(r["models"][0]["missing"][0], "absent.pth");
+        let _ = std::fs::remove_dir_all(root);
     }
 }
