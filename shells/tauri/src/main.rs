@@ -1137,6 +1137,148 @@ fn plugins_open_platform(rel: Option<String>) -> serde_json::Value {
     open_external(url)
 }
 
+fn plugin_token_dir(token: &str) -> Option<PathBuf> {
+    if token.is_empty() || token.len() > 80 || !token.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') { return None; }
+    Some(data_dir().join("temp").join("plugin-install").join(token))
+}
+
+fn plugin_id_valid(id: &str) -> bool {
+    let bytes = id.as_bytes();
+    if bytes.len() < 2 || bytes.len() > 64 { return false; }
+    if !bytes[0].is_ascii_alphanumeric() { return false; }
+    bytes.iter().all(|b| b.is_ascii_alphanumeric() || *b == b'_' || *b == b'-')
+}
+
+fn plugin_url_encode(slug: &str) -> String {
+    let mut out = String::new();
+    for b in slug.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') { out.push(b as char); }
+        else { out.push_str(&format!("%{b:02X}")); }
+    }
+    out
+}
+
+fn plugin_find_installed(plugins_dir: &Path, id: &str) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(plugins_dir).ok()?;
+    for e in entries.flatten() {
+        let d = e.path();
+        if !d.is_dir() { continue; }
+        let m = std::fs::read_to_string(d.join("plugin.json")).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
+        if m.and_then(|v| v.get("id").and_then(|x| x.as_str()).map(|s| s == id)).unwrap_or(false) { return Some(d); }
+    }
+    None
+}
+
+fn plugin_zip_entry_unsafe(name: &str) -> bool {
+    name.is_empty() || name.starts_with('/') || name.starts_with("//") || name.contains("..") || name.contains(':')
+}
+
+fn plugin_inspect_zip(zip_path: &Path, plugins_dir: &Path) -> Result<serde_json::Value, String> {
+    let file = std::fs::File::open(zip_path).map_err(|e| e.to_string())?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+    if zip.len() > 2000 { return Err("压缩包条目过多".to_string()); }
+    let mut total: u64 = 0;
+    let mut names: Vec<String> = Vec::new();
+    for i in 0..zip.len() {
+        let e = zip.by_index(i).map_err(|x| x.to_string())?;
+        let name = e.name().replace('\\', "/");
+        if name.is_empty() { continue; }
+        if name.contains("..") || name.starts_with('/') { return Err(format!("压缩包包含不安全路径：{name}")); }
+        total += e.size();
+        if total > 100 * 1024 * 1024 { return Err("解压后超过 100MB 上限".to_string()); }
+        names.push(name);
+    }
+    let manifest_name = names.iter().filter(|n| n.rsplit('/').next().map(|x| x.eq_ignore_ascii_case("plugin.json")).unwrap_or(false)).min_by_key(|n| (n.matches('/').count(), n.len())).cloned().ok_or_else(|| "包里找不到 plugin.json".to_string())?;
+    let mut entry = zip.by_name(&manifest_name).map_err(|e| e.to_string())?;
+    let mut raw = String::new();
+    entry.read_to_string(&mut raw).map_err(|e| e.to_string())?;
+    let manifest: serde_json::Value = serde_json::from_str(&raw).map_err(|e| format!("plugin.json 解析失败：{e}"))?;
+    let id = manifest.get("id").and_then(|v| v.as_str()).unwrap_or("");
+    if !plugin_id_valid(id) { return Err(format!("plugin.json 的 id「{id}」不合法")); }
+    let root_name = manifest_name.split('/').next().filter(|_| manifest_name.contains('/')).unwrap_or("");
+    let prefix = if root_name.is_empty() { String::new() } else { format!("{root_name}/") };
+    let existing = plugin_find_installed(plugins_dir, id);
+    let files: Vec<serde_json::Value> = names.iter().filter(|n| !n.ends_with('/')).map(|n| serde_json::json!({ "path": n.strip_prefix(&prefix).unwrap_or(n), "size": 0 })).collect();
+    Ok(serde_json::json!({
+        "id": id, "prefix": prefix, "targetDirName": if root_name.is_empty() { id } else { root_name },
+        "manifest": {
+            "id": id, "name": manifest.get("name").and_then(|v| v.as_str()).unwrap_or(id),
+            "version": manifest.get("version").and_then(|v| v.as_str()).unwrap_or("0.0.0"),
+            "author": manifest.get("author").and_then(|v| v.as_str()).unwrap_or(""),
+            "description": manifest.get("description").and_then(|v| v.as_str()).unwrap_or(""),
+            "entry": manifest.get("entry").and_then(|v| v.as_str()).unwrap_or("index.js"),
+        },
+        "files": files, "fileCount": names.len(), "unpackedBytes": total,
+        "existing": existing.map(|d| d.display().to_string()),
+        "isUpgrade": plugin_find_installed(plugins_dir, id).is_some(),
+    }))
+}
+
+#[tauri::command]
+async fn plugins_install_from_platform(slug: String, version: Option<String>) -> serde_json::Value {
+    tauri::async_runtime::spawn_blocking(move || {
+        if slug.trim().is_empty() { return oto_err("缺少插件 slug"); }
+        let token = format!("{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+        let Some(dir) = plugin_token_dir(&token) else { return oto_err("token 非法") };
+        if let Err(e) = std::fs::create_dir_all(&dir) { return oto_err(&e.to_string()); }
+        let zip_path = dir.join("package.zip");
+        let mut url = format!("{}/api/store/plugins/{}/download?source=app", plugin_platform_base(), plugin_url_encode(slug.trim()));
+        if let Some(v) = version.filter(|v| !v.trim().is_empty()) { url.push_str(&format!("&version={}", plugin_url_encode(v.trim()))); }
+        let out = match Command::new("curl.exe").args(["-L", "--silent", "--show-error", "--max-time", "120", "-H", "Accept: application/zip", "-o"]).arg(&zip_path).arg(&url).output() {
+            Ok(o) => o, Err(e) => { let _ = std::fs::remove_dir_all(&dir); return oto_err(&format!("curl 不可用: {e}")); }
+        };
+        if !out.status.success() || !zip_path.is_file() { let _ = std::fs::remove_dir_all(&dir); return oto_err(&String::from_utf8_lossy(&out.stderr).chars().rev().take(400).collect::<String>().chars().rev().collect::<String>()); }
+        match plugin_inspect_zip(&zip_path, &data_dir().join("plugins")) {
+            Ok(mut info) => { info["ok"] = serde_json::json!(true); info["token"] = serde_json::json!(token); info },
+            Err(e) => { let _ = std::fs::remove_dir_all(&dir); oto_err(&e) }
+        }
+    }).await.unwrap_or_else(|e| oto_err(&e.to_string()))
+}
+
+#[tauri::command]
+fn plugins_confirm_install(token: String, overwrite: Option<bool>) -> serde_json::Value {
+    let Some(dir) = plugin_token_dir(&token) else { return oto_err("token 非法") };
+    let zip_path = dir.join("package.zip");
+    if !zip_path.is_file() { return oto_err("下载记录已失效，请重新下载"); }
+    let plugins_dir = data_dir().join("plugins");
+    let _ = std::fs::create_dir_all(&plugins_dir);
+    let info = match plugin_inspect_zip(&zip_path, &plugins_dir) { Ok(i) => i, Err(e) => return oto_err(&e) };
+    let id = info.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let target = info.get("existing").and_then(|v| v.as_str()).map(PathBuf::from).unwrap_or_else(|| plugins_dir.join(info.get("targetDirName").and_then(|v| v.as_str()).unwrap_or(&id)));
+    if target.exists() && !overwrite.unwrap_or(false) { return oto_err("插件已存在，需确认覆盖"); }
+    let result = (|| -> Result<serde_json::Value, String> {
+        if target.exists() { std::fs::remove_dir_all(&target).map_err(|e| e.to_string())?; }
+        std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+        let prefix = info.get("prefix").and_then(|v| v.as_str()).unwrap_or("");
+        let file = std::fs::File::open(&zip_path).map_err(|e| e.to_string())?;
+        let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+        for i in 0..zip.len() {
+            let mut e = zip.by_index(i).map_err(|x| x.to_string())?;
+            let name = e.name().replace('\\', "/");
+            let Some(rel) = name.strip_prefix(prefix) else { continue };
+            if rel.is_empty() || rel.ends_with('/') { continue; }
+            if plugin_zip_entry_unsafe(rel) { return Err(format!("不安全路径：{rel}")); }
+            let dest = target.join(rel);
+            if let Some(parent) = dest.parent() { std::fs::create_dir_all(parent).map_err(|x| x.to_string())?; }
+            let mut out = std::fs::File::create(&dest).map_err(|x| x.to_string())?;
+            std::io::copy(&mut e, &mut out).map_err(|x| x.to_string())?;
+        }
+        let list = plugins_list();
+        let activated = list.iter().find(|p| p.get("id").and_then(|v| v.as_str()) == Some(&id)).cloned();
+        Ok(serde_json::json!({ "ok": true, "id": id, "dir": oto_path_text(&target), "activated": activated, "total": list.len() }))
+    })();
+    let _ = std::fs::remove_dir_all(&dir);
+    result.unwrap_or_else(|e| { let _ = std::fs::remove_dir_all(&target); oto_err(&e) })
+}
+
+#[tauri::command]
+fn plugins_cancel_install(token: String) -> serde_json::Value {
+    match plugin_token_dir(&token) {
+        Some(dir) => { let _ = std::fs::remove_dir_all(&dir); serde_json::json!({ "ok": true }) },
+        None => oto_err("token 非法"),
+    }
+}
+
 fn data_root_overridden() -> bool {
     std::env::var("FUFUMIDI_DATA_ROOT").map(|p| !p.trim().is_empty()).unwrap_or(false)
 }
@@ -4483,7 +4625,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, update_sources, update_set_preferred_source, db_kv_get, db_kv_set,
-            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, wallpaper_set_desktop, gpu_status, gpu_uninstall, plugins_list, plugins_rescan, plugins_set_enabled, plugins_installed_list, plugins_platform_info, plugins_catalog, plugins_open_platform, plugins_open_dir, plugins_open_docs, open_edit_guide, sf_workshop_list, sf_workshop_import, sf_workshop_delete, sf_workshop_open_dir, model_list,
+            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, wallpaper_set_desktop, gpu_status, gpu_uninstall, plugins_list, plugins_rescan, plugins_set_enabled, plugins_installed_list, plugins_platform_info, plugins_catalog, plugins_open_platform, plugins_install_from_platform, plugins_confirm_install, plugins_cancel_install, plugins_open_dir, plugins_open_docs, open_edit_guide, sf_workshop_list, sf_workshop_import, sf_workshop_delete, sf_workshop_open_dir, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
@@ -6314,5 +6456,50 @@ mod plugin_platform_tests {
         assert_eq!(super::plugin_platform_rel(Some("https://evil.example")), "/https://evil.example");
         assert_eq!(super::plugin_platform_rel(Some("/a b")), "/");
         assert_eq!(super::plugin_platform_rel(None), "/");
+    }
+}
+
+#[cfg(test)]
+mod plugin_install_tests {
+    use std::io::Write as _;
+
+    fn tmpdir(tag: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!("fufumidi-plugin-{tag}-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    fn mkzip(path: &std::path::Path, entries: &[(&str, &[u8])]) {
+        let f = std::fs::File::create(path).unwrap();
+        let mut z = zip::ZipWriter::new(f);
+        let opt = zip::write::SimpleFileOptions::default();
+        for (n, b) in entries { z.start_file(*n, opt).unwrap(); z.write_all(b).unwrap(); }
+        z.finish().unwrap();
+    }
+
+    #[test]
+    fn inspect_valid_and_traversal() {
+        let root = tmpdir("inspect");
+        let plugins = root.join("plugins"); std::fs::create_dir_all(&plugins).unwrap();
+        let z = root.join("good.zip");
+        mkzip(&z, &[
+            ("pkg/plugin.json", br#"{"id":"demo-plugin","name":"Demo","version":"1.2.3"}"#),
+            ("pkg/index.js", b"module.exports=1"),
+        ]);
+        let info = super::plugin_inspect_zip(&z, &plugins).unwrap();
+        assert_eq!(info["id"], "demo-plugin");
+        assert_eq!(info["prefix"], "pkg/");
+        assert_eq!(info["targetDirName"], "pkg");
+        assert_eq!(info["manifest"]["version"], "1.2.3");
+        assert!(info["files"].as_array().unwrap().iter().any(|f| f["path"] == "index.js"));
+        let bad = root.join("bad.zip");
+        mkzip(&bad, &[("plugin.json", br#"{"id":"x-plugin"}"#), ("../evil", b"x")]);
+        assert!(super::plugin_inspect_zip(&bad, &plugins).is_err());
+        assert!(super::plugin_zip_entry_unsafe("C:/evil.js"));
+        assert!(super::plugin_zip_entry_unsafe("//server/share/x"));
+        assert!(super::plugin_zip_entry_unsafe("../x"));
+        assert!(!super::plugin_zip_entry_unsafe("pkg/index.js"));
+        let _ = std::fs::remove_dir_all(root);
     }
 }
