@@ -558,6 +558,112 @@ fn presets_restore() -> serde_json::Value {
 
 fn midi_root() -> PathBuf { data_dir().join("midi") }
 
+fn storage_areas(root: &Path) -> Vec<(&'static str, &'static str, &'static str, PathBuf)> {
+    vec![
+        ("models", "转录/分离模型", "asset", root.join("models")),
+        ("soundfonts", "音色库", "asset", root.join("soundfonts")),
+        ("voicebanks", "UTAU 声库", "asset", root.join("voicebanks")),
+        ("diffsinger", "DiffSinger 运行时", "asset", root.join("diffsinger")),
+        ("diffsingerVoicebanks", "DiffSinger 声库", "asset", root.join("diffsinger-voicebanks")),
+        ("gpuEnhancements", "GPU 增强包", "asset", root.join("gpu-enhancements")),
+        ("cache", "缓存（可重建）", "safe", root.join("cache")),
+        ("temp", "临时文件", "safe", root.join("temp")),
+        ("logs", "日志", "safe", root.join("logs")),
+        ("midi", "曲库（永不清）", "protected", root.join("midi")),
+    ]
+}
+
+fn storage_report_at(root: &Path) -> serde_json::Value {
+    let mut out = Vec::new();
+    let mut total = 0u64;
+    for (id, label, kind, dir) in storage_areas(root) {
+        let exists = dir.is_dir();
+        let (bytes, files) = if exists { let (b, f) = dir_bytes_files(&dir); (b, f) } else { (0u64, 0u64) };
+        total += bytes;
+        out.push(serde_json::json!({ "id": id, "label": label, "path": dir.display().to_string(), "kind": kind, "safe": kind == "safe", "protected": kind == "protected", "exists": exists, "bytes": bytes, "files": files }));
+    }
+    serde_json::json!({ "areas": out, "totalBytes": total, "updatedAt": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0) })
+}
+
+fn dir_bytes_files(dir: &Path) -> (u64, u64) {
+    let mut bytes = 0u64;
+    let mut files = 0u64;
+    fn walk(d: &Path, bytes: &mut u64, files: &mut u64, depth: usize) {
+        if depth > 12 { return; }
+        let Ok(rd) = std::fs::read_dir(d) else { return };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() { walk(&p, bytes, files, depth + 1); }
+            else if let Ok(m) = p.metadata() { if m.is_file() { *bytes += m.len(); *files += 1; } }
+        }
+    }
+    walk(dir, &mut bytes, &mut files, 0);
+    (bytes, files)
+}
+
+fn clear_dir(dir: &Path) -> (u64, u64) {
+    let mut bytes = 0u64;
+    let mut removed = 0u64;
+    let Ok(rd) = std::fs::read_dir(dir) else { return (0, 0) };
+    for e in rd.flatten() {
+        let p = e.path();
+        let (b, _f) = if p.is_dir() { dir_bytes_files(&p) } else { (p.metadata().map(|m| m.len()).unwrap_or(0), 1) };
+        let ok = if p.is_dir() { std::fs::remove_dir_all(&p).is_ok() } else { std::fs::remove_file(&p).is_ok() };
+        if ok { bytes += b; removed += 1; }
+    }
+    (bytes, removed)
+}
+
+fn prune_logs(dir: &Path, keep: usize) -> (u64, u64) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return (0, 0) };
+    let mut rows: Vec<(std::time::SystemTime, u64, PathBuf)> = Vec::new();
+    for e in rd.flatten() {
+        let p = e.path();
+        if !p.is_file() { continue; }
+        let m = p.metadata().ok();
+        let size = m.as_ref().map(|x| x.len()).unwrap_or(0);
+        let mtime = m.and_then(|x| x.modified().ok()).unwrap_or(std::time::UNIX_EPOCH);
+        rows.push((mtime, size, p));
+    }
+    rows.sort_by(|a, b| b.0.cmp(&a.0));
+    let mut bytes = 0u64;
+    let mut removed = 0u64;
+    for (_, size, p) in rows.into_iter().skip(keep) {
+        if std::fs::remove_file(&p).is_ok() { bytes += size; removed += 1; }
+    }
+    (bytes, removed)
+}
+
+fn storage_cleanup_at(root: &Path, include_assets: bool) -> serde_json::Value {
+    let mut freed = 0u64;
+    let mut removed: Vec<String> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+    for (id, _label, kind, dir) in storage_areas(root) {
+        if kind == "protected" { continue; }
+        if kind == "asset" && !include_assets { continue; }
+        if !dir.is_dir() { continue; }
+        if id == "logs" {
+            let (b, _n) = prune_logs(&dir, 5);
+            if b > 0 { freed += b; removed.push(id.to_string()); }
+            continue;
+        }
+        let (b, n) = clear_dir(&dir);
+        if n > 0 { freed += b; removed.push(id.to_string()); }
+        if !dir.exists() { errors.push(format!("{id}: directory removed unexpectedly")); }
+    }
+    serde_json::json!({ "ok": true, "freedBytes": freed, "removed": removed, "errors": errors, "includeAssets": include_assets })
+}
+
+#[tauri::command]
+fn storage_report() -> serde_json::Value { storage_report_at(&data_dir()) }
+
+#[tauri::command]
+fn storage_cleanup(payload: Option<serde_json::Value>) -> serde_json::Value {
+    let include = payload.and_then(|p| p.get("includeAssets").and_then(|v| v.as_bool())).unwrap_or(false);
+    storage_cleanup_at(&data_dir(), include)
+}
+
+
 fn safe_asset_id(id: &str) -> bool {
     (1..=64).contains(&id.chars().count()) && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
@@ -1659,7 +1765,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, db_kv_get, db_kv_set,
-            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, model_list,
+            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
@@ -1693,6 +1799,32 @@ mod check_midi_tests {
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    #[test]
+    fn storage_report_and_cleanup() {
+        let root = tmpdir("storage");
+        for d in ["cache", "temp", "models", "midi", "logs"] { std::fs::create_dir_all(root.join(d)).unwrap(); }
+        std::fs::write(root.join("cache/a.bin"), b"1234").unwrap();
+        std::fs::write(root.join("temp/b.bin"), b"12").unwrap();
+        std::fs::write(root.join("models/m.bin"), b"123").unwrap();
+        std::fs::write(root.join("midi/song.mid"), b"x").unwrap();
+        for i in 0..7 { std::fs::write(root.join(format!("logs/l{i}.log")), b"z").unwrap(); }
+        let rep = super::storage_report_at(&root);
+        assert_eq!(rep["areas"].as_array().unwrap().len(), 10);
+        assert_eq!(rep["totalBytes"], 17);
+        let clean = super::storage_cleanup_at(&root, false);
+        assert_eq!(clean["ok"], true);
+        assert_eq!(clean["freedBytes"], 8, "cache 4 + temp 2 + 2 old logs");
+        assert!(root.join("models/m.bin").exists(), "assets kept by default");
+        assert!(root.join("midi/song.mid").exists(), "midi is protected");
+        assert_eq!(std::fs::read_dir(root.join("logs")).unwrap().count(), 5, "keep latest 5");
+        std::fs::write(root.join("models/m2.bin"), b"12").unwrap();
+        let clean2 = super::storage_cleanup_at(&root, true);
+        assert_eq!(clean2["freedBytes"], 5);
+        assert!(!root.join("models/m2.bin").exists());
+        assert!(root.join("midi/song.mid").exists());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

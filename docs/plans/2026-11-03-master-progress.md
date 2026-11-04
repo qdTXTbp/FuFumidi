@@ -338,6 +338,9 @@
   覆盖 115 方法/150 未映射（107 call）。无头未验证真实对话框流程。
 - **工程包安全测试**：解包缓存目录参数化（测试写入临时目录，不污染真实数据根）；
   恶意 ZIP 的 `../evil.txt` 被忽略、只有白名单资产进入 resolved。Rust 测试仍 **13/13**。
+- **Tauri 存储治理**：`storage_report/storage_cleanup`（10 类占用；曲库 protected 永不清；
+  资产默认保留、includeAssets 才删；日志保留最近 5 份）；桥补 bridge.storage；Rust 测试分类/总字节/
+  默认只清 safe/资产显式/midi 保留；命令总数 **72**，覆盖 117 方法/148 未映射（109 call）。
 - **T-117 曲库/设置共享 Electron 数据（重要）**：Rust 用 rusqlite 直读/写
   `%APPDATA%/FuFumidi/fufumidi/fufumidi.sqlite`（songs/playlists/kv），设置优先读 legacy
   settings.json；只读验收实测 **1972 首真实曲目**、57 个设置键、侧栏「全部曲目 1972」正常；
