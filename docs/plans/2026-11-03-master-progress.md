@@ -250,8 +250,12 @@
 - **T-118 第一步已完成**：Rust 命令 `engine_probe` 真实启动 Python `music2midi.py probe`，
   返回 engine 路径、耗时 **4.9 s**、完整 probe JSON（app=FuFumidi 转录引擎，piano available=true 等）；
   smoke 断言增到 **10 项**全绿（新增 engineProbe）。
-- 下一步：T-118 完整 supervisor（常驻 worker + 三种输出转发 + 崩溃重启）→ T-117 host 业务迁移
-  （file/settings/song/task 逐步替换 main/*.js）。
+- **T-118 常驻 supervisor 已完成（核心）**：Rust 维护 `music2midi.py worker` 进程，
+  `###LOG/###PROG/###RESULT` 按 `_id` 解析并转发 Tauri 事件；退出时 kill；
+  实测 1 s WAV → Basic Pitch **1 音符**，冷 14.3 s / 暖 **5.5 s**，13 条日志，输出 MIDI 头 MThd；
+  smoke 扩到 **12 项**断言全绿（新增 convert/worker）。
+- 下一步：T-117 host 业务迁移（file/settings/song/task 逐步替换 main/*.js）、
+  T-115 扩面（model_list/presets/soundfonts 等 UI 必需通道）、cancel/pause 与批量并发。
 
 ## 17. 待收口（下一轮）
 

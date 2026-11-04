@@ -11,8 +11,11 @@
 //! list_midi_files / read_binary / save_binary + host_info / python_selfcheck / ping。
 
 use std::collections::BTreeMap;
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::{Arc, Mutex};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 fn exe_dir() -> Option<PathBuf> {
     std::env::current_exe().ok()?.parent().map(|p| p.to_path_buf())
@@ -245,21 +248,172 @@ fn save_binary(opts: serde_json::Value) -> serde_json::Value {
     }
 }
 
+/* ---------------- T-118：常驻 Python 推理 worker（stdin JSON / stdout ###LOG|###PROG|###RESULT） ---------------- */
+
+struct Worker {
+    child: Child,
+    stdin: ChildStdin,
+    reader: BufReader<ChildStdout>,
+    seq: u64,
+}
+
+struct WorkerState(Arc<Mutex<Option<Worker>>>);
+
+fn spawn_worker() -> Result<Worker, String> {
+    let py = python_path().ok_or("python runtime not found")?;
+    let eng = engine_dir().ok_or("engine/music2midi.py not found")?;
+    let mut child = Command::new(&py)
+        .current_dir(&eng)
+        .args(["music2midi.py", "worker"])
+        .env("PYTHONIOENCODING", "utf-8")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    let stdin = child.stdin.take().ok_or("worker stdin unavailable")?;
+    let stdout = child.stdout.take().ok_or("worker stdout unavailable")?;
+    Ok(Worker { child, stdin, reader: BufReader::new(stdout), seq: 0 })
+}
+
+fn stop_worker(state: &Arc<Mutex<Option<Worker>>>) {
+    if let Ok(mut g) = state.lock() {
+        if let Some(mut w) = g.take() {
+            let _ = w.stdin.write_all(b"{\"cmd\":\"exit\"}\n");
+            let _ = w.stdin.flush();
+            let _ = w.child.kill();
+        }
+    }
+}
+
+/// 把一次转录请求交给常驻 worker。模型/参数契约与 Electron 路径一致（req 原样转发）。
+/// 进度/日志通过 Tauri 事件 engine:log / engine:progress 推给前端。
+fn run_convert(state: Arc<Mutex<Option<Worker>>>, app: AppHandle, req: serde_json::Value) -> serde_json::Value {
+    let started = std::time::Instant::now();
+    let mut guard = match state.lock() {
+        Ok(g) => g,
+        Err(_) => return serde_json::json!({ "ok": false, "error": "worker state poisoned" }),
+    };
+    if guard.is_none() {
+        match spawn_worker() {
+            Ok(w) => *guard = Some(w),
+            Err(e) => return serde_json::json!({ "ok": false, "error": e }),
+        }
+    }
+    let w = guard.as_mut().unwrap();
+    if let Ok(Some(_)) = w.child.try_wait() {
+        *guard = None;
+        return serde_json::json!({ "ok": false, "error": "engine worker exited; retry restarts it" });
+    }
+    w.seq += 1;
+    let id = w.seq;
+    let mut payload = req;
+    if let Some(o) = payload.as_object_mut() {
+        o.insert("_id".to_string(), serde_json::json!(id));
+    }
+    let line = format!("{}\n", payload);
+    if let Err(e) = w.stdin.write_all(line.as_bytes()).and_then(|_| w.stdin.flush()) {
+        *guard = None;
+        return serde_json::json!({ "ok": false, "error": format!("worker write failed: {e}") });
+    }
+    let mut logs: Vec<String> = Vec::new();
+    loop {
+        let mut buf = String::new();
+        match w.reader.read_line(&mut buf) {
+            Ok(0) => {
+                let _ = w.child.kill();
+                *guard = None;
+                return serde_json::json!({ "ok": false, "error": "engine worker closed" });
+            }
+            Ok(_) => {}
+            Err(e) => {
+                *guard = None;
+                return serde_json::json!({ "ok": false, "error": format!("worker read failed: {e}") });
+            }
+        }
+        let t = buf.trim();
+        if t.is_empty() { continue; }
+        if let Some(rest) = t.strip_prefix("###RESULT ") {
+            if let Ok(mut r) = serde_json::from_str::<serde_json::Value>(rest) {
+                let rid = r.get("_id").and_then(|v| v.as_u64()).or_else(|| r.get("id").and_then(|v| v.as_u64()));
+                if rid == Some(id) {
+                    if let Some(o) = r.as_object_mut() {
+                        o.insert("elapsedMs".to_string(), serde_json::json!(started.elapsed().as_millis() as u64));
+                        o.insert("workerSeq".to_string(), serde_json::json!(id));
+                        o.insert("logLines".to_string(), serde_json::json!(logs.len()));
+                    }
+                    return r;
+                }
+            }
+            continue;
+        }
+        if let Some(rest) = t.strip_prefix("###LOG ") {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(rest) {
+                let s = v.get("line").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                if logs.len() < 200 { logs.push(s.clone()); }
+                let _ = app.emit("engine:log", serde_json::json!({ "id": id, "line": s }));
+            }
+            continue;
+        }
+        if let Some(rest) = t.strip_prefix("###PROG ") {
+            if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(rest) {
+                if let Some(o) = v.as_object_mut() { o.insert("id".to_string(), serde_json::json!(id)); }
+                let _ = app.emit("engine:progress", v);
+            }
+            continue;
+        }
+        if logs.len() < 200 { logs.push(t.to_string()); }
+    }
+}
+
+#[tauri::command]
+async fn convert(state: State<'_, WorkerState>, app: AppHandle, req: serde_json::Value) -> Result<serde_json::Value, String> {
+    let arc = state.0.clone();
+    tauri::async_runtime::spawn_blocking(move || run_convert(arc, app, req))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn engine_worker_status(state: State<'_, WorkerState>) -> serde_json::Value {
+    let mut g = match state.0.lock() {
+        Ok(g) => g,
+        Err(_) => return serde_json::json!({ "ok": false, "error": "worker state poisoned" }),
+    };
+    match g.as_mut() {
+        Some(w) => {
+            let alive = w.child.try_wait().map(|s| s.is_none()).unwrap_or(false);
+            serde_json::json!({ "ok": true, "running": alive, "pid": w.child.id(), "seq": w.seq })
+        }
+        None => serde_json::json!({ "ok": true, "running": false, "seq": 0 }),
+    }
+}
+
 fn main() {
     if std::env::args().any(|a| a == "--self-check") {
         println!("{}", serde_json::to_string_pretty(&host_info_json()).unwrap_or_default());
         return;
     }
-    tauri::Builder::default()
+    let state = WorkerState(Arc::new(Mutex::new(None)));
+    let app = tauri::Builder::default()
+        .manage(state)
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, db_kv_get, db_kv_set,
-            list_midi_files, read_binary, save_binary
+            list_midi_files, read_binary, save_binary,
+            convert, engine_worker_status
         ])
         .setup(|_app| {
             println!("[fufumidi-shell] {}", serde_json::to_string(&host_info_json()).unwrap_or_default());
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running FuFumidi Tauri shell");
+        .build(tauri::generate_context!())
+        .expect("error while building FuFumidi Tauri shell");
+    app.run(|app_handle, event| {
+        if let tauri::RunEvent::Exit = event {
+            if let Some(st) = app_handle.try_state::<WorkerState>() {
+                stop_worker(&st.0);
+            }
+        }
+    });
 }

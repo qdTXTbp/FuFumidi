@@ -19,6 +19,19 @@ fs.mkdirSync(FIX, { recursive: true });
 const MIDI = path.join(FIX, "smoke.mid");
 fs.writeFileSync(MIDI, Buffer.from([0x4d, 0x54, 0x68, 0x64, 0, 0, 0, 6, 0, 0, 0, 1, 0x01, 0xe0]));
 const OUT = path.join(FIX, "out.bin");
+const WAV = path.join(FIX, "tone.wav");
+const OUTMIDI = path.join(FIX, "tone.mid");
+{
+  const sr = 22050, n = sr;
+  const data = Buffer.alloc(n * 2);
+  for (let i = 0; i < n; i++) data.writeInt16LE(Math.round(Math.sin(2 * Math.PI * 440 * i / sr) * 0.25 * 32767), i * 2);
+  const h = Buffer.alloc(44);
+  h.write("RIFF", 0); h.writeUInt32LE(36 + data.length, 4); h.write("WAVE", 8);
+  h.write("fmt ", 12); h.writeUInt32LE(16, 16); h.writeUInt16LE(1, 20); h.writeUInt16LE(1, 22);
+  h.writeUInt32LE(sr, 24); h.writeUInt32LE(sr * 2, 28); h.writeUInt16LE(2, 32); h.writeUInt16LE(16, 34);
+  h.write("data", 36); h.writeUInt32LE(data.length, 40);
+  fs.writeFileSync(WAV, Buffer.concat([h, data]));
+}
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = [];
 const child = spawn(EXE, [], { cwd: ROOT, env: Object.assign({}, process.env, {
@@ -35,12 +48,17 @@ const send = (ws, id, method, params) => new Promise((resolve, reject) => {
 });
 const EXPR = [
   "(async () => {",
-  "  const P = " + JSON.stringify({ fix: FIX, midi: MIDI, out: OUT }) + ";",
+  "  const P = " + JSON.stringify({ fix: FIX, midi: MIDI, out: OUT, wav: WAV, outmidi: OUTMIDI }) + ";",
   "  const inv = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args || {});",
   "  const info = await inv('host_info');",
   "  const ver = await inv('app_version');",
   "  const py = await inv('python_selfcheck');",
   "  const eng = await inv('engine_probe');",
+  "  const conv = await inv('convert', { req: { audio: P.wav, out: P.outmidi, mode: 'universal', model: 'basic', perf: 'balanced' } });",
+  "  const worker = await inv('engine_worker_status');",
+  "  const midiRaw = await inv('read_binary', { p: P.outmidi });",
+  "  const midiBin = midiRaw instanceof ArrayBuffer ? new Uint8Array(midiRaw) : (midiRaw && midiRaw.buffer ? new Uint8Array(midiRaw.buffer, midiRaw.byteOffset, midiRaw.byteLength) : new Uint8Array(midiRaw || []));",
+  "  const midiHeader = Array.from(midiBin.slice(0, 4)).map((x) => String.fromCharCode(x)).join('');",
   "  const saved = await inv('save_settings', { s: { smoke: true, n: 42 } });",
   "  const loaded = await inv('load_settings');",
   "  const set = await inv('db_kv_set', { key: 'smoke', value: { a: 1 } });",
@@ -53,7 +71,7 @@ const EXPR = [
   "  const back = toU8(await inv('read_binary', { p: P.out }));",
   "  return {",
   "    ui: { title: document.title, appChildren: (document.getElementById('app') || { childElementCount: -1 }).childElementCount, fuBridge: typeof window.fuBridge, tauri: typeof window.__TAURI__, hash: location.hash, textLen: (document.body.innerText || '').length },",
-  "    info, ver, py, eng, saved, loaded, set, got, files, header, sb, backLen: back.length,",
+  "    info, ver, py, eng, conv, worker, midiHeader, saved, loaded, set, got, files, header, sb, backLen: back.length,",
   "  };",
   "})()",
 ].join("\n");
@@ -69,6 +87,16 @@ try {
   await new Promise((res, rej) => { ws.onopen = res; ws.onerror = () => rej(new Error("ws open failed")); });
   await send(ws, 1, "Runtime.enable", {});
   await send(ws, 2, "Page.enable", {});
+  // 等 Tauri 注入 __TAURI_INTERNALS__ 且 Vue 挂载完成（新命令注册会让启动略慢）
+  let ready = false;
+  for (let i = 0; i < 80 && !ready; i++) {
+    try {
+      const probe = await send(ws, 100 + i, "Runtime.evaluate", { expression: "typeof window.__TAURI_INTERNALS__ === 'object' && !!document.getElementById('app') && document.body.innerText.length > 50", returnByValue: true });
+      ready = !!(probe.result && probe.result.value);
+    } catch (e) {}
+    if (!ready) await sleep(250);
+  }
+  if (!ready) throw new Error("page not ready for Tauri IPC (internals/app missing)");
   const ev = await send(ws, 3, "Runtime.evaluate", { expression: EXPR, awaitPromise: true, returnByValue: true });
   if (ev.exceptionDetails) throw new Error("JS exception: " + JSON.stringify(ev.exceptionDetails).slice(0, 500));
   const r = ev.result && ev.result.value;
@@ -78,11 +106,13 @@ try {
   const checks = {
     host: !!r.info && r.info.ok === true,
     engineProbe: !!r.eng && r.eng.ok === true && !!r.eng.probe && r.eng.elapsedMs > 0,
+    convert: !!r.conv && r.conv.ok === true && typeof r.conv.note_count === "number" && r.conv.logLines > 0 && r.midiHeader === "MThd",
+    worker: !!r.worker && r.worker.ok === true && r.worker.running === true && r.worker.seq >= 1,
     version: typeof r.ver === "string" && r.ver.length > 0,
     python: !!r.py && r.py.ok === true,
     settings: !!r.saved && r.saved.ok === true && !!r.loaded && r.loaded.smoke === true && r.loaded.n === 42,
     kv: !!r.set && r.set.ok === true && !!r.got && r.got.a === 1,
-    listMidi: Array.isArray(r.files) && r.files.length === 1 && /smoke\.mid$/.test(r.files[0]),
+    listMidi: Array.isArray(r.files) && r.files.some((f) => /smoke\.mid$/.test(f)),
     readBinary: r.header === "MThd",
     saveBinary: !!r.sb && r.sb.ok === true && r.backLen === 4,
     ui: r.ui.fuBridge === "object" && r.ui.tauri === "object" && r.ui.appChildren > 0 && r.ui.textLen > 200,
