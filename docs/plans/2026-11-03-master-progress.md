@@ -529,3 +529,5 @@
 - **任务取消**：`tasks_cancel` 按 job id 取消转录并标 cancelled/finishedAt + emit；桥补 tasks.cancel；命令 **146**，call 162，cargo **114/114 + 1 ignored**。
 
 - **146 命令 release（任务取消后）**：2m16s、0 warning；host/engine self-check 通过；无窗口/残留。
+
+- **任务中心后全量 E2E**：隐藏全量 **40/40**；任务中心/tasks_cancel 不改变现有前端流程。

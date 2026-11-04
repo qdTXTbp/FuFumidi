@@ -33,7 +33,7 @@
 
 ## 3. 门禁结果（当前源码）
 
-- 隐藏全量 E2E：**40/40**（`node scripts/e2e/run.mjs`，`show:false`）
+- 隐藏全量 E2E：**40/40**（任务中心/取消后复跑，`show:false`）
 - 前端单测：**589/589**（`npm run test:ui`）
 - `npm run typecheck`：0
 - `npm run audit`：0
