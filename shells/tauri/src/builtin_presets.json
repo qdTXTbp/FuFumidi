@@ -1,0 +1,163 @@
+{
+  "presets": {
+    "Basic Pitch · 最优": {
+      "mode": "universal",
+      "params": {
+        "model": "basic",
+        "onset_threshold": 0.5,
+        "frame_threshold": 0.3,
+        "minimum_note_length": 128.0,
+        "melodia": true,
+        "min_freq": 0,
+        "max_freq": 0,
+        "beat_grid": true,
+        "tempo": 0,
+        "perf": "quality",
+        "denoise_mode": "off",
+        "auto_bpm": true
+      }
+    },
+    "YourMT3+ · 最优": {
+      "mode": "universal",
+      "params": {
+        "model": "yourmt3",
+        "onset_threshold": 0.5,
+        "frame_threshold": 0.3,
+        "minimum_note_length": 128.0,
+        "melodia": true,
+        "min_freq": 0,
+        "max_freq": 0,
+        "beat_grid": true,
+        "tempo": 0,
+        "perf": "quality",
+        "denoise_mode": "off",
+        "auto_bpm": true
+      }
+    },
+    "MIROS · 最优": {
+      "mode": "universal",
+      "params": {
+        "model": "miros",
+        "onset_threshold": 0.5,
+        "frame_threshold": 0.3,
+        "minimum_note_length": 128.0,
+        "melodia": true,
+        "min_freq": 0,
+        "max_freq": 0,
+        "beat_grid": true,
+        "tempo": 0,
+        "perf": "quality",
+        "denoise_mode": "off",
+        "auto_bpm": true
+      }
+    },
+    "MuScriptor · 最优": {
+      "mode": "universal",
+      "params": {
+        "model": "muscriptor",
+        "onset_threshold": 0.5,
+        "frame_threshold": 0.3,
+        "minimum_note_length": 128.0,
+        "melodia": true,
+        "min_freq": 0,
+        "max_freq": 0,
+        "beat_grid": true,
+        "tempo": 0,
+        "perf": "quality",
+        "denoise_mode": "off",
+        "auto_bpm": true,
+        "model_size": "medium",
+        "muscriptor_instruments": "probe_segments",
+        "temperature": 1.0,
+        "cfg_coef": 1.0,
+        "beam_size": 1,
+        "prelude_forcing": true,
+        "precision": "fp32",
+        "max_note_hold": 0
+      }
+    },
+    "钢琴 · 最优": {
+      "mode": "piano",
+      "params": {
+        "onset_threshold": 0.3,
+        "frame_threshold": 0.1,
+        "min_note_ms": 60,
+        "merge_gap_ms": 30,
+        "include_pedal": true,
+        "perf": "quality",
+        "denoise_mode": "off",
+        "auto_bpm": true,
+        "model": "piano_pt"
+      }
+    },
+    "Aria-AMT · 最优": {
+      "mode": "piano",
+      "params": {
+        "onset_threshold": 0.3,
+        "frame_threshold": 0.1,
+        "min_note_ms": 60,
+        "merge_gap_ms": 30,
+        "include_pedal": true,
+        "perf": "quality",
+        "denoise_mode": "off",
+        "auto_bpm": true,
+        "model": "aria"
+      }
+    },
+    "Transkun · 最优": {
+      "mode": "piano",
+      "params": {
+        "onset_threshold": 0.3,
+        "frame_threshold": 0.1,
+        "min_note_ms": 60,
+        "merge_gap_ms": 30,
+        "include_pedal": true,
+        "perf": "quality",
+        "denoise_mode": "off",
+        "auto_bpm": true,
+        "model": "transkun"
+      }
+    },
+    "hFT-Transformer · 最优": {
+      "mode": "piano",
+      "params": {
+        "onset_threshold": 0.3,
+        "frame_threshold": 0.1,
+        "min_note_ms": 60,
+        "merge_gap_ms": 30,
+        "include_pedal": true,
+        "perf": "quality",
+        "denoise_mode": "off",
+        "auto_bpm": true,
+        "model": "hft"
+      }
+    },
+    "分离 · 最优": {
+      "mode": "separate",
+      "params": {
+        "onset_threshold": 0.5,
+        "frame_threshold": 0.3,
+        "minimum_note_length": 128.0,
+        "midi_tempo": 120.0,
+        "include_drums": true,
+        "stem_format": "wav",
+        "perf": "quality",
+        "denoise_mode": "off",
+        "auto_bpm": true
+      }
+    }
+  },
+  "model_defaults": {
+    "basic": "Basic Pitch · 最优",
+    "yourmt3": "YourMT3+ · 最优",
+    "miros": "MIROS · 最优",
+    "muscriptor_small": "MuScriptor · 最优",
+    "muscriptor_medium": "MuScriptor · 最优",
+    "muscriptor_large": "MuScriptor · 最优",
+    "piano_pt": "钢琴 · 最优",
+    "aria": "Aria-AMT · 最优",
+    "transkun": "Transkun · 最优",
+    "hft": "hFT-Transformer · 最优",
+    "separate": "分离 · 最优"
+  }
+}

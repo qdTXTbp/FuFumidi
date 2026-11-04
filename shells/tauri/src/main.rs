@@ -370,6 +370,153 @@ fn open_external(url: String) -> serde_json::Value {
     { serde_json::json!({ "ok": false, "error": "unsupported platform" }) }
 }
 
+fn presets_path() -> PathBuf { data_dir().join("presets.json") }
+
+fn builtin_presets_json() -> serde_json::Value {
+    serde_json::from_str(include_str!("builtin_presets.json")).unwrap_or_else(|_| serde_json::json!({ "presets": {}, "model_defaults": {} }))
+}
+
+fn preset_names(p: &serde_json::Value) -> Vec<String> {
+    p.get("presets").and_then(|v| v.as_object()).map(|o| o.keys().cloned().collect()).unwrap_or_default()
+}
+
+#[tauri::command]
+fn presets_list() -> serde_json::Value {
+    let builtin = builtin_presets_json();
+    let data = read_json(&presets_path());
+    let hidden: Vec<String> = data.get("hidden_builtins").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect()).unwrap_or_default();
+    let mut presets = serde_json::Map::new();
+    if let Some(b) = builtin.get("presets").and_then(|v| v.as_object()) {
+        for (k, v) in b {
+            if !hidden.contains(k) { presets.insert(k.clone(), v.clone()); }
+        }
+    }
+    if let Some(u) = data.get("presets").and_then(|v| v.as_object()) {
+        for (k, v) in u { presets.insert(k.clone(), v.clone()); }
+    }
+    let mut last = data.get("last_used").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    if !presets.contains_key(&last) { last.clear(); }
+    let names: Vec<String> = presets.keys().cloned().collect();
+    let model_defaults = builtin.get("model_defaults").cloned().unwrap_or_else(|| serde_json::json!({}));
+    let model_preset = data.get("model_preset").cloned().unwrap_or_else(|| serde_json::json!({}));
+    serde_json::json!({
+        "ok": true, "presets": presets, "last_used": last, "builtins": names,
+        "model_defaults": model_defaults, "model_preset": model_preset,
+    })
+}
+
+fn preset_builtin_name(name: &str) -> bool {
+    builtin_presets_json().get("presets").and_then(|v| v.as_object()).map(|o| o.contains_key(name)).unwrap_or(false)
+}
+
+#[tauri::command]
+fn presets_save(req: serde_json::Value) -> serde_json::Value {
+    let name = req.get("name").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    if name.is_empty() { return serde_json::json!({ "ok": false, "error": "empty name" }); }
+    let mode = req.get("mode").cloned().unwrap_or(serde_json::json!("universal"));
+    let params = req.get("params").cloned().unwrap_or_else(|| serde_json::json!({}));
+    let mut data = read_json(&presets_path());
+    if !data.is_object() { data = serde_json::json!({}); }
+    let obj = data.as_object_mut().unwrap();
+    let presets = obj.entry("presets").or_insert_with(|| serde_json::json!({}));
+    if !presets.is_object() { *presets = serde_json::json!({}); }
+    presets.as_object_mut().unwrap().insert(name.clone(), serde_json::json!({ "mode": mode, "params": params }));
+    obj.insert("last_used".to_string(), serde_json::json!(name));
+    match write_json(&presets_path(), &data) {
+        Ok(_) => serde_json::json!({ "ok": true, "saved": true }),
+        Err(e) => serde_json::json!({ "ok": false, "error": e }),
+    }
+}
+
+#[tauri::command]
+fn presets_delete(name: String) -> serde_json::Value {
+    let name = name.trim().to_string();
+    if name.is_empty() { return serde_json::json!({ "ok": false, "deleted": false }); }
+    let mut data = read_json(&presets_path());
+    if !data.is_object() { data = serde_json::json!({}); }
+    let builtin = preset_builtin_name(&name);
+    let mut deleted = false;
+    if builtin {
+        let obj = data.as_object_mut().unwrap();
+        let hidden = obj.entry("hidden_builtins").or_insert_with(|| serde_json::json!([]));
+        let arr = hidden.as_array_mut().unwrap();
+        if !arr.iter().any(|x| x.as_str() == Some(name.as_str())) { arr.push(serde_json::json!(name)); }
+        if let Some(p) = obj.get_mut("presets").and_then(|v| v.as_object_mut()) { p.remove(&name); }
+        deleted = true;
+    } else if let Some(p) = data.get_mut("presets").and_then(|v| v.as_object_mut()) {
+        deleted = p.remove(&name).is_some();
+    }
+    if let Some(order) = data.get_mut("order").and_then(|v| v.as_array_mut()) { order.retain(|x| x.as_str() != Some(name.as_str())); }
+    if let Some(m) = data.get_mut("model_preset").and_then(|v| v.as_object_mut()) { m.retain(|_k, v| v.as_str() != Some(name.as_str())); }
+    let _ = write_json(&presets_path(), &data);
+    serde_json::json!({ "ok": true, "deleted": deleted })
+}
+
+#[tauri::command]
+fn presets_last_used(name: String) -> serde_json::Value {
+    let mut data = read_json(&presets_path());
+    if !data.is_object() { data = serde_json::json!({}); }
+    data.as_object_mut().unwrap().insert("last_used".to_string(), serde_json::json!(name));
+    let _ = write_json(&presets_path(), &data);
+    serde_json::json!({ "ok": true })
+}
+
+#[tauri::command]
+fn presets_set_model(key: String, name: String) -> serde_json::Value {
+    let mut data = read_json(&presets_path());
+    if !data.is_object() { data = serde_json::json!({}); }
+    let m = data.as_object_mut().unwrap().entry("model_preset").or_insert_with(|| serde_json::json!({}));
+    if !m.is_object() { *m = serde_json::json!({}); }
+    let map = m.as_object_mut().unwrap();
+    if name.trim().is_empty() { map.remove(&key); } else { map.insert(key, serde_json::json!(name.trim())); }
+    let _ = write_json(&presets_path(), &data);
+    let mp = data.get("model_preset").cloned().unwrap_or_else(|| serde_json::json!({}));
+    serde_json::json!({ "ok": true, "saved": true, "model_preset": mp })
+}
+
+fn presets_reorder_impl(name: String, target: usize) -> serde_json::Value {
+    let mut data = read_json(&presets_path());
+    if !data.is_object() { data = serde_json::json!({}); }
+    let mut names = {
+        let list = presets_list();
+        preset_names(&list)
+    };
+    if let Some(pos) = names.iter().position(|x| x == &name) { names.remove(pos); }
+    let idx = target.min(names.len());
+    names.insert(idx, name);
+    data.as_object_mut().unwrap().insert("order".to_string(), serde_json::json!(names));
+    let _ = write_json(&presets_path(), &data);
+    let data = read_json(&presets_path());
+    let order = data.get("order").cloned().unwrap_or_else(|| serde_json::json!([]));
+    serde_json::json!({ "ok": true, "order": order })
+}
+
+#[tauri::command]
+fn presets_reorder(name: String, delta: i64) -> serde_json::Value {
+    let names = preset_names(&presets_list());
+    let cur = names.iter().position(|x| x == &name).unwrap_or(0) as i64;
+    let target = (cur + delta).max(0) as usize;
+    presets_reorder_impl(name, target)
+}
+
+#[tauri::command]
+fn presets_reorder_to(name: String, index: i64) -> serde_json::Value {
+    presets_reorder_impl(name, index.max(0) as usize)
+}
+
+#[tauri::command]
+fn presets_restore() -> serde_json::Value {
+    let mut data = read_json(&presets_path());
+    if !data.is_object() { data = serde_json::json!({}); }
+    let obj = data.as_object_mut().unwrap();
+    obj.insert("hidden_builtins".to_string(), serde_json::json!([]));
+    obj.insert("order".to_string(), serde_json::Value::Null);
+    match write_json(&presets_path(), &data) {
+        Ok(_) => serde_json::json!({ "ok": true }),
+        Err(e) => serde_json::json!({ "ok": false, "error": e }),
+    }
+}
+
 #[tauri::command]
 fn db_status() -> serde_json::Value {
     serde_json::json!({
@@ -680,6 +827,8 @@ fn main() {
             load_settings, save_settings, db_kv_get, db_kv_set,
             db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
+            presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
+            presets_reorder, presets_reorder_to, presets_restore,
             list_midi_files, read_binary, save_binary,
             convert, cancel, engine_worker_status
         ])

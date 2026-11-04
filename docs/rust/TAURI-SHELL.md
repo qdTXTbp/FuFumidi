@@ -51,6 +51,8 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 | convert | **常驻 Python worker**（`music2midi.py worker`）执行一次真实转录，模型/参数原样转发 | 1 s 440Hz WAV → Basic Pitch **1 个音符**；冷 14.3 s / 暖 **5.5 s**；13 条日志；输出 MIDI 头 MThd |
 | engine_worker_status | 常驻 worker 状态（pid/running/seq） | running=true，seq=1，pid 有效 |
 | cancel | 置取消标志 + taskkill worker；阻塞读返回 EOF 后识别为 canceled | 120 s WAV 转录中取消：cancelR.canceled=true、convert 返回 {ok:false,canceled:true}、worker running=false；下次请求重新拉起 |
+| presets_list / save / delete / last_used | Rust 读写 dataRoot/presets.json；内置表由 engine/presets.py 生成并嵌入（builtin_presets.json） | 9 个内置预设 + 11 个 model_defaults；保存 Smoke Preset → last_used；删除后消失 |
+| presets_set_model / reorder / reorder_to / restore | 模型→预设绑定、排序、恢复内置 | 绑定 basic→Smoke Preset、解绑、删除均成功 |
 | model_list | 13 个核心模型条目（basic/piano/hft/MuScriptor×3/yourmt3/miros/aria/beat_this/audio_tagger/hnsep/HTDemucs4_6stems）；exists 按 models 目录真实大小判断 | smoke 断言 13 条、id 齐全、含 separate 条目 |
 | db_status / db_songs_list / db_songs_put / db_songs_delete | JSON 曲库（dataDir/songs.json），按 id upsert/删除 | 写 smoke-song → 列表 1 条 → 删除 → 0 条 |
 | db_playlists_list / db_playlists_put | JSON 歌单（dataDir/playlists.json） | 默认歌单 + smoke-pl 出现 |
@@ -103,20 +105,33 @@ worker running=true seq=1；输出 MIDI 头 `MThd`。剩余：cancel/pause、UI 
 **冒烟命令**：`npm run tauri:smoke`（`scripts/tauri/smoke.mjs`）：
 
 - 启动真实壳 + WebView2 CDP（`--remote-debugging-port`）；
-- 断言 **22 项全绿**：host / engineProbe / convert / worker / **cancel** / dbSongs / dbPlaylists / soundfonts /
-  **depCheck** / **diagExport** / **safeShellOps** / modelList / version / python / settings / kv /
-  listMidi / readBinary / saveBinary / ui / uiRoutes / **uiLibrary**；
+### 3.4 预设（T-115 收尾，2026-11-04）
+
+- 新增 8 条命令：`presets_list/save/delete/last_used/set_model/reorder/reorder_to/restore`；
+  数据落 `dataRoot/presets.json`（与 Electron/Python 同一份 schema）；
+- 内置 9 套「每模型最优」预设由 `engine/presets.py` 生成后嵌入 `shells/tauri/src/builtin_presets.json`
+  （生成命令：`python -c "import sys,json;sys.path.insert(0,'engine');import presets;..."`）；
+  **Python 不再是运行时依赖**，但预设表变更时需重新生成该 JSON（T-117 会加漂移检查）；
+- 模型绑定：桥补 `presets.setModelPreset` → `presets_set_model`；
+- smoke 实测：9 builtins / 11 model_defaults；保存 Smoke Preset → last_used；绑定/解绑 basic；删除后列表消失；
+  **23 项**断言全绿。
+
+- 断言 **23 项全绿**：host / engineProbe / convert / worker / cancel / **presets** / dbSongs / dbPlaylists /
+  soundfonts / depCheck / diagExport / safeShellOps / modelList / version / python / settings / kv /
+  listMidi / readBinary / saveBinary / ui / uiRoutes / uiLibrary；
   `uiLibrary` = 写入曲库 → 真刷新 → 侧栏/首页出现该曲（storeSongs=1，曲库 1 首）；
 - UI 断言：title、#app 已挂载、`window.fuBridge` 与 `window.__TAURI__` 均为 object、正文 >200 字；
 - 实测输出：version 6.5.0-beta.1、Python 3.12.10、settings 42 往返、MIDI 头 `MThd`、字节 4 往返；
 - 截图：`shells/tauri/artifacts/smoke.png`（真实 UI）。
 
-## 4. 当前命令清单（28 条）
+## 4. 当前命令清单（36 条）
 
 host_info, app_version, ping, python_selfcheck, engine_probe, convert, engine_worker_status,
 load_settings, save_settings, db_kv_get, db_kv_set, db_status, db_songs_list, db_songs_put,
 db_songs_delete, db_playlists_list, db_playlists_put, model_list, list_midi_files, read_binary,
-save_binary, soundfont_list, dep_check, diag_export, notify, open_output, open_external, cancel。
+save_binary, soundfont_list, dep_check, diag_export, notify, open_output, open_external, cancel,
+presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
+presets_reorder, presets_reorder_to, presets_restore。
 
 ## 4.1 下一步
 

@@ -144,6 +144,7 @@ export function installTauriBridge() {
       lastUsed: (name) => call('presets_last_used', { name }),
       reorder: (name, delta) => call('presets_reorder', { name, delta }),
       reorderTo: (name, index) => call('presets_reorder_to', { name, index }),
+      setModelPreset: (key, name) => call('presets_set_model', { key, name }),
       restore: () => call('presets_restore'),
     },
 

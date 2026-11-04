@@ -274,6 +274,9 @@
 - **T-118 取消已打通**：`cancel` 置 AtomicBool + taskkill pid，convert 识别 EOF 返回
   `{ok:false,canceled:true}`，worker running=false；smoke 用 **120 s WAV** 在 1.2 s 时取消，
   **22 项**全绿（新增 cancel）；下次 convert 自动重新拉起 worker。
+- **T-115 预设收尾**：新增 8 条 `presets_*` 命令（list/save/delete/last_used/set_model/reorder/reorder_to/restore），
+  数据存 dataRoot/presets.json；内置 9 套预设由 engine/presets.py 生成并嵌入 builtin_presets.json
+  （运行时不再调 Python）；桥补 setModelPreset；smoke **23 项**全绿（9 builtins/11 model_defaults/保存/绑定/删除）。
   下一步：T-115 继续补这些 UI 必需通道，T-117 继续 settings/song/task host 化，cancel/pause 与批量并发。
 
 ## 17. 待收口（下一轮）
