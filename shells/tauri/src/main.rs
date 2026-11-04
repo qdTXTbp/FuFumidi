@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
@@ -4135,6 +4135,8 @@ fn run_convert(
         return serde_json::json!({ "ok": false, "error": format!("worker write failed: {}", pool_io_text(err)) });
     }
     let mut logs: Vec<String> = Vec::new();
+    // P3 节流：###PROG 每 50ms 最多发一次；最终结果仍由 ###RESULT 驱动。
+    let mut last_progress = Instant::now() - Duration::from_secs(1);
     loop {
         let line = match lease.read_line() {
             Ok(Some(line)) => line,
@@ -4189,7 +4191,11 @@ fn run_convert(
         if let Some(rest) = t.strip_prefix("###PROG ") {
             if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(rest) {
                 if let Some(o) = v.as_object_mut() { o.insert("id".to_string(), serde_json::json!(job_id)); }
-                let _ = app.emit("engine:progress", v);
+                let now = Instant::now();
+                if now.duration_since(last_progress) >= Duration::from_millis(50) {
+                    last_progress = now;
+                    let _ = app.emit("engine:progress", v);
+                }
             }
             continue;
         }
