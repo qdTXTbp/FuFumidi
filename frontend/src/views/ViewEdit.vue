@@ -1259,6 +1259,8 @@ const recordLines = ref([]);
 // CC 事件列表 / 撤销历史 / 歌词编辑 / 帮助
 const ccListOpen = ref(false);
 const historyOpen = ref(false);
+/* 撤销栈是普通数组，不是响应式的；用它自己的版本号驱动历史面板刷新 */
+const histRev = ref(0);
 const lyricOpen = ref(false);
 const lyricText = ref('');
 const helpOpen = ref(false);
@@ -1269,6 +1271,7 @@ function openHistory() { historyOpen.value = true; }
    第一次打开后就会一直缓存旧列表 —— 再点「历史」看到的还是上一次的快照。 */
 const historyList = computed(() => {
   if (!historyOpen.value) return [];
+  void histRev.value;
   return (editor.value ? editor.value.historySnapshots() : []).slice().reverse();
 });
 /** 快照体积的人类可读写法（历史面板用） */
@@ -2300,7 +2303,7 @@ function scheduleDraw() {
   raf = requestAnimationFrame(() => { raf = 0; drawStage(); });
 }
 // 真正改动曲目：迷你图缓存失效 + 重绘（选区变化不重建缩略图）
-function onModified() { miniRev++; refreshSel(); scheduleDraw(); }
+function onModified() { miniRev++; histRev.value++; refreshSel(); scheduleDraw(); }
 
 /* P0-3b：采用一条录音 take —— 按模式合并进当前轨，并作为一次可撤销编辑 */
 function onRecordTake(payload) {
@@ -2317,6 +2320,9 @@ function onRecordTake(payload) {
 }
 
 watch(currentSong, () => {
+  // 撤销日志不能跨曲目串栈：切歌后旧曲目的撤销会把数据写进新曲目（P-011 风险 4.4）
+  try { editor.value?.clearHistory(); } catch (e) {}
+  histRev.value++;
   if (window.__fufumidiArrangeFocus || Date.now() < focusLockUntil) return;
   const tracks = song.value?.tracks || [];
   const nonEmpty = tracks.findIndex(t => t.notes && t.notes.length);

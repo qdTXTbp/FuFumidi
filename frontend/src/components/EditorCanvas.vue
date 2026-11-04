@@ -531,12 +531,14 @@ function addNote(tick, midi, len) {
 }
 function deleteNotes(arr) {
   const tr = curTrack(); if (!tr || !arr.length) return;
-  pushState('删除音符');
-  for (const n of arr) {
-    const i = tr.notes.indexOf(n);
-    if (i >= 0) tr.notes.splice(i, 1);
+  const captures = [];
+  const set = new Set(arr);
+  for (let i = tr.notes.length - 1; i >= 0; i--) {
+    if (set.has(tr.notes[i])) { captures.push({ idx: i, note: tr.notes[i] }); tr.notes.splice(i, 1); }
   }
+  captures.sort((a, b) => a.idx - b.idx);
   afterEdit();
+  if (captures.length) pushNoteCommand(() => makeDeleteNotesCommand(tr, captures, '删除音符'), props.trackIndex, tr.notes.length);
 }
 function moveNotes(arr, dTick, dMidi) {
   const tr = curTrack(); if (!tr) return;

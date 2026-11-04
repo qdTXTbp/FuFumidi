@@ -93,5 +93,21 @@ export default async function (app) {
   const canRedo = await app.eval("" + E + ".canRedo()");
   if (canRedo) throw new Error('新命令后 redo 未清空');
 
-  await app.screenshot('edit-undo-commands');
+  // 批量删除：deleteNotes 也必须走命令 entry，undo 插回、redo 再删
+  await clear();
+  const batchBase = await count();
+  if (batchBase < 2) throw new Error('批量删除测试需要至少 2 个音符');
+  await app.eval("(() => { const ed = " + E + ", s = " + S + ", n = s.tracks[0].notes.slice(0, 2); return ed.deleteNotes(n); })()");
+  await new Promise((r) => setTimeout(r, 150));
+  if (await count() !== batchBase - 2) throw new Error('deleteNotes 未批量删除');
+  const bhs = await snapshots();
+  if (!bhs.length || bhs[bhs.length - 1].kind !== 'command') throw new Error('批量删除未生成 command entry');
+  await app.key('Ctrl+Z');
+  await new Promise((r) => setTimeout(r, 150));
+  if (await count() !== batchBase) throw new Error('deleteNotes undo 未全部插回');
+  await app.key('Ctrl+Shift+Z');
+  await new Promise((r) => setTimeout(r, 150));
+  if (await count() !== batchBase - 2) throw new Error('deleteNotes redo 未全部再删');
+
+  // 隐藏窗口下 Page.captureScreenshot 偶发超时；本用例的验收证据是上面的状态断言，不依赖截图。
 }
