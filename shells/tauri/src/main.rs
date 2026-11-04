@@ -13,6 +13,8 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader, Read, Write};
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -558,6 +560,46 @@ fn presets_restore() -> serde_json::Value {
 }
 
 fn midi_root() -> PathBuf { data_dir().join("midi") }
+
+fn autostart_value() -> String {
+    let exe = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default();
+    format!("\"{exe}\"")
+}
+
+#[tauri::command]
+fn autostart_get() -> serde_json::Value {
+    #[cfg(target_os = "windows")]
+    {
+        let out = std::process::Command::new("reg").args(["query", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run", "/v", "FuFumidi"]).creation_flags(0x08000000).output();
+        match out {
+            Ok(o) => { let text = String::from_utf8_lossy(&o.stdout); serde_json::json!({ "ok": true, "openAtLogin": o.status.success() && text.contains("FuFumidi") }) }
+            Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    { serde_json::json!({ "ok": false, "error": "unsupported platform" }) }
+}
+
+#[tauri::command]
+fn autostart_set(open: bool) -> serde_json::Value {
+    #[cfg(target_os = "windows")]
+    {
+        let key = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+        let out = if open {
+            std::process::Command::new("reg").args(["add", key, "/v", "FuFumidi", "/t", "REG_SZ", "/d", &autostart_value(), "/f"]).creation_flags(0x08000000).output()
+        } else {
+            std::process::Command::new("reg").args(["delete", key, "/v", "FuFumidi", "/f"]).creation_flags(0x08000000).output()
+        };
+        match out {
+            Ok(o) if o.status.success() => autostart_get(),
+            Ok(o) => serde_json::json!({ "ok": false, "error": String::from_utf8_lossy(&o.stderr) }),
+            Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    { serde_json::json!({ "ok": false, "error": "unsupported platform" }) }
+}
+
 
 fn write_dawproject_at(target: &Path, files: &[serde_json::Value]) -> serde_json::Value {
     if files.is_empty() { return serde_json::json!({ "ok": false, "error": "没有可导出的内容" }); }
@@ -2068,7 +2110,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, db_kv_get, db_kv_set,
-            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, model_list,
+            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
@@ -2102,6 +2144,15 @@ mod check_midi_tests {
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    #[test]
+    fn autostart_value_and_status() {
+        let v = super::autostart_value();
+        assert!(v.starts_with('"') && v.ends_with('"'));
+        let st = super::autostart_get();
+        assert_eq!(st["ok"], true);
+        assert!(st["openAtLogin"].is_boolean());
     }
 
     #[test]
