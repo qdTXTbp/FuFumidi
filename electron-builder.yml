@@ -99,8 +99,14 @@ files:
   # 若再打进 app.asar 会重复打包（python 1.3GB / models 160MB），导致体积翻倍
   - "!resources/**"
   - "!models/**"
-  # Tauri 迁移目录与编译产物不进入 Electron 包（否则 src-tauri/target 会让 asar 膨胀到 5GB+）
+  # Tauri 迁移目录与编译产物不进入 Electron 包（否则 target/bundle 会让 asar 膨胀到 7GB+，
+  # 2026-11-04 实测 app.asar 7.2GB、electron-builder EBUSY）
   - "!src-tauri/**"
+  - "!shells/**"
+  - "!poc/**"
+  - "!crates/**"
+  - "!ci-resources/**"
+  - "!**/target/**"
   - "!frontend/src/bridge/**"
   # soundfonts 下载/暂存目录不入包（开发产物，避免膨胀与未定稿资源进发布版）
   - "!soundfonts-dist/**"

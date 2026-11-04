@@ -15,6 +15,17 @@ files:
   - "!build.js"
   - "!electron-builder.yml"
   - "!electron-builder.base.yml"
+  # Tauri 迁移产物/暂存资源绝不能进 Electron asar（会把 7.5GB 的 target/bundle 打进去，
+  # 2026-11-04 实测导致 electron-builder EBUSY/超大 asar；resources 由 extraResources 提供）
+  - "!shells/**"
+  - "!poc/**"
+  - "!resources/**"
+  - "!ci-resources/**"
+  - "!frontend/**"
+  - "!crates/**"
+  - "!release-base/**"
+  - "!**/*.map"
+  - "!**/target/**"
 extraResources:
   - from: "E:/Midi/FuFumidi/resources/python"
     to: python

@@ -36,10 +36,11 @@ Rust 端资源解析因此同时支持 exe 旁与 resources/（debug 才允许�
 
 | 项 | 结果 |
 |---|---|
-| 安装包 | `poc/tauri-poc/target/release/bundle/nsis/FuFumidi_6.5.0-beta.1_x64-setup.exe`，**237.81 MiB** |
+| 安装包 | `poc/tauri-poc/target/release/bundle/nsis/FuFumidi_6.5.0-beta.1_x64-setup.exe`，**238.38 MiB**（含 rusqlite/dialog） |
 | 安装后体积 | **814 MB**（12752 个 Python 文件全部落盘） |
-| 安装方式 | `setup.exe /S /D=E:\Midi\_attic\tauri-install-test3`（currentUser） |
+| 安装方式 | `setup.exe /S /D=E:\Midi\_attic\tauri-install-test5`（currentUser） |
 | 安装版 smoke | **24/24 全绿**：`node scripts/tauri/smoke.mjs --exe <安装目录>\FuFumidi.exe` |
+| 安装版老数据 | 无 env 启动：**1972 首**真实曲目、57 设置键、侧栏「全部曲目 1972」 |
 | 资源来源 | host_info 显示 python/engine 均来自**安装目录**（不再回退开发树） |
 | 真实推理 | 1 s WAV → Basic Pitch 1 音符，**5.3 s** |
 | 窗口/界面 | 真实 renderer 已嵌入 exe；四页路由 + 曲库刷新显示通过 |
@@ -55,6 +56,9 @@ Tauri 默认从 GitHub 下载 `nsis-3.13.zip`，本机直连超时。已把工�
 ## 5. 已知限制（未完成部分）
 
 - 安装包**未签名**：SmartScreen 会拦；正式发布需 Authenticode 证书。
-- **Electron 回退基准**：Electron E2E **35/35**；`npm run pack:base` 成功
-  （base 数据包 28 GB，含资源/模型，已删除不入库，可重建）；本轮未重打 Electron 安装包。
+- **Electron 回退基准**：Electron E2E **37/37**；`pack:base` 成功；
+  **`npm run dist:win` 已产出 `release/FuFumidi Setup 6.5.0-beta.1.exe`（约 614 MiB）**。
+  为修 EBUSY/7.2GB asar，`electron-builder.yml` / base 配置排除了 `shells/**`、`poc/**`、
+  `crates/**`、`ci-resources/**`、`**/target/**`（Tauri 产物不再进 Electron 包）。
+  安装冒烟未完成：本无头会话里 Electron NSIS 静默安装挂起（Tauri NSIS 同法可装），留待交互桌面手测。
 - bundle staging 802MB 不入库，`npm run tauri:stage` 可重建。

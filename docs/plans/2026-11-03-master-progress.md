@@ -292,11 +292,12 @@
   NSIS 工具链经代理预置（SHA1 校验）。
 - **T-119 收尾进展**：`mainBinaryName: FuFumidi`，安装包主程序改为 **FuFumidi.exe**；
   重打并安装到干净目录，安装版 smoke 仍 **24/24**（renderer=<embedded>，python/engine 来自安装目录，转录 5.3 s）。
-  Electron 回退基准：E2E **35/35**、`pack:base` 成功（28 GB base 数据包，已删除不入库）。
+  Electron 回退基准：E2E **37/37**、`pack:base` 成功；**Electron NSIS 已重打**
+  （排除 Tauri 产物后修复 7.2GB asar/EBUSY，安装包约 614 MiB；无头会话静默安装挂起，待交互桌面手测）。
 - **T-117 曲库/设置共享 Electron 数据（重要）**：Rust 用 rusqlite 直读/写
   `%APPDATA%/FuFumidi/fufumidi/fufumidi.sqlite`（songs/playlists/kv），设置优先读 legacy
   settings.json；只读验收实测 **1972 首真实曲目**、57 个设置键、侧栏「全部曲目 1972」正常；
-  测试态由 FUFUMIDI_DATA_ROOT/DB_FILE 隔离。
+  测试态由 FUFUMIDI_DATA_ROOT/DB_FILE 隔离；**SQLite 版 NSIS 已重打（238.38 MiB），安装版无 env 启动复验 1972 首**。
 - **P-012 快捷键可配置已落地**：新增 `core/shortcuts.js`（10 个窗口级动作注册表、
   localStorage 持久化、冲突检测、重置）；App.onKey 改为按注册表分发；SettingsPanel
   快捷键页支持点击录制（Esc 取消、冲突提示）并保留只读编辑器键位表。
@@ -308,7 +309,7 @@
 - **原生文件对话框已接入（T-115/T-117 之间）**：`tauri-plugin-dialog 2.8.4`，
   新增 pick_file/pick_directory/pick_audio/pick_audio_files/pick_image/pick_music_xml（命令共 **43 条**）；
   安装版 smoke **25 项**全绿（新增 dialogs 接线断言）；用户实际点选操作仍待验收。
-  剩余：安装包签名（需证书）、Electron 安装包重打。
+  剩余：安装包签名（需证书）；Electron 安装包已产出但安装冒烟待交互桌面。
   下一步：T-115 继续补这些 UI 必需通道，T-117 继续 settings/song/task host 化，批量并发与 T-119 双构建。
 
 ## 17. 待收口（下一轮）
