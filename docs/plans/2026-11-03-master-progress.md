@@ -254,8 +254,12 @@
   `###LOG/###PROG/###RESULT` 按 `_id` 解析并转发 Tauri 事件；退出时 kill；
   实测 1 s WAV → Basic Pitch **1 音符**，冷 14.3 s / 暖 **5.5 s**，13 条日志，输出 MIDI 头 MThd；
   smoke 扩到 **12 项**断言全绿（新增 convert/worker）。
-- 下一步：T-117 host 业务迁移（file/settings/song/task 逐步替换 main/*.js）、
-  T-115 扩面（model_list/presets/soundfonts 等 UI 必需通道）、cancel/pause 与批量并发。
+- **T-117 第一步 + UI 路由冒烟**：新增 `db_status/db_songs_list/db_songs_put/db_songs_delete/
+  db_playlists_list/db_playlists_put`（JSON store，原子 rename，dataDir 可覆盖）；命令总数 **20**。
+  smoke 增加 **uiRoutes**：`#/transcribe → #/resources → #/piano3d → #/music → #/home` 逐页渲染，
+  实测 textLen 658–1404、#app 挂载、无崩溃；smoke **15 项**全绿。
+- 页面数据仍缺 `model_list/presets/soundfont_list` 等通道（显示空态，不是崩溃）；
+  下一步：T-115 扩面优先补 UI 必需通道，T-117 继续 settings/song/task host 化，cancel/pause 与批量并发。
 
 ## 17. 待收口（下一轮）
 

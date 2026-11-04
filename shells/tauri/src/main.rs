@@ -46,6 +46,39 @@ fn data_dir() -> PathBuf {
 
 fn settings_path() -> PathBuf { data_dir().join("settings.json") }
 fn kv_path() -> PathBuf { data_dir().join("kv.json") }
+fn songs_path() -> PathBuf { data_dir().join("songs.json") }
+fn playlists_path() -> PathBuf { data_dir().join("playlists.json") }
+
+fn read_array(path: &Path) -> Vec<serde_json::Value> {
+    match std::fs::read_to_string(path) {
+        Ok(s) => match serde_json::from_str::<serde_json::Value>(&s) {
+            Ok(serde_json::Value::Array(a)) => a,
+            _ => Vec::new(),
+        },
+        Err(_) => Vec::new(),
+    }
+}
+
+fn write_array(path: &Path, arr: &[serde_json::Value]) -> Result<(), String> {
+    let tmp = path.with_extension("tmp");
+    let v = serde_json::Value::Array(arr.to_vec());
+    std::fs::write(&tmp, serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+}
+
+fn upsert_by_id(path: &Path, item: serde_json::Value) -> bool {
+    let id = item.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let mut arr = read_array(path);
+    if id.is_empty() {
+        arr.push(item);
+    } else if let Some(pos) = arr.iter().position(|x| x.get("id").and_then(|v| v.as_str()) == Some(id.as_str())) {
+        arr[pos] = item;
+    } else {
+        arr.push(item);
+    }
+    write_array(path, &arr).is_ok()
+}
 
 /// 查找 Python：显式 env > 安装版 resources/python > 开发树 resources/python。
 fn python_path() -> Option<PathBuf> {
@@ -155,6 +188,36 @@ fn db_kv_set(key: String, value: serde_json::Value) -> serde_json::Value {
         Err(e) => serde_json::json!({ "ok": false, "error": e }),
     }
 }
+
+#[tauri::command]
+fn db_status() -> serde_json::Value {
+    serde_json::json!({
+        "ok": true,
+        "kind": "json",
+        "dataDir": data_dir().display().to_string(),
+        "songs": read_array(&songs_path()).len(),
+        "playlists": read_array(&playlists_path()).len(),
+    })
+}
+
+#[tauri::command]
+fn db_songs_list() -> Vec<serde_json::Value> { read_array(&songs_path()) }
+
+#[tauri::command]
+fn db_songs_put(item: serde_json::Value) -> bool { upsert_by_id(&songs_path(), item) }
+
+#[tauri::command]
+fn db_songs_delete(id: String) -> bool {
+    let arr = read_array(&songs_path());
+    let next: Vec<serde_json::Value> = arr.into_iter().filter(|x| x.get("id").and_then(|v| v.as_str()) != Some(id.as_str())).collect();
+    write_array(&songs_path(), &next).is_ok()
+}
+
+#[tauri::command]
+fn db_playlists_list() -> Vec<serde_json::Value> { read_array(&playlists_path()) }
+
+#[tauri::command]
+fn db_playlists_put(item: serde_json::Value) -> bool { upsert_by_id(&playlists_path(), item) }
 
 #[tauri::command]
 fn list_midi_files(dir: String) -> Vec<String> {
@@ -400,6 +463,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, db_kv_get, db_kv_set,
+            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put,
             list_midi_files, read_binary, save_binary,
             convert, engine_worker_status
         ])
