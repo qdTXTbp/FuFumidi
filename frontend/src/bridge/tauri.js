@@ -61,7 +61,7 @@ export function installTauriBridge() {
 
     // ---- 完整性 ----
     checkIntegrity: () => call('check_integrity'),
-    repairIntegrity: (ids) => call('repair_integrity', { req: { ids } }),
+    repairIntegrity: (ids) => call('repair_integrity', { ids }),
 
     // ---- 文件对话框 / 二进制 ----
     pickAudio: () => call('pick_audio'),

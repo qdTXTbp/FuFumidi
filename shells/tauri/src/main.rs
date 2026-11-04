@@ -561,6 +561,48 @@ fn presets_restore() -> serde_json::Value {
 
 fn midi_root() -> PathBuf { data_dir().join("midi") }
 
+fn integrity_check_at(settings: &Path) -> serde_json::Value {
+    let mut issues = Vec::new();
+    if !settings.exists() {
+        issues.push(serde_json::json!({ "id": "settings-missing", "severity": "warn", "canRepair": true, "path": settings.display().to_string() }));
+    } else {
+        match std::fs::read_to_string(settings).ok().and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()) {
+            Some(_) => {}
+            None => issues.push(serde_json::json!({ "id": "settings-corrupt", "severity": "warn", "canRepair": true, "path": settings.display().to_string() })),
+        }
+    }
+    serde_json::json!({ "ok": issues.is_empty(), "issues": issues })
+}
+
+fn integrity_repair_at(settings: &Path, ids: &[String]) -> serde_json::Value {
+    let mut results = Vec::new();
+    let mut backup: Option<String> = None;
+    for id in ids {
+        if id == "settings-missing" || id == "settings-corrupt" {
+            if settings.exists() {
+                let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+                let bak = settings.with_file_name(format!("{}.bak-{ts}", settings.file_name().and_then(|x| x.to_str()).unwrap_or("settings.json")));
+                if std::fs::copy(settings, &bak).is_ok() { backup = Some(bak.display().to_string()); }
+            }
+            if let Some(parent) = settings.parent() { let _ = std::fs::create_dir_all(parent); }
+            match std::fs::write(settings, "{}") {
+                Ok(_) => results.push(serde_json::json!({ "id": id, "ok": true, "action": "recreated", "backup": backup })),
+                Err(e) => results.push(serde_json::json!({ "id": id, "ok": false, "error": e.to_string() })),
+            }
+        } else {
+            results.push(serde_json::json!({ "id": id, "ok": false, "error": "unsupported issue in Tauri shell" }));
+        }
+    }
+    serde_json::json!({ "ok": results.iter().all(|r| r["ok"] == true), "results": results })
+}
+
+#[tauri::command]
+fn check_integrity() -> serde_json::Value { integrity_check_at(&settings_path()) }
+
+#[tauri::command]
+fn repair_integrity(ids: Vec<String>) -> serde_json::Value { integrity_repair_at(&settings_path(), &ids) }
+
+
 fn clear_user_data_at(root: &Path, scopes: &[String]) -> serde_json::Value {
     let has = |s: &str| scopes.iter().any(|x| x == s);
     let mut done: Vec<String> = Vec::new();
@@ -2280,7 +2322,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, db_kv_get, db_kv_set,
-            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, model_list,
+            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
@@ -2314,6 +2356,28 @@ mod check_midi_tests {
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    #[test]
+    fn integrity_check_and_repair() {
+        let root = tmpdir("integrity");
+        let settings = root.join("settings.json");
+        let c = super::integrity_check_at(&settings);
+        assert_eq!(c["ok"], false);
+        assert_eq!(c["issues"][0]["id"], "settings-missing");
+        let r = super::integrity_repair_at(&settings, &["settings-missing".to_string()]);
+        assert_eq!(r["ok"], true);
+        assert_eq!(std::fs::read_to_string(&settings).unwrap(), "{}");
+        std::fs::write(&settings, "not json").unwrap();
+        let c2 = super::integrity_check_at(&settings);
+        assert_eq!(c2["issues"][0]["id"], "settings-corrupt");
+        let r2 = super::integrity_repair_at(&settings, &["settings-corrupt".to_string()]);
+        assert_eq!(r2["ok"], true);
+        assert_eq!(r2["results"][0]["action"], "recreated");
+        assert!(r2["results"][0]["backup"].as_str().is_some());
+        assert!(serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(&settings).unwrap()).is_ok());
+        assert_eq!(super::integrity_check_at(&settings)["ok"], true);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
