@@ -62,3 +62,10 @@ Tauri 默认从 GitHub 下载 `nsis-3.13.zip`，本机直连超时。已把工�
   `crates/**`、`ci-resources/**`、`**/target/**`（Tauri 产物不再进 Electron 包）。
   安装冒烟未完成：本无头会话里 Electron NSIS 静默安装挂起（Tauri NSIS 同法可装），留待交互桌面手测。
 - bundle staging 802MB 不入库，`npm run tauri:stage` 可重建。
+
+## 6. Release 构建验证（无窗口）
+
+- `cargo build --release --offline` 通过（optimized 2m10s）；
+- `poc/tauri-poc/target/release/fufumidi-shell.exe` 约 15 MiB；
+- 清理未使用的 autosave_root 警告；cargo test 33/33 + 1 ignored 通过；
+- 只编译，不启动窗口/安装器。

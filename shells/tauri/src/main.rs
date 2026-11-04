@@ -1856,8 +1856,6 @@ fn reveal_midi(p: Option<String>) -> serde_json::Value {
 }
 
 
-fn autosave_root() -> PathBuf { data_dir().join("temp").join("autosave") }
-
 fn autosave_safe_id(doc_id: &str) -> String {
     let ok = (1..=120).contains(&doc_id.chars().count())
         && doc_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-');
