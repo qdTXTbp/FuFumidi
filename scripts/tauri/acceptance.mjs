@@ -20,6 +20,7 @@ const steps = [
 if (!quick) {
   steps.splice(3, 0, { name: 'hidden-e2e', cmd: 'node', args: ['scripts/e2e/run.mjs'] });
   steps.push({ name: 'release-build', cmd: 'cargo', args: ['build', '--release', '--offline'], cwd: path.join(root, 'shells', 'tauri') });
+  steps.push({ name: 'sync-release-engine', cmd: process.execPath, args: ['scripts/tauri/sync-release-engine.mjs'] });
   steps.push({ name: 'host-self-check', cmd: path.join(target, 'release', 'fufumidi-shell.exe'), args: ['--self-check'] });
   steps.push({ name: 'engine-self-check', cmd: path.join(target, 'release', 'fufumidi-shell.exe'), args: ['--engine-self-check'] });
 }
