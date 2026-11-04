@@ -562,6 +562,62 @@ fn presets_restore() -> serde_json::Value {
 
 fn midi_root() -> PathBuf { data_dir().join("midi") }
 
+fn refine_args(req: &serde_json::Value, out: &str) -> Vec<String> {
+    let mut args = vec!["refine".to_string(), "--audio".into(), req.get("audio").and_then(|v| v.as_str()).unwrap_or("").into(), "--midi".into(), req.get("midi").and_then(|v| v.as_str()).unwrap_or("").into(), "-o".into(), out.to_string()];
+    if let Some(m) = req.get("mode").and_then(|v| v.as_str()) { if !m.is_empty() { args.push("--mode".into()); args.push(m.to_string()); } }
+    if let Some(b) = req.get("stemBalance") { args.push("--stem-balance".into()); args.push(if b.as_bool().unwrap_or(false) { "on" } else { "off" }.into()); }
+    for (key, flag) in [("onsetWin", "--onset-win"), ("offsetWin", "--offset-win"), ("velStrength", "--vel-strength"), ("minNoteMs", "--min-note-ms")] {
+        if let Some(v) = req.get(key) { if let Some(n) = v.as_f64() { args.push(flag.into()); args.push(n.to_string()); } }
+    }
+    for (key, flag) in [("pitchCheck", "--pitch-check"), ("quantize", "--quantize")] {
+        if let Some(b) = req.get(key).and_then(|v| v.as_bool()) { args.push(flag.into()); args.push(if b { "on" } else { "off" }.into()); }
+    }
+    args
+}
+
+fn run_refine(app: AppHandle, req: serde_json::Value) -> serde_json::Value {
+    let audio = req.get("audio").and_then(|v| v.as_str()).unwrap_or("");
+    let midi = req.get("midi").and_then(|v| v.as_str()).unwrap_or("");
+    if audio.is_empty() || midi.is_empty() || !Path::new(audio).is_file() || !Path::new(midi).is_file() {
+        return serde_json::json!({ "ok": false, "error": "缺少输入：需要原始音频与转录 MIDI 路径" });
+    }
+    let id = req.get("id").cloned().unwrap_or(serde_json::Value::Null);
+    let out = if let Some(o) = req.get("out").and_then(|v| v.as_str()) { if !o.trim().is_empty() { o.to_string() } else { String::new() } } else { String::new() };
+    let out = if out.is_empty() {
+        let base = Path::new(midi).file_stem().and_then(|x| x.to_str()).unwrap_or("refined");
+        let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+        data_dir().join("temp").join("fufumidi").join(format!("{base}_refined_{ts}.mid")).display().to_string()
+    } else { out };
+    if let Some(parent) = Path::new(&out).parent() { let _ = std::fs::create_dir_all(parent); }
+    let Some(py) = python_path() else { return serde_json::json!({ "ok": false, "error": "python runtime not found" }); };
+    let Some(eng) = engine_dir() else { return serde_json::json!({ "ok": false, "error": "engine not found" }); };
+    let script = eng.join("smart_midi.py");
+    if !script.exists() { return serde_json::json!({ "ok": false, "error": "smart_midi.py not found" }); }
+    let mut child = match Command::new(&py).current_dir(&eng).arg(&script).args(refine_args(&req, &out)).env("PYTHONIOENCODING", "utf-8").stdout(Stdio::piped()).stderr(Stdio::piped()).creation_flags(0x08000000).spawn() {
+        Ok(c) => c, Err(e) => return serde_json::json!({ "ok": false, "error": e.to_string() }),
+    };
+    let stdout = child.stdout.take();
+    let mut result: Option<serde_json::Value> = None;
+    if let Some(stdout) = stdout {
+        for line in BufReader::new(stdout).lines().flatten() {
+            if let Some(rest) = line.strip_prefix("###RESULT ") { if let Ok(v) = serde_json::from_str::<serde_json::Value>(rest) { result = Some(v); } }
+            let _ = app.emit("engine:refine:log", serde_json::json!({ "id": id, "line": line }));
+        }
+    }
+    let status = child.wait();
+    let ok = status.map(|s| s.success()).unwrap_or(false);
+    match result {
+        Some(mut v) => { v["ok"] = serde_json::json!(ok && v.get("ok").and_then(|x| x.as_bool()).unwrap_or(true)); v["out"] = serde_json::json!(out); v }
+        None => serde_json::json!({ "ok": ok, "out": out, "error": if ok { "" } else { "refine failed" } }),
+    }
+}
+
+#[tauri::command]
+async fn refine(app: AppHandle, req: serde_json::Value) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || run_refine(app, req)).await.map_err(|e| e.to_string())
+}
+
+
 fn doc_source(kind: &str) -> Option<PathBuf> {
     let name = if kind == "plugin" { "plugin-dev.html" } else { "edit-guide.html" };
     let rel = if kind == "plugin" { Path::new("plugins").join(name) } else { Path::new("renderer").join(name) };
@@ -2977,7 +3033,7 @@ fn main() {
             presets_reorder, presets_reorder_to, presets_restore,
             pick_file, pick_directory, pick_audio, pick_audio_files, pick_image, pick_music_xml,
             list_midi_files, list_audio_files, library_stats, read_soundfont, read_binary, save_binary,
-            convert, probe, cancel, set_transcribe_pause, engine_worker_status
+            convert, probe, refine, cancel, set_transcribe_pause, engine_worker_status
         ])
         .setup(|_app| {
             println!("[fufumidi-shell] {}", serde_json::to_string(&host_info_json()).unwrap_or_default());
@@ -3022,6 +3078,19 @@ mod check_midi_tests {
         assert!(plan[0].join(" ").contains("Wallpaper"));
         assert!(plan[0].join(" ").contains("C:\\wall\\a.jpg"));
         assert_eq!(super::wallpaper_set_desktop("C:\\definitely-missing.jpg".into())["ok"], false);
+    }
+
+    #[test]
+    fn refine_args_shape() {
+        let req = serde_json::json!({ "audio": "a.wav", "midi": "m.mid", "mode": "vocal", "stemBalance": true, "onsetWin": 0.1, "pitchCheck": true, "quantize": false });
+        let args = super::refine_args(&req, "out.mid");
+        let joined = args.join(" ");
+        assert!(joined.contains("refine --audio a.wav --midi m.mid -o out.mid"));
+        assert!(joined.contains("--mode vocal"));
+        assert!(joined.contains("--stem-balance on"));
+        assert!(joined.contains("--onset-win 0.1"));
+        assert!(joined.contains("--pitch-check on"));
+        assert!(joined.contains("--quantize off"));
     }
 
     #[test]

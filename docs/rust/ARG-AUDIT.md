@@ -5,9 +5,9 @@
 
 | 指标 | 数值 |
 |---|---:|
-| Rust command | 112 |
+| Rust command | 113 |
 | bridge call | 129 |
-| 参数不一致 | 24 |
+| 参数不一致 | 23 |
 
 ## 不一致列表
 
@@ -17,8 +17,6 @@
   - bridge 多参数: id
 - sf_workshop_cancel（Rust 未找到命令）
   - bridge 多参数: id
-- refine（Rust 未找到命令）
-  - bridge 多参数: req
 - model_download（Rust 未找到命令）
   - bridge 多参数: req
 - model_cancel（Rust 未找到命令）

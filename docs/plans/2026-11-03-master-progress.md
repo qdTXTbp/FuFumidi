@@ -391,6 +391,7 @@
 - **Tauri probe 别名 + 安全边界测试**：补 `probe` 命令（前端 bridge.probe 之前无 Rust 实现，复用 engine_probe）；模型 ZIP 增加 `../evil.onnx` 穿越测试，确认不会写出 models 目录；stems ZIP 增加 >100 文件拒绝测试；同时修复模型导入临时目录并发同名问题（进程 id + 纳秒）。命令总数 **109**，arg 审计 28→**27**，cargo test **35/35 + 1 ignored**。
 - **Tauri 模型删除**：model_delete（按 id 删 models/<dest> 目录/文件，并清 .oudep/.parts/.tmp/.part；RVC 删除暂未迁移）；Rust 测试 muscriptor/small 删除/未知 id/RVC 拒绝；命令总数 **110**，arg 审计 27→**26**，cargo test **36/36 + 1 ignored**。
 - **Tauri 帮助文档打开**：open_edit_guide/plugins_open_docs（复制 plugins/plugin-dev.html、renderer/edit-guide.html 到 dataRoot/temp/FuFumidi-doc 后用默认浏览器打开；stage-bundle 增加 bundle/docs，tauri.conf 增加 resources docs）；Rust 测试 dev 源存在，**不在测试中打开浏览器**；命令总数 **112**，arg 审计 26→**24**，cargo test **37/37 + 1 ignored**。
+- **Tauri 智能修正 refine**：调 engine/smart_midi.py refine（audio/midi/out/mode/stemBalance/窗口参数），逐行 emit engine:refine:log，解析 ###RESULT；Rust 测试参数拼装；真实音频+MIDI 修正未在无头测试中跑；命令总数 **113**，arg 审计 24→**23**，cargo test **38/38 + 1 ignored**。
 - **T-117 曲库/设置共享 Electron 数据（重要）**：Rust 用 rusqlite 直读/写
   `%APPDATA%/FuFumidi/fufumidi/fufumidi.sqlite`（songs/playlists/kv），设置优先读 legacy
   settings.json；只读验收实测 **1972 首真实曲目**、57 个设置键、侧栏「全部曲目 1972」正常；
