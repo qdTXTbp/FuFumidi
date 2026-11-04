@@ -140,9 +140,9 @@ worker running=true seq=1；输出 MIDI 头 `MThd`。剩余：cancel/pause、UI 
 
 - `npm run tauri:bundle` 成功产出 **237.81 MiB** 安装包；安装后 **814 MB**，资源在安装根目录
   （python/engine/soundfonts/models）；
-- **安装版 smoke 24/24 全绿**，host_info 证实 python/engine 来自安装目录（不再用开发树），
-  真实转录 **4.2 s**；详见 `docs/rust/TAURI-BUILD.md`；
-- 限制：未签名、exe 名仍为 fufumidi-shell.exe、Electron 回退未双跑。
+- **安装版 smoke 24/24 全绿**，主程序 **FuFumidi.exe**，host_info 证实 python/engine 来自安装目录，
+  renderer 为 `<embedded>`，真实转录 **5.3 s**；详见 `docs/rust/TAURI-BUILD.md`；
+- 限制：安装包未签名；Electron 回退基准为 E2E 35/35 + `pack:base` 成功（未重打 Electron 安装包）。
 
 ## 4. 当前命令清单（37 条）
 

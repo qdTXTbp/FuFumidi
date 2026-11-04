@@ -43,5 +43,6 @@
         "installMode": "currentUser"
       }
     }
-  }
+  },
+  "mainBinaryName": "FuFumidi"
 }

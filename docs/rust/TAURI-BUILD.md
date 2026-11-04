@@ -25,7 +25,8 @@ Tauri CLI 固定在 devDependency `@tauri-apps/cli@2.12.4`（crate tauri 2.12.5�
 | `resources/elevate.exe` | `elevate.exe` | 提权辅助 |
 
 安装后资源就在**安装目录根**（与 exe 同级），不是 resources/ 子目录：
-`python/ engine/ soundfonts/ models/ elevate.exe fufumidi-shell.exe`。
+`python/ engine/ soundfonts/ models/ elevate.exe FuFumidi.exe`。
+`tauri.conf.json` 设 `mainBinaryName: "FuFumidi"`，安装包主程序已是 **FuFumidi.exe**。
 Rust 端资源解析因此同时支持 exe 旁与 resources/（debug 才允许回退仓库路径）。
 
 ## 3. 实测
@@ -34,10 +35,10 @@ Rust 端资源解析因此同时支持 exe 旁与 resources/（debug 才允许�
 |---|---|
 | 安装包 | `poc/tauri-poc/target/release/bundle/nsis/FuFumidi_6.5.0-beta.1_x64-setup.exe`，**237.81 MiB** |
 | 安装后体积 | **814 MB**（12752 个 Python 文件全部落盘） |
-| 安装方式 | `setup.exe /S /D=E:\Midi\_attic\tauri-install-test2`（currentUser） |
-| 安装版 smoke | **24/24 全绿**：`node scripts/tauri/smoke.mjs --exe <安装目录>\fufumidi-shell.exe` |
+| 安装方式 | `setup.exe /S /D=E:\Midi\_attic\tauri-install-test3`（currentUser） |
+| 安装版 smoke | **24/24 全绿**：`node scripts/tauri/smoke.mjs --exe <安装目录>\FuFumidi.exe` |
 | 资源来源 | host_info 显示 python/engine 均来自**安装目录**（不再回退开发树） |
-| 真实推理 | 1 s WAV → Basic Pitch 1 音符，**4.2 s** |
+| 真实推理 | 1 s WAV → Basic Pitch 1 音符，**5.3 s** |
 | 窗口/界面 | 真实 renderer 已嵌入 exe；四页路由 + 曲库刷新显示通过 |
 
 ## 4. 网络坑（NSIS 工具链）
@@ -51,7 +52,6 @@ Tauri 默认从 GitHub 下载 `nsis-3.13.zip`，本机直连超时。已把工�
 ## 5. 已知限制（未完成部分）
 
 - 安装包**未签名**：SmartScreen 会拦；正式发布需 Authenticode 证书。
-- exe 名仍是 `fufumidi-shell.exe`（Cargo target）；产品名/窗口/图标已是 FuFumidi；
-  正式包前改 `mainBinaryName` 或用 `[[bin]]` 改名并重跑安装冒烟。
-- **Electron 回退构建尚未在本轮验证**（Electron E2E 仍 35/35）；T-119 完成前必须双跑。
+- **Electron 回退基准**：Electron E2E **35/35**；`npm run pack:base` 成功
+  （base 数据包 28 GB，含资源/模型，已删除不入库，可重建）；本轮未重打 Electron 安装包。
 - bundle staging 802MB 不入库，`npm run tauri:stage` 可重建。
