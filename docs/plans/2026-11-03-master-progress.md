@@ -363,8 +363,9 @@
   设置路径加引号）；桥补 autostartGet/Set；Rust 测试只读查询与 exe 值，**不写注册表**；
   命令总数 **79**，覆盖 124 方法/141 未映射（116 call），cargo test **20/20**。
 - **Tauri 体检**：`diag_health`（spawn engine/health.py --json，解析脱敏报告；桥补 diagHealth）；
-  Rust 测试完整 JSON/噪声尾行/空输出；真实 Python 执行未在无头测试中跑；命令总数 **80**，
-  覆盖 125 方法/140 未映射（117 call），bridge 调用审计未实现 **113**，cargo test **21/21**。
+  Rust 测试完整 JSON/噪声尾行/空输出；**真机冒烟已补并实测通过 5.64s**——health.py 实际输出
+  `###RESULT {json}` 信封，原先纯 JSON 解析会失败，本轮已修正并兼容前缀；命令总数 **80**，
+  覆盖 125 方法/140 未映射（117 call），bridge 调用审计未实现 **113**，cargo test **21/21**（另有 1 个 ignored 真机测试）。
 - **T-117 曲库/设置共享 Electron 数据（重要）**：Rust 用 rusqlite 直读/写
   `%APPDATA%/FuFumidi/fufumidi/fufumidi.sqlite`（songs/playlists/kv），设置优先读 legacy
   settings.json；只读验收实测 **1972 首真实曲目**、57 个设置键、侧栏「全部曲目 1972」正常；

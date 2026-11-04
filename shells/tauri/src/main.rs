@@ -564,9 +564,12 @@ fn midi_root() -> PathBuf { data_dir().join("midi") }
 fn parse_health_json(stdout: &str) -> Option<serde_json::Value> {
     let t = stdout.trim();
     if t.is_empty() { return None; }
-    if let Ok(v) = serde_json::from_str::<serde_json::Value>(t) { return Some(v); }
+    // health.py 用 ###RESULT {json} 协议输出；也接受纯 JSON/最后一行 JSON。
+    let strip = |s: &str| s.trim().strip_prefix("###RESULT ").unwrap_or(s.trim()).to_string();
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&strip(t)) { return Some(v); }
     for line in t.lines().rev() {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(line.trim()) { return Some(v); }
+        let c = strip(line);
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&c) { return Some(v); }
     }
     None
 }
@@ -2181,6 +2184,16 @@ mod check_midi_tests {
         assert_eq!(v["report"]["report_text"], "x");
         assert_eq!(super::parse_health_json("noise\n{\"ok\":false}\n").unwrap()["ok"], false);
         assert!(super::parse_health_json("   ").is_none());
+        let p = super::parse_health_json("###RESULT {\"ok\": true, \"report\": {\"report_text\": \"real\"}}").unwrap();
+        assert_eq!(p["report"]["report_text"], "real");
+    }
+
+    #[test]
+    #[ignore]
+    fn real_health_command_smoke() {
+        let r = super::diag_health();
+        assert_eq!(r["ok"], true, "real health command failed: {}", r);
+        assert!(r["report"].is_object());
     }
 
     #[test]

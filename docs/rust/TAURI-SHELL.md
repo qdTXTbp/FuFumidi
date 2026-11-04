@@ -80,7 +80,7 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 | pick_cover | 选图片→data URL（png/jpeg/webp/bmp，≤6MB） | Rust 单测：jpeg MIME/base64、gif 拒绝、>6MB 拒绝；真实对话框不在无头会话触发 |
 | export_dawproject | DAWproject ZIP（project.xml/metadata.xml，≤200 文件，拒绝路径穿越，对话框或 filePath） | Rust 单测：两文件 ZIP 内容、../ 条目跳过、空列表拒绝 |
 | autostart_get / autostart_set | 通过 HKCU Run 注册项查询/设置开机自启 | Rust 单测：当前 exe 值加引号、查询返回布尔；**设置会写注册表，测试不调用** |
-| diag_health | 调用 engine/health.py --json，解析脱敏体检报告 | Rust 单测：完整 JSON/带噪声尾行/空输出；真实 Python 执行未在无头测试中跑 |
+| diag_health | 调用 engine/health.py --json，解析脱敏体检报告（兼容 ###RESULT 信封） | Rust 单测：###RESULT/纯 JSON/噪声尾行/空输出；另有 ignored 真机冒烟（实测 5.64s 通过） |
 | open_folder | 打开目录（仅目录） | 实际打开资源管理器不在无头会话触发 |
 | soundfont_list | 扫描 renderer/vendor/soundfonts + dataDir/soundfonts（sf2/sf3） | 开发树返回 GeneralUser.sf2 |
 | dep_check | Rust 启动 Python `deps.py check`，解析 `###RESULT` 的 groups | 返回 universal/piano/aria/muscriptor/separate/transkun 6 组 |
