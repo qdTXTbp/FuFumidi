@@ -93,7 +93,7 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 | wallpaper_set_desktop | 静态图片设为桌面：HKCU Desktop Wallpaper/WallpaperStyle/TileWallpaper + `rundll32 user32.dll,UpdatePerUserSystemParameters` | Rust 单测：注册表命令计划/路径；**测试不改真实桌面** |
 | plugins_list / rescan / set_enabled / open_dir | 调 engine/plugin_render.py list（--dir 来自 settings/env），按 settings.plugins_enabled 标 enabled；开关写 settings；打开插件目录 | Rust 单测：输出解析/启用映射、设置写入；真实 Python 插件列表未在测试中跑（手工无窗口跑过返回空列表） |
 | utau_list_voicebanks / voicebank_unified | 只读扫描 dataRoot/voicebanks（一层、三标记、character.yaml/txt 显示名）与 diffsinger-voicebanks（dsconfig 根/下一层、递归 size）；两侧独立容错 | Rust 单测：名称优先级/BOM/UTF-8 lossy/一层/缺根/dsconfig 根与一层/size/counts；dir_size 不再跟随 symlink（全仓生效） |
-| utau_read_oto / utau_save_oto | 读/写 voicebanks/<声库>/oto.ini：原始字节 base64、size/mtime；写前 .bak、8MB 上限、空内容拒绝；限制在 dataRoot/voicebanks 内 | Rust 单测：base64 宽容/往返、CJK、缺目录/缺 oto、备份两代、空/超大/根外拒绝 |
+| utau_read_oto / utau_save_oto | 读/写 voicebanks/<声库>/oto.ini：原始字节 base64、size/mtime；写前复制到同一个 oto.ini.bak（只保留上一代）、8MB 上限、空内容拒绝；限制在 dataRoot/voicebanks 内 | Rust 单测：base64 宽容/往返、CJK、缺目录/缺 oto、.bak 依次更新、空/超大/根外拒绝 |
 | sf_workshop_list / import / delete / open_dir | 从 main/soundfonts.js 生成 20 条静态注册表；核对 bundled/downloaded 体积、扫描自定义 SF2/SF3；导入/删除/打开目录 | Rust 单测：20 条注册表、bundled GeneralUser builtin、自定义扫描、导入/删除；下载仍未实现 |
 | probe | 复用 engine_probe 的 music2midi.py probe（桥此前调 probe 缺失命令） | 与 engine_probe 共用实现；无独立单测 |
 | model_delete | 按模型 id 删除 models/<dest>（目录/文件 + .oudep/.parts/.tmp/.part 残留）；RVC 删除暂未迁移 | Rust 单测：muscriptor/small 删除、未知 id/RVC 拒绝 |
