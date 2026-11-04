@@ -559,6 +559,21 @@ fn presets_restore() -> serde_json::Value {
 
 fn midi_root() -> PathBuf { data_dir().join("midi") }
 
+fn unix_to_iso(ts: u64) -> String {
+    let days = (ts / 86400) as i64;
+    let secs = (ts % 86400) as u64;
+    let z = days + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let mut y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = mp + if mp < 10 { 3 } else { -9 };
+    if m <= 2 { y += 1; }
+    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.000Z", y, m, d, secs / 3600, (secs % 3600) / 60, secs % 60)
+}
 fn sanitize_export_name(name: &str, ext: &str) -> String {
     let mut stem0 = name;
     if let Some((s, e)) = name.rsplit_once('.') {
@@ -591,7 +606,7 @@ fn write_export_at(dir: &Path, name: &str, ext: &str, bytes: &[u8], meta: &serde
     let manifest_path = dir.join(format!("{base}.manifest.json"));
     let manifest = serde_json::json!({
         "format": "fufumidi-export", "version": 1,
-        "createdAt": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
+        "createdAt": unix_to_iso(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)),
         "file": { "name": file_name, "size": bytes.len(), "sha256": hash, "path": target.display().to_string() },
         "audio": {
             "format": meta.get("format").and_then(|v| v.as_str()).unwrap_or("wav"),
@@ -2003,6 +2018,9 @@ mod check_midi_tests {
         let m: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(mp).unwrap()).unwrap();
         assert_eq!(m["format"], "fufumidi-export");
         assert_eq!(m["file"]["sha256"].as_str().unwrap().len(), 64);
+        assert!(m["createdAt"].as_str().unwrap().ends_with("Z"));
+        assert_eq!(super::unix_to_iso(0), "1970-01-01T00:00:00.000Z");
+        assert_eq!(super::unix_to_iso(1700000000), "2023-11-14T22:13:20.000Z");
         assert_eq!(m["audio"]["sampleRate"], 48000);
         assert_eq!(super::sanitize_export_name("a:b/c", "wav"), "a_b_c.wav");
         assert_eq!(super::write_export_at(&root, "empty", "wav", &[], &meta, "test")["ok"], false);
