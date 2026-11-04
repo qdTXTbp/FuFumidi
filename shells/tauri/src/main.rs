@@ -374,8 +374,9 @@ fn diag_export() -> serde_json::Value {
 }
 
 #[tauri::command]
-fn notify(_title: Option<String>, _body: Option<String>) -> serde_json::Value {
+fn notify(ev: Option<String>, payload: Option<serde_json::Value>) -> serde_json::Value {
     // 系统通知插件尚未接入；命令先返回成功，避免 UI 报错（不伪造通知行为）。
+    let _ = (ev, payload);
     serde_json::json!({ "ok": true, "delivered": false })
 }
 
