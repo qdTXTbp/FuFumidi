@@ -16,6 +16,7 @@ const items = [
   { id: 'views', label: '工作台', icon: 'viz' },
   { id: 'transcode', label: '创作', icon: 'convert' },
   { id: 'resources', label: '资源', icon: 'box' },
+  { id: 'piano3d', label: '3D', title: '3D 钢琴', icon: 'expand' }, // 独立页入口（2026-11-04）
 ];
 function go(id) { app.setView(id); }
 function openPalette() { state.ui.paletteOpen = true; }
@@ -33,7 +34,7 @@ function togglePlayerbar() { state.playerbarOpen = !state.playerbarOpen; }
     </button>
     <div class="rail-items">
       <button v-for="it in items" :key="it.id" class="rail-item" :class="{ on: active === it.id }"
-              :title="t(it.label)" :aria-label="t(it.label)" :aria-current="active === it.id ? 'page' : null" @click="go(it.id)">
+              :title="t(it.title || it.label)" :aria-label="t(it.title || it.label)" :aria-current="active === it.id ? 'page' : null" @click="go(it.id)">
         <Icon :name="it.icon" :size="20" />
         <span class="rail-label">{{ t(it.label) }}</span>
       </button>

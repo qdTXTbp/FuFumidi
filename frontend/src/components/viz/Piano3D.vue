@@ -444,7 +444,9 @@ onBeforeUnmount(() => {
 <style scoped>
 .p3d { position:relative; width:100%; height:100%; min-height:560px; display:flex; flex-direction:column; gap:var(--sp-2); overflow:hidden; border-radius:var(--r-sm); background:transparent; color:var(--text); }
 .p3d-canvas { position:relative; order:2; flex:1 1 auto; width:100%; min-height:420px; display:block; border-radius:var(--r-sm); background:var(--canvas); border:1px solid var(--hairline); }
-.p3d-top { position:relative; order:1; z-index:5; display:flex; align-items:center; gap:var(--sp-2); overflow-x:auto; white-space:nowrap; padding:2px 0; background:transparent; border:0; box-shadow:none; color:var(--text); }
+.p3d-top { position:relative; order:1; z-index:5; display:flex; align-items:center; gap:var(--sp-2); flex-wrap:wrap; row-gap:var(--sp-1); padding:2px 0; background:transparent; border:0; box-shadow:none; color:var(--text); }
+/* 宽屏单行（控制条像 DAW 一样横向排开）；窄屏换行，避免「刷新/MIDI 键盘」被裁到滚动区外看不见 */
+@media (min-width: 1280px) { .p3d-top { flex-wrap:nowrap; overflow-x:auto; white-space:nowrap; } }
 .p3d-sel { flex:0 0 auto; min-width:0; }
 .p3d-top b { flex:0 0 auto; font-size:var(--fs-md,13px); color:var(--text); } .p3d-sub { color:var(--text3); font-size:var(--fs-xs,11px); } .p3d-grow { flex:1 0 8px; }
 .p3d-rating { font-size:var(--fs-xs,11px); color:var(--text2); } .p3d-rating b { color:var(--accent-sky, #6cc7ff); font-size:var(--fs-md,15px); }

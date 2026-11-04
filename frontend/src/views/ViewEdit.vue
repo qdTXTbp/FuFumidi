@@ -42,7 +42,7 @@ import { encodeMidi } from '../core/midi.js';
 import { applyTake } from '../core/recorder.js';
 import { appSession } from '../core/session.js';
 import { commands as commandRegistry } from '../core/commands.js';
-import { timelineOfSong, formatBarBeat } from '../core/timeline.js';
+import { timelineOfSong, formatBarBeat, iterBars } from '../core/timeline.js';
 // P1-6 影视配乐：帧吸附 / 时间码 / 视频偏移
 import { FPS_PRESETS, timecodeOfTick, videoTimeForPlayhead } from '../core/frame_snap.js';
 // P1-12 任务模板：钢琴改编 / 乐队编曲 / 短视频 BGM（只改编辑偏好，不动曲目）
@@ -95,6 +95,9 @@ watch([frameSnapOn, videoFps, videoOffsetSec], () => {
   } catch (e) {}
 });
 const trackIndex = ref(0);
+/* 6.7 P-010：拍号编辑（应用到播放头所在小节；多小节变拍号写进 sigMap） */
+const sigNum = ref(4);
+const sigDen = ref(4);
 let focusLockUntil = 0;
 const timbre = ref(0);
 const zoomPct = ref(100);
@@ -171,6 +174,11 @@ const SNAPS = [
 ];
 
 const song = computed(() => (currentSong.value && currentSong.value.song) || null);
+const curSig = computed(() => {
+  const m = (song.value && song.value.sigMap) || [];
+  return m[0] || { num: 4, den: 4 };
+});
+watch(() => [curSig.value.num, curSig.value.den], ([n, d]) => { sigNum.value = n; sigDen.value = d; }, { immediate: true });
 
 /* P1-6：状态栏时间码统一走 frame_snap.timecodeOfTick（SMPTE 文件用文件 fps，否则用所选 fps） */
 const smpteText = computed(() => {
@@ -1874,6 +1882,28 @@ function moveTrack(dir) {
   reloadPlayerForTracks(s);
   try { editor.value?.notifyExternalEdit(); } catch (e) {}
 }
+function applyTimeSig() {
+  const s = song.value;
+  if (!s) { toast(t('请先打开一首曲目'), 'warn'); return; }
+  const num = Math.max(1, Math.min(16, Math.round(Number(sigNum.value) || 4)));
+  const den = [2, 4, 8, 16].indexOf(Number(sigDen.value)) >= 0 ? Number(sigDen.value) : 4;
+  const tick = Math.max(0, Number(editor.value?.playheadTick?.() || 0));
+  const tl = timelineOfSong(s);
+  let bar = { tick: 0, num, den };
+  try {
+    const bars = iterBars(tl, 0, Math.max(tick + 1, s.totalTicks || 0));
+    for (const b of bars) { if (b.tick <= tick) bar = b; else break; }
+  } catch (e) { bar = { tick: 0, num, den }; }
+  const start = Math.max(0, Number(bar.tick) || 0);
+  try { editor.value?.pushStateForTrack(-1, t('拍号')); } catch (e) {}
+  const list = (Array.isArray(s.sigMap) ? s.sigMap.slice() : []).filter((x) => Number(x.tick) !== start);
+  list.push({ tick: start, num, den });
+  if (!list.some((x) => Number(x.tick) === 0)) list.push({ tick: 0, num: 4, den: 4 });
+  list.sort((a, b) => Number(a.tick) - Number(b.tick));
+  s.sigMap = list;
+  try { editor.value?.notifyExternalEdit(); } catch (e) {}
+  toast(t('拍号已改为 ') + num + '/' + den + t('（只影响小节线，音符没动）'), 'ok');
+}
 
 /* ------------------------------------------------------------ 检查器宽度 / 折叠
  * ★ 右侧检查器固定 232px，占的是音符视图的宽度 —— 用户反馈「音符视图面积太小」。
@@ -2739,6 +2769,17 @@ onBeforeUnmount(() => {
               <select class="select-input" v-model.number="videoFps">
                 <option v-for="p in FPS_PRESETS" :key="p.fps" :value="p.fps">{{ p.label }}</option>
               </select></div>
+            <div class="insp-row" data-guide="sig-edit">
+              <span>{{ t('拍号') }}</span>
+              <select class="select-input" v-model.number="sigNum" data-guide="sig-num" style="width:52px" :title="t('拍号')">
+                <option v-for="n in 16" :key="n" :value="n">{{ n }}</option>
+              </select>
+              <span>/</span>
+              <select class="select-input" v-model.number="sigDen" data-guide="sig-den" style="width:58px" :title="t('拍号')">
+                <option v-for="d in [2, 4, 8, 16]" :key="d" :value="d">{{ d }}</option>
+              </select>
+              <button class="btn sm" data-guide="sig-apply" :title="t('应用到当前小节（播放头所在）')" @click="applyTimeSig">{{ t('应用') }}</button>
+            </div>
             <!-- P1-12 任务模板：一键把吸附/着色/CC 切到某类工作流 -->
             <div class="insp-row"><span>{{ t('任务模板') }}</span>
               <div class="tpl-chips">

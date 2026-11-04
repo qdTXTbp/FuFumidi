@@ -82,6 +82,13 @@ contextBridge.exposeInMainWorld('fuBridge', {
     ipcRenderer.on('engine:separate:progress', w);
     return () => ipcRenderer.removeListener('engine:separate:progress', w);
   },
+  // 6.5.0 智能分轨：分轨→逐 stem 转录→合并的阶段进度（main/task-queue.js 已发送，
+  // 之前 preload 没接，渲染层根本收不到 —— 这里补上订阅）
+  onStemProgress: (cb) => {
+    const w = (_e, p) => cb(p);
+    ipcRenderer.on('engine:stem-progress', w);
+    return () => ipcRenderer.removeListener('engine:stem-progress', w);
+  },
   // 设置
   getSettings: () => ipcRenderer.invoke('settings:load'),
   saveSettings: (s) => ipcRenderer.invoke('settings:save', s),

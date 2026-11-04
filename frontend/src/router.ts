@@ -8,6 +8,8 @@ const routes: RouteRecordRaw[] = [
   { path: '/lyrics', name: 'lyrics', component: () => import('./views/ViewLyrics.vue') },
   { path: '/edit', name: 'edit', component: () => import('./views/ViewEdit.vue') },
   { path: '/viz', name: 'viz', component: () => import('./views/ViewViz.vue') },
+  // 3D 钢琴独立页（2026-11-04：用户要求从可视化里独立出来）
+  { path: '/piano3d', name: 'piano3d', component: () => import('./views/ViewPiano3D.vue') },
   { path: '/analyze', name: 'analyze', component: () => import('./views/ViewAnalyze.vue') },
   { path: '/score', name: 'score', component: () => import('./views/ViewScore.vue') },
   { path: '/transcribe', name: 'transcribe', component: () => import('./views/ViewTranscribe.vue') },

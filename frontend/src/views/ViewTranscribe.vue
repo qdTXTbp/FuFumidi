@@ -27,6 +27,15 @@ const mode = ref('universal');           // universal | piano | separate
 // 6.5.0：智能分轨（通用识别内联，默认开；后端失败自动回退整曲）
 const stemEnhance = ref(true);
 const trackBudget = ref('auto');
+// 6.5.0 智能分轨：模型可用性 + 阶段进度（main 已发 engine:stem-progress，之前 preload 没接）
+const stemModels = ref([]);
+const stemStage = ref('');
+const stemPct = ref(0);
+const stemModelReady = computed(() => (stemModels.value || []).some((m) => m && m.exists));
+const stemModelName = computed(() => {
+  const hit = (stemModels.value || []).find((m) => m && m.exists) || (stemModels.value || [])[0];
+  return (hit && (hit.name || hit.id)) || 'HTDemucs4_6stems';
+});
 // 转录结果体检（analyzeQuality 写、长音修复读）——6.5.0 漏了声明，会让队列收尾抛
 // ReferenceError: quality is not defined（e2e transcribe-queue-chain 实测抓到）。
 const quality = ref(null);
@@ -152,6 +161,11 @@ async function refreshModelStatus() {
       for (const m of arr) {
         if (m && m.id) modelStatus[m.id] = !!m.exists;
       }
+      // 智能分轨候选模型（HTDemucs4_6stems / 4stems 等）：用于在智能分轨行标注是否已安装
+      stemModels.value = (arr || []).filter((m) => {
+        const s = String((m && (m.id || '')) + ' ' + (m && (m.outName || '')) + ' ' + (m && (m.name || '')));
+        return /htdemucs|6stems|4stems/i.test(s);
+      });
       // 音频处理可选模型（分离 + 修复·VR）：kind 为 separate（人声分离）或 other（修复·VR）均可选用
       const sepArr = (arr || []).filter(m => m.kind === 'separate' || m.kind === 'other').map(m => ({ ...m }));
       sepModels.value = sepArr;
@@ -1743,6 +1757,7 @@ async function runBatch() {
   try { window.__fufumidiRunningJobs = runningJobIds; } catch (e) {}
   const processOne = async (it, cfgBase, target) => {
     it.status = 'running'; it.progress = 0; it.realPct = 0; it.error = '';
+    stemStage.value = ''; stemPct.value = 0;
     it.startedAt = Date.now();
     it._etaMeasured = false; it._etaLastAt = 0; it._etaLastCompleted = 0;
     await decodeDuration(it);
@@ -2037,7 +2052,7 @@ async function openRefineResult() {
 }
 
 /* ---------------- 引擎日志 ---------------- */
-let offLog = null, offRefine = null, offModelProg = null, offSeparate = null, offSepProg = null;
+let offLog = null, offRefine = null, offModelProg = null, offSeparate = null, offSepProg = null, offStemProg = null;
 onMounted(() => {
   window.addEventListener('keydown', onDocKeydown);   // 模型选择抽屉：Esc 关闭
   loadQueue();
@@ -2086,6 +2101,16 @@ onMounted(() => {
   if (bridge && bridge.onSeparateLog) {
     offSeparate = bridge.onSeparateLog(p => { if (p && p.id === 'sep' + sepJobId.value && p.line) logSep(p.line); });
   }
+  if (bridge && bridge.onStemProgress) {
+    offStemProg = bridge.onStemProgress(p => {
+      if (!p || !p.id) return;
+      // 只接收当前批次/当前作业的分轨进度，避免旧队列残留
+      if (String(p.id) !== String(currentJobId.value) && String(p.id).indexOf('batch') !== 0) return;
+      if (p.text) stemStage.value = String(p.text);
+      if (p.stage === 'done') { stemPct.value = 100; }
+      else if (p.percent != null) stemPct.value = Math.max(0, Math.min(100, Math.round(Number(p.percent) || 0)));
+    });
+  }
   if (bridge && bridge.onSeparateProgress) {
     offSepProg = bridge.onSeparateProgress(p => {
       if (!p || p.id !== 'sep' + sepJobId.value || p.percent == null) return;
@@ -2123,6 +2148,7 @@ onBeforeUnmount(() => {
   if (offModelProg) { try { offModelProg(); } catch (e) {} offModelProg = null; }
   if (offSeparate) { try { offSeparate(); } catch (e) {} offSeparate = null; }
   if (offSepProg) { try { offSepProg(); } catch (e) {} offSepProg = null; }
+  if (offStemProg) { try { offStemProg(); } catch (e) {} offStemProg = null; }
 });
 </script>
 
@@ -2272,9 +2298,16 @@ onBeforeUnmount(() => {
         <div class="tr-stem-row">
           <label class="tr-stem-toggle"><input type="checkbox" v-model="stemEnhance"> {{ t('智能分轨（推荐）') }}</label>
           <span class="muted small tr-stem-hint">{{ t('自动分轨 + 固定音色；需先在资源中心安装 HTDemucs4_6stems，未安装会自动回退整曲') }}</span>
+          <span class="tr-stem-status">
+            <span class="fu-badge ms-badge" :class="stemModelReady ? 'ok' : 'miss'">{{ stemModelReady ? t('分轨模型已安装') : t('未安装分轨模型') }}</span>
+            <span class="muted small">{{ stemModelName }}</span>
+            <button v-if="!stemModelReady" class="link-btn" data-guide="stem-to-resources" @click="setView('resources')">{{ t('去资源中心下载') }}</button>
+            <span v-if="stemStage" class="muted small tr-stem-stage" data-guide="stem-stage">{{ stemStage }}<template v-if="stemPct"> · {{ stemPct }}%</template></span>
+          </span>
           <span style="flex:1"></span>
           <span class="muted small">{{ t('保留轨道') }}</span>
-          <select class="select-input" v-model="trackBudget" style="width:132px" :disabled="!stemEnhance">
+          <select class="select-input" v-model="trackBudget" style="width:132px" :disabled="!stemEnhance"
+                  :title="t('自动 = 6–12 轨，按音符数与置信度评分，核心角色（鼓/人声/贝斯）优先')">
             <option value="auto">{{ t('自动（建议 12 轨）') }}</option>
             <option value="6">{{ t('6 组') }}</option>
             <option value="12">{{ t('12 轨') }}</option>
@@ -3020,6 +3053,8 @@ onBeforeUnmount(() => {
 .tr-stem-row { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; margin-top: var(--sp-2); }
 .tr-stem-toggle { display: inline-flex; align-items: center; gap: var(--sp-1); flex: none; font-size: var(--fs-sm); color: var(--text); }
 .tr-stem-hint { flex: 1 1 100%; order: 4; min-width: 0; color: var(--text3); line-height: 1.45; }
+.tr-stem-status { flex: 1 1 100%; order: 5; display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.tr-stem-stage { color: var(--accent-sky); }
 .tr-stem-row .select-input { flex: none; }
 .tr-stem-row > span[style*="flex:1"] { flex: 1 1 40px; }
 </style>

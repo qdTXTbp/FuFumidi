@@ -168,6 +168,34 @@
 - E2E `edit-track-crud`：新建→改名→上移→删除→Ctrl+Z 恢复→Ctrl+Y 重做，断言直接读 song().tracks，全绿。
 - 验证：audit exit 0、test:ui 561/561、typecheck 0、build 通过、smoke/edit-basic/edit-track-crud 3/3。
 
+### 12.1 拍号编辑（P-010，同日）
+
+- EditorCanvas 快照同时记录/恢复 **sigMap**（此前只存 tempo），撤销改拍号不会丢。
+- 检查器「视图」页签新增：分子 1–16 / 分母 2·4·8·16 + 「应用」——
+  按**播放头所在小节**写入 sigMap（tick 0 替换默认拍号，其它 tick 插入变拍点），只改小节线不动音符。
+- E2E `edit-time-signature`：4/4 → 3/4 → Ctrl+Z 恢复，音符数不变，全绿。
+
+## 13. 3D 钢琴独立页（2026-11-04）
+
+- 用户要求：3D 钢琴从「可视化」里独立出来，不再作为 viz 的一个 tab。
+- 新增 `/piano3d` + `ViewPiano3D.vue`：页面头部（标题/副题/当前曲目/打开可视化/全屏）、全屏监听、
+  3D 场景占满剩余高度；主导航新增 3D 入口（rail「3D」，title「3D 钢琴」），VIEWS 注册进命令面板。
+- ViewViz 删除 3D 模式（按钮/组件/样式全部移除），只保留仪表盘/瀑布流。
+- Piano3D：修正 prop 约定（必须传 app.currentSong 包装对象，传裸 song 会一直显示"载入一首 MIDI"）；
+  控制条窄屏换行（≥1280 单行滚动），状态/评分/键位/录音/音游均保留。
+- E2E `piano3d-page`：独立路由可达、有全屏按钮、rail 有入口；可视化里不再有 3D tab/挂载。
+
+## 14. 智能分轨完善（2026-11-04）
+
+- 修掉一个真实断链：main/task-queue.js 一直在发 `engine:stem-progress`，但 **preload 从未订阅**；
+  新增 `onStemProgress`（preload + ipc.ts 类型），转录页实时显示分轨阶段/百分比。
+- 转录页智能分轨行新增：分轨模型状态（已安装/未安装 + 模型名 + 去资源中心下载）、
+  预算选择 tooltip（auto = 6–12 轨，按音符数/置信度评分，核心角色优先）、关闭开关时预算禁用。
+- 契约：preload 事件 29 → **30**，schema 重新生成、零漂移。
+- E2E `transcribe-stem-ui`：预算 5 档、状态徽标、开关联动禁用，全绿。
+
+## 15. 待收口（下一轮）
+
 ## 13. 待收口（下一轮）
 
 - Tauri POC（子代理 B）**已收口**：docs/rust/TAURI-POC.md。结论——外壳可行（cargo check 37s / build 44s；

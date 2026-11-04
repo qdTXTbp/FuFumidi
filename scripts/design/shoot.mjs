@@ -12,6 +12,7 @@ const VIEWS = [
   { hash: "#/home", name: "home", marker: "开始你的下一首" },
   { hash: "#/music", name: "music", marker: "MIDI 歌单" },
   { hash: "#/views", name: "views", marker: "可视化" },
+  { hash: "#/piano3d", name: "piano3d", marker: "3D 钢琴" },
   { hash: "#/resources", name: "resources", marker: "模型管理" },
   { hash: "#/edit", name: "edit", marker: "canvas" },
   { hash: "#/singer", name: "sing", marker: "演唱" },

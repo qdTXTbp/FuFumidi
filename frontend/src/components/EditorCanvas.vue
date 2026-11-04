@@ -274,6 +274,17 @@ function tempoRestore(s, arr) {
   tm.length = 0;
   for (const p of arr) tm.push({ ...p });
 }
+/** 拍号快照/恢复：多小节变拍号必须一起撤销（P-010） */
+function sigSnap() {
+  const s = song();
+  return (s && Array.isArray(s.sigMap)) ? s.sigMap.map((p) => ({ tick: p.tick, num: p.num, den: p.den })) : null;
+}
+function sigRestore(s, arr) {
+  if (!s || !arr) return;
+  if (!Array.isArray(s.sigMap)) s.sigMap = [];
+  s.sigMap.length = 0;
+  for (const p of arr) s.sigMap.push({ tick: p.tick, num: p.num, den: p.den });
+}
 /* 深拷贝 + 体积估算一次做完：和原来的 clone 一样只走一遍 stringify/parse，
    字符串长度就是载荷的 JSON 体量（快照里没有多字节文本，UTF-16 长度≈字节数，够预算用）。 */
 function cloneMeasured(v) {
@@ -290,12 +301,14 @@ function makeTrackSnapshot(ti, label) {
   const notes = cloneMeasured(tr.notes);
   const ccs = cloneMeasured(tr.ccs || []);
   const tempo = tempoSnap();
+  const sig = sigSnap();
   return {
     ti,
     tempo,
+    sig,
     notes: notes.value,
     ccs: ccs.value,
-    ...snapshotMeta(label, notes.bytes + ccs.bytes + (tempo ? tempo.length * 24 : 0), notes.value.length),
+    ...snapshotMeta(label, notes.bytes + ccs.bytes + (tempo ? tempo.length * 24 : 0) + (sig ? sig.length * 16 : 0), notes.value.length),
   };
 }
 /** 全量快照（ti = -1：跨轨 / 新增删除轨道的场景）。
@@ -317,12 +330,14 @@ function makeAllSnapshot(label) {
     meta.push({ name: t.name, program: t.program, ch: t.ch, isDrum: !!t.isDrum, index: t.index, events: events.value });
   }
   const tempo = tempoSnap();
+  const sig = sigSnap();
   return {
     ti: -1,
     tempo,
+    sig,
     all,
     meta,
-    ...snapshotMeta(label, bytes + (tempo ? tempo.length * 24 : 0), noteCount),
+    ...snapshotMeta(label, bytes + (tempo ? tempo.length * 24 : 0) + (sig ? sig.length * 16 : 0), noteCount),
   };
 }
 /** 恢复全量快照：重建 tracks 数组本身（增删轨也能撤销），而不是只回填音符。 */
@@ -346,6 +361,7 @@ function restoreAllSnapshot(st) {
   s.tracks.length = 0;
   s.tracks.push(...tracks);
   tempoRestore(s, st.tempo);
+  sigRestore(s, st.sig);
   selection.clear();
   afterEdit();
 }
@@ -444,6 +460,7 @@ function undo() {
   tr.notes = st.notes;
   tr.ccs = st.ccs || [];
   tempoRestore(song(), st.tempo);
+  sigRestore(song(), st.sig);
   selection.clear();
   afterEdit();
 }
@@ -459,6 +476,7 @@ function redo() {
   tr.notes = st.notes;
   tr.ccs = st.ccs || [];
   tempoRestore(song(), st.tempo);
+  sigRestore(song(), st.sig);
   selection.clear();
   afterEdit();
 }
@@ -2172,6 +2190,10 @@ function pushStateForTrack(ti, label) {
   redoStack.length = 0;
 }
 function notifyExternalEdit() { afterEdit(); }
+/** 播放头所在 tick（拍号编辑等需要"当前小节"的调用方用） */
+function playheadTick() {
+  try { const pl = getPlayer(); return pl && pl.currentTick ? pl.currentTick() : 0; } catch (e) { return 0; }
+}
 function resetView() { computeRange(); viewTick.value = 0; zoom.value = 1; fit(); }
 
 defineExpose({
@@ -2182,7 +2204,7 @@ defineExpose({
   selectAll, selectNone, selCount, selInfo,
   setSelVel, setSelBend, setSelMidi, setSelStart, setSelLen, applyVelCurve, replaceNotes, selNotes, selRef, selectNotes, applyDraft,
   toggleMute, setSelMuted, selMuted,
-  addPedal, delPedal, selSpan, addNote, deleteNotes, pushStateForTrack, notifyExternalEdit,
+  addPedal, delPedal, selSpan, addNote, deleteNotes, pushStateForTrack, notifyExternalEdit, playheadTick,
   // 参数化工具的实时预览（M2）
   beginPreview, previewing, previewCount, applyPreviewNow, commitPreview, cancelPreview,
   // 悬停工具条（M3）
