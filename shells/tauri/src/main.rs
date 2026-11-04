@@ -882,6 +882,19 @@ fn rvc_import_zip(path: String, opts: Option<serde_json::Value>) -> serde_json::
     rvc_import_zip_at(&rvc_root(), Path::new(&path), &opts.unwrap_or_else(|| serde_json::json!({})))
 }
 
+const RVC_CATALOG_JSON: &str = include_str!("../../../main/rvc-catalog.json");
+
+#[tauri::command]
+fn rvc_catalog() -> serde_json::Value {
+    match serde_json::from_str::<serde_json::Value>(RVC_CATALOG_JSON) {
+        Ok(v) => serde_json::json!({ "ok": true, "catalog": v }),
+        Err(e) => oto_err(&e.to_string()),
+    }
+}
+
+#[tauri::command]
+fn rvc_open_catalog_page(url: String) -> serde_json::Value { open_external(url) }
+
 fn data_root_overridden() -> bool {
     std::env::var("FUFUMIDI_DATA_ROOT").map(|p| !p.trim().is_empty()).unwrap_or(false)
 }
@@ -5922,5 +5935,17 @@ mod rvc_zip_tests {
         let bad = mkzip("Bad.zip", &[("readme.txt", b"none")]);
         assert_eq!(rvc_import_zip_at(&root, &bad, &serde_json::json!({}))["ok"], false);
         let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+mod rvc_catalog_tests {
+    #[test]
+    fn embedded_catalog_parses() {
+        let v: serde_json::Value = serde_json::from_str(super::RVC_CATALOG_JSON).unwrap();
+        assert!(v.get("models").and_then(|m| m.as_array()).map(|m| m.len()).unwrap_or(0) > 0);
+        let r = super::rvc_catalog();
+        assert_eq!(r["ok"], true);
+        assert!(r["catalog"]["models"].as_array().unwrap().len() > 0);
     }
 }
