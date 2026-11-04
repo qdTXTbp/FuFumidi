@@ -11,7 +11,7 @@
 //! list_midi_files / read_binary / save_binary + host_info / python_selfcheck / ping。
 
 use rusqlite::{params, Connection, OptionalExtension};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -557,6 +557,108 @@ fn presets_restore() -> serde_json::Value {
 }
 
 fn midi_root() -> PathBuf { data_dir().join("midi") }
+
+fn safe_asset_id(id: &str) -> bool {
+    (1..=64).contains(&id.chars().count()) && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+fn asset_ext(name: &str) -> String {
+    let ext = Path::new(name).extension().and_then(|x| x.to_str()).unwrap_or("");
+    let clean: String = ext.chars().filter(|c| c.is_ascii_alphanumeric()).take(12).collect();
+    if clean.is_empty() { "".to_string() } else { format!(".{}", clean.to_ascii_lowercase()) }
+}
+
+fn project_cache_dir(file: &Path) -> PathBuf {
+    let stem = file.file_stem().and_then(|x| x.to_str()).unwrap_or("project");
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in file.display().to_string().as_bytes() { h ^= *b as u64; h = h.wrapping_mul(0x100000001b3); }
+    data_dir().join("cache").join("project-assets").join(format!("{stem}-{h:016x}"))
+}
+
+fn project_save_to(target: &Path, json: &serde_json::Value, assets: &[serde_json::Value]) -> serde_json::Value {
+    if let Some(parent) = target.parent() { let _ = std::fs::create_dir_all(parent); }
+    let file = match std::fs::File::create(target) { Ok(f) => f, Err(e) => return serde_json::json!({ "ok": false, "error": e.to_string() }) };
+    let mut zip = zip::ZipWriter::new(file);
+    let opts = zip::write::SimpleFileOptions::default();
+    if let Err(e) = zip.start_file("project.json", opts) { return serde_json::json!({ "ok": false, "error": e.to_string() }); }
+    let text = serde_json::to_string_pretty(json).unwrap_or_else(|_| "{}".to_string());
+    if let Err(e) = zip.write_all(text.as_bytes()) { return serde_json::json!({ "ok": false, "error": e.to_string() }); }
+    let mut missing: Vec<String> = Vec::new();
+    for a in assets {
+        let id = a.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let name = a.get("fileName").and_then(|v| v.as_str()).unwrap_or("asset");
+        if !safe_asset_id(id) { missing.push(name.to_string()); continue; }
+        let src = a.get("srcPath").and_then(|v| v.as_str()).unwrap_or("");
+        if src.is_empty() || !Path::new(src).is_file() { missing.push(name.to_string()); continue; }
+        let bytes = match std::fs::read(src) { Ok(b) => b, Err(_) => { missing.push(name.to_string()); continue; } };
+        let entry = format!("files/{}{}", id, asset_ext(name));
+        if let Err(e) = zip.start_file(entry, opts) { return serde_json::json!({ "ok": false, "error": e.to_string() }); }
+        if let Err(e) = zip.write_all(&bytes) { return serde_json::json!({ "ok": false, "error": e.to_string() }); }
+    }
+    if let Err(e) = zip.finish() { return serde_json::json!({ "ok": false, "error": e.to_string() }); }
+    serde_json::json!({ "ok": true, "filePath": target.display().to_string(), "missing": missing })
+}
+
+fn project_open_from(target: &Path) -> serde_json::Value {
+    let file = match std::fs::File::open(target) { Ok(f) => f, Err(e) => return serde_json::json!({ "ok": false, "error": e.to_string() }) };
+    let mut zip = match zip::ZipArchive::new(file) { Ok(z) => z, Err(e) => return serde_json::json!({ "ok": false, "error": e.to_string() }) };
+    if zip.len() > 4096 { return serde_json::json!({ "ok": false, "error": "too many entries" }); }
+    let mut total: u64 = 0;
+    for i in 0..zip.len() {
+        if let Ok(e) = zip.by_index(i) { total += e.size(); }
+        if total > 4 * 1024 * 1024 * 1024 { return serde_json::json!({ "ok": false, "error": "project too large" }); }
+    }
+    let mut json = serde_json::Value::Null;
+    {
+        let mut entry = match zip.by_name("project.json") { Ok(e) => e, Err(_) => return serde_json::json!({ "ok": false, "error": "missing project.json" }) };
+        let mut text = String::new();
+        if entry.read_to_string(&mut text).is_err() { return serde_json::json!({ "ok": false, "error": "project.json unreadable" }); }
+        json = match serde_json::from_str(&text) { Ok(j) => j, Err(e) => return serde_json::json!({ "ok": false, "error": e.to_string() }) };
+    }
+    let dir = project_cache_dir(target);
+    let _ = std::fs::create_dir_all(&dir);
+    let allowed: std::collections::BTreeSet<String> = json.get("assets").and_then(|v| v.as_object()).map(|o| o.keys().filter(|k| safe_asset_id(k)).map(|k| k.to_ascii_lowercase()).collect()).unwrap_or_default();
+    let mut resolved = serde_json::Map::new();
+    for i in 0..zip.len() {
+        let mut entry = match zip.by_index(i) { Ok(e) => e, Err(_) => continue };
+        let name = entry.name().replace('\\', "/");
+        if name.contains("..") || name.starts_with('/') { continue; }
+        let Some(rest) = name.strip_prefix("files/") else { continue; };
+        let (id, ext) = match rest.find('.') { Some(pos) => (&rest[..pos], &rest[pos..]), None => (rest, "") };
+        if !safe_asset_id(id) || !allowed.contains(&id.to_ascii_lowercase()) { continue; }
+        let clean_ext: String = ext.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '.').collect();
+        let dest = dir.join(format!("{id}{clean_ext}"));
+        let mut out = match std::fs::File::create(&dest) { Ok(f) => f, Err(_) => continue };
+        if std::io::copy(&mut entry, &mut out).is_ok() { resolved.insert(id.to_string(), serde_json::json!(dest.display().to_string())); }
+    }
+    serde_json::json!({ "ok": true, "filePath": target.display().to_string(), "json": json, "resolved": resolved, "cacheDir": dir.display().to_string() })
+}
+
+#[tauri::command]
+fn project_save(app: AppHandle, payload: serde_json::Value) -> serde_json::Value {
+    let json = payload.get("json").cloned().unwrap_or(serde_json::Value::Null);
+    if !json.is_object() { return serde_json::json!({ "ok": false, "error": "没有可保存的工程数据" }); }
+    let mut target = payload.get("filePath").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    if target.is_empty() {
+        let suggest = payload.get("suggestName").and_then(|v| v.as_str()).unwrap_or("untitled");
+        let picked = app.dialog().file().set_title("保存工程").set_file_name(format!("{suggest}.fufumidi")).add_filter("FuFumidi 工程", &["fufumidi"]).blocking_save_file();
+        target = match picked.and_then(|p| p.into_path().ok()) { Some(p) => p.display().to_string(), None => return serde_json::json!({ "ok": false, "cancelled": true }) };
+    }
+    if !target.to_ascii_lowercase().ends_with(".fufumidi") { target.push_str(".fufumidi"); }
+    let assets = payload.get("assets").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    project_save_to(Path::new(&target), &json, &assets)
+}
+
+#[tauri::command]
+fn project_open(app: AppHandle, file_path: Option<String>) -> serde_json::Value {
+    let mut target = file_path.unwrap_or_default();
+    if target.is_empty() {
+        let picked = app.dialog().file().set_title("打开工程").add_filter("FuFumidi 工程", &["fufumidi"]).blocking_pick_file();
+        target = match picked.and_then(|p| p.into_path().ok()) { Some(p) => p.display().to_string(), None => return serde_json::json!({ "ok": false, "cancelled": true }) };
+    }
+    project_open_from(Path::new(&target))
+}
+
 
 fn base64_encode(bytes: &[u8]) -> String {
     const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -1555,7 +1657,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, db_kv_get, db_kv_set,
-            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, model_list,
+            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
@@ -1588,6 +1690,28 @@ mod check_midi_tests {
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    #[test]
+    fn project_zip_roundtrip() {
+        let root = tmpdir("project-zip");
+        let asset = root.join("track.wav");
+        std::fs::write(&asset, b"RIFFdata").unwrap();
+        let target = root.join("song.fufumidi");
+        let json = serde_json::json!({ "assets": { "a1": { "name": "track.wav" } }, "tracks": [] });
+        let assets = vec![serde_json::json!({ "id": "a1", "fileName": "track.wav", "srcPath": asset.display().to_string() }), serde_json::json!({ "id": "bad id", "fileName": "x.wav", "srcPath": asset.display().to_string() })];
+        let saved = super::project_save_to(&target, &json, &assets);
+        assert_eq!(saved["ok"], true);
+        assert_eq!(saved["missing"].as_array().unwrap().len(), 1, "bad id reported");
+        assert!(target.exists());
+        let opened = super::project_open_from(&target);
+        assert_eq!(opened["ok"], true);
+        assert_eq!(opened["json"]["assets"]["a1"]["name"], "track.wav");
+        let p = opened["resolved"]["a1"].as_str().unwrap();
+        assert_eq!(std::fs::read(p).unwrap(), b"RIFFdata");
+        let no = super::project_open_from(&root.join("nope.fufumidi"));
+        assert_eq!(no["ok"], false);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

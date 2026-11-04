@@ -5,10 +5,10 @@
 | 指标 | 数值 |
 |---|---:|
 | preload 暴露方法 | 265 |
-| Tauri 桥已映射方法 | 114 |
-| 尚未映射 | **151** |
+| Tauri 桥已映射方法 | 115 |
+| 尚未映射 | **150** |
 | preload IPC invoke 通道 | 250 |
-| Tauri call 通道 | 105 |
+| Tauri call 通道 | 107 |
 
 ## 缺口分类
 
@@ -21,8 +21,8 @@
 | 导出/渲染 | 14 |
 | 资源/音频/扩展 | 13 |
 | rvc | 12 |
-| 文件/诊断 | 8 |
 | gpu/运行时增强 | 8 |
+| 文件/诊断 | 7 |
 | 事件/窗口 | 7 |
 | 更新/测速 | 6 |
 | 曲库/数据 | 5 |
@@ -111,7 +111,6 @@ onTrayControl
 onUpdate
 onUpdateSpeedtest
 onVoicebankProgress
-open
 openFolder
 openPlatform
 pathForFile

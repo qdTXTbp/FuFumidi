@@ -332,6 +332,10 @@
 - **Tauri 资产复制/打开目录**：`copy_asset`（分轨导出资产复制，自动建父目录）、`open_folder`
   （仅目录）；桥补 project.copyAsset；Rust 测试复制字节/源缺失；命令总数 **68**，覆盖 114 方法/
   151 未映射（105 call）。
+- **Tauri 工程保存/打开（.fufumidi ZIP）**：`project_save/project_open`（project.json + files/，
+  对话框或指定路径；条目数≤4096、总解压≤4GB、拒绝绝对路径/..，只解压 json.assets 白名单资产）；
+  桥补 project.save/open；Rust 测试写包→读包、资产字节一致、非法 id 进 missing。命令总数 **70**，
+  覆盖 115 方法/150 未映射（107 call）。无头未验证真实对话框流程。
 - **T-117 曲库/设置共享 Electron 数据（重要）**：Rust 用 rusqlite 直读/写
   `%APPDATA%/FuFumidi/fufumidi/fufumidi.sqlite`（songs/playlists/kv），设置优先读 legacy
   settings.json；只读验收实测 **1972 首真实曲目**、57 个设置键、侧栏「全部曲目 1972」正常；

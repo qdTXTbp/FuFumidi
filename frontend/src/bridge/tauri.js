@@ -142,6 +142,8 @@ export function installTauriBridge() {
     getVersion: () => call('app_version'),
     dataRoot: () => call('data_root'),
     project: {
+      save: (payload) => call('project_save', { payload }),
+      open: (filePath) => call('project_open', { filePath }),
       copyAsset: (payload) => call('copy_asset', { src: payload && payload.src, dest: payload && payload.dest }),
       autosaveWrite: (payload) => call('autosave_write', { payload }),
       autosaveList: () => call('autosave_list'),
