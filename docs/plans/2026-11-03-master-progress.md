@@ -572,3 +572,5 @@
 - **分离进度 id**：separate_audio 的 engine:separate:progress 补 `id`（sepN），ViewTranscribe 的 currentJob 过滤才会接收；cargo **118/118 + 1 ignored**。
 
 - **158 命令 release（分离进度 id）**：2m24s、0 warning；host/engine self-check 通过；无窗口/残留。
+
+- **一键验收脚本**：`npm run tauri:acceptance` / `-- --quick`；quick 实测 ok:true（typecheck/audit/test:ui/video/cover/separate smoke/cargo）。

@@ -175,3 +175,9 @@ Tauri 默认从 GitHub 下载 `nsis-3.13.zip`，本机直连超时。已把工�
 - 补 SEPARATE progress id 后 release 构建 2m24s、**0 warning**；
 - host/engine self-check 通过（embedded renderer / warm=1 / 无残留）；
 - 含 separate/UM/cover/video/plugin/tasks；真实分离推理未跑。
+
+## 24. 一键验收脚本
+
+- `npm run tauri:acceptance`：typecheck → audit → test:ui → 隐藏 E2E → 视频/cover/separate smoke → cargo test → release build → host/engine self-check；
+- `npm run tauri:acceptance -- --quick`：跳过 E2E/release，保留 typecheck/audit/test:ui/smoke/cargo test；
+- 实测 quick **ok:true**，全步骤无窗口。

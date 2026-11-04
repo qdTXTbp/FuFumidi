@@ -72,6 +72,8 @@
 
 ## 5. 验收建议（不弹窗）
 
+- 一键：`npm run tauri:acceptance`（完整）或 `npm run tauri:acceptance -- --quick`（低成本）；
+
 ```powershell
 cd E:\Midi\FuFumidi-Source
 node scripts/e2e/run.mjs                    # 隐藏窗口 40/40
