@@ -6,9 +6,9 @@
 | 指标 | 数值 |
 |---|---:|
 | 前端调用的 bridge 方法（去重） | 212 |
-| Tauri 顶层方法 | 103 |
+| Tauri 顶层方法 | 104 |
 | Tauri 嵌套方法 | 50 |
-| **未找到实现** | **98** |
+| **未找到实现** | **97** |
 
 ## 未找到实现的方法
 
@@ -95,7 +95,6 @@
 - `utauDownloadVoicebank` — frontend/src/components/utau/UtauVoicebankStore.vue
 - `utauExportVoicebank` — frontend/src/views/ViewVoicebank.vue
 - `utauExportVoicebankZip` — frontend/src/views/ViewVoicebank.vue
-- `utauImportVoicebankZip` — frontend/src/components/utau/UtauVoicebankStore.vue
 - `utauRenderTrack` — frontend/src/components/sing/VoicebankPanel.vue
 - `utauVoicebankRegistry` — frontend/src/components/utau/UtauVoicebankStore.vue
 - `videoExportAbort` — frontend/src/views/ViewConvert.vue

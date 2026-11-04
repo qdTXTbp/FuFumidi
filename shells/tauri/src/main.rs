@@ -432,6 +432,83 @@ fn utau_delete_voicebank(voicebank: Option<String>) -> serde_json::Value {
     utau_delete_voicebank_at(&data_dir().join("voicebanks"), voicebank.as_deref())
 }
 
+fn utau_safe_name(name: &str) -> String {
+    let mut out = String::new();
+    for ch in name.chars() {
+        if ch.is_control() || matches!(ch, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { out.push('_'); } else { out.push(ch); }
+    }
+    let t = out.trim().trim_matches('.');
+    if t.is_empty() { format!("voicebank_{}", std::process::id()) } else { t.to_string() }
+}
+
+fn utau_find_bank_root(dir: &Path, depth: u32) -> Option<PathBuf> {
+    if depth > 4 { return None; }
+    if utau_is_bank_root(dir) || dir.join("oto.ini").is_file() { return Some(dir.to_path_buf()); }
+    let entries = std::fs::read_dir(dir).ok()?;
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.is_dir() { if let Some(found) = utau_find_bank_root(&p, depth + 1) { return Some(found); } }
+    }
+    None
+}
+
+fn utau_unique_dest(root: &Path, base: &str) -> PathBuf {
+    let mut dest = root.join(base);
+    let mut i = 2;
+    while dest.exists() { dest = root.join(format!("{base}_{i}")); i += 1; }
+    dest
+}
+
+fn utau_import_zip_at(root: &Path, archive: &Path) -> serde_json::Value {
+    let ext = archive.extension().and_then(|x| x.to_str()).unwrap_or("").to_ascii_lowercase();
+    if ext != "zip" { return oto_err("只支持 .zip 声库压缩包"); }
+    if !archive.is_file() { return oto_err("压缩包不存在"); }
+    let _ = std::fs::create_dir_all(root);
+    let uniq = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let tmp = std::env::temp_dir().join(format!("fufumidi-utau-{}-{uniq}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let _ = std::fs::create_dir_all(&tmp);
+    let result = (|| -> Result<serde_json::Value, String> {
+        let file = std::fs::File::open(archive).map_err(|e| e.to_string())?;
+        let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+        if zip.len() > 20000 { return Err("压缩包条目过多".to_string()); }
+        let mut total: u64 = 0;
+        for i in 0..zip.len() {
+            let mut e = zip.by_index(i).map_err(|e| e.to_string())?;
+            let name = e.name().replace('\\', "/");
+            if name.is_empty() || name.contains("..") || name.starts_with('/') { continue; }
+            total += e.size();
+            if total > 4 * 1024 * 1024 * 1024 { return Err("压缩包解压后过大（>4GB）".to_string()); }
+            let dest = tmp.join(&name);
+            if e.is_dir() { let _ = std::fs::create_dir_all(&dest); continue; }
+            if let Some(parent) = dest.parent() { std::fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
+            let mut out = std::fs::File::create(&dest).map_err(|e| e.to_string())?;
+            std::io::copy(&mut e, &mut out).map_err(|e| e.to_string())?;
+        }
+        let src = utau_find_bank_root(&tmp, 0).ok_or_else(|| "压缩包内没有找到声库（character.txt/character.yaml/oto.ini）".to_string())?;
+        let base = utau_safe_name(archive.file_stem().and_then(|x| x.to_str()).unwrap_or("voicebank"));
+        let dest = utau_unique_dest(root, &base);
+        copy_tree(&src, &dest).map_err(|e| e.to_string())?;
+        if !dest.join("character.txt").exists() && !dest.join("character.yaml").exists() && dest.join("oto.ini").exists() {
+            let _ = std::fs::write(dest.join("character.txt"), "\n");
+            let _ = std::fs::write(dest.join("character.yaml"), "textFileEncoding: utf-8\n");
+        }
+        let name = { let n = utau_bank_display_name(&dest); if n.is_empty() { dest.file_name().and_then(|x| x.to_str()).unwrap_or("voicebank").to_string() } else { n } };
+        Ok(serde_json::json!({ "ok": true, "name": name, "dir": oto_path_text(&dest) }))
+    })();
+    let _ = std::fs::remove_dir_all(&tmp);
+    result.unwrap_or_else(|e| oto_err(&e))
+}
+
+#[tauri::command]
+fn utau_import_voicebank_zip(app: AppHandle) -> serde_json::Value {
+    let picked = app.dialog().file().set_title("导入 UTAU 声库压缩包").add_filter("UTAU 声库", &["zip"]).blocking_pick_file();
+    match picked.and_then(file_path_string) {
+        Some(p) => utau_import_zip_at(&data_dir().join("voicebanks"), Path::new(&p)),
+        None => serde_json::json!({ "ok": false, "canceled": true }),
+    }
+}
+
 fn data_root_overridden() -> bool {
     std::env::var("FUFUMIDI_DATA_ROOT").map(|p| !p.trim().is_empty()).unwrap_or(false)
 }
@@ -3771,7 +3848,7 @@ fn main() {
             pick_file, pick_directory, pick_audio, pick_audio_files, pick_image, pick_music_xml,
             list_midi_files, list_audio_files, library_stats, read_soundfont, read_binary, save_binary,
             convert, probe, refine, cancel, set_transcribe_pause, engine_worker_status,
-            utau_list_voicebanks, voicebank_unified, utau_read_oto, utau_save_oto, utau_delete_voicebank
+            utau_list_voicebanks, voicebank_unified, utau_read_oto, utau_save_oto, utau_delete_voicebank, utau_import_voicebank_zip
         ])
         .setup(|_app| {
             println!("[fufumidi-shell] {}", serde_json::to_string(&host_info_json()).unwrap_or_default());
@@ -5198,6 +5275,60 @@ mod oto_tests {
         let r = utau_save_oto_at(&root, Some(bank.to_str().unwrap()), Some(&oto_b64_encode(&raw)));
         assert_eq!(r["ok"], false, "{}", r);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+
+    #[test]
+    fn import_zip_bank_nested_traversal_and_duplicate() {
+        use super::{utau_import_zip_at, utau_list_voicebanks_at};
+        use std::io::Write as _;
+        let root = tmpdir("import-root");
+        let outside = tmpdir("import-outside");
+        let mkzip = |name: &str, entries: &[(&str, &[u8])]| {
+            let p = root.join(name);
+            let f = std::fs::File::create(&p).unwrap();
+            let mut z = zip::ZipWriter::new(f);
+            let opt = zip::write::SimpleFileOptions::default();
+            for (n, b) in entries { z.start_file(*n, opt).unwrap(); z.write_all(b).unwrap(); }
+            z.finish().unwrap();
+            p
+        };
+        let z1 = mkzip("Bank One.zip", &[
+            ("Bank/character.txt", b"name=Imported\n"),
+            ("Bank/oto.ini", b"a=oto\n"),
+        ]);
+        let r = utau_import_zip_at(&root, &z1);
+        assert_eq!(r["ok"], true, "{}", r);
+        let dir1 = r["dir"].as_str().unwrap().to_string();
+        assert!(dir1.ends_with("Bank One"));
+        assert_eq!(r["name"], "Imported");
+        let list = utau_list_voicebanks_at(&root);
+        assert_eq!(list["list"].as_array().unwrap().len(), 1);
+
+        let r2 = utau_import_zip_at(&root, &z1);
+        assert_eq!(r2["ok"], true);
+        assert!(r2["dir"].as_str().unwrap().ends_with("Bank One_2"));
+
+        let z3 = mkzip("Evil.zip", &[
+            ("../evil.txt", b"evil"),
+            ("voice/character.yaml", b"name: EvilBank\n"),
+            ("voice/oto.ini", b"x=1\n"),
+        ]);
+        let r3 = utau_import_zip_at(&root, &z3);
+        assert_eq!(r3["ok"], true, "{}", r3);
+        assert!(!outside.join("evil.txt").exists());
+        assert!(r3["dir"].as_str().unwrap().ends_with("Evil"));
+
+        let z4 = mkzip("Bare.zip", &[("oto.ini", b"a=1\n")]);
+        let r4 = utau_import_zip_at(&root, &z4);
+        assert_eq!(r4["ok"], true, "{}", r4);
+        let d4 = std::path::PathBuf::from(r4["dir"].as_str().unwrap());
+        assert!(d4.join("character.txt").exists() && d4.join("character.yaml").exists());
+
+        let z5 = mkzip("NoBank.zip", &[("readme.txt", b"none")]);
+        assert_eq!(utau_import_zip_at(&root, &z5)["ok"], false);
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(outside);
     }
 
     #[test]
