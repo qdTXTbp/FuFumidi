@@ -5,14 +5,12 @@
 
 | 指标 | 数值 |
 |---|---:|
-| Rust command | 96 |
+| Rust command | 97 |
 | bridge call | 128 |
-| 参数不一致 | 39 |
+| 参数不一致 | 38 |
 
 ## 不一致列表
 
-- file_assoc（Rust 未找到命令）
-  - bridge 多参数: enabled
 - pick_file
   - bridge 多参数: filters
 - sf_workshop_list（Rust 未找到命令）

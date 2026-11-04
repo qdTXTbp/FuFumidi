@@ -562,6 +562,54 @@ fn presets_restore() -> serde_json::Value {
 
 fn midi_root() -> PathBuf { data_dir().join("midi") }
 
+fn file_assoc_icon() -> String {
+    if let Some(d) = dev_root() {
+        let ico = d.join("build/icon.ico");
+        if ico.exists() { return format!("\"{}\"", ico.display()); }
+    }
+    let exe = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default();
+    format!("\"{exe}\"")
+}
+
+fn file_assoc_plan(enabled: bool) -> Vec<Vec<String>> {
+    let exe = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default();
+    let prog = "FuFumidi.MIDI";
+    let hkcu = "HKCU\\Software\\Classes";
+    if enabled {
+        vec![
+            vec!["add".into(), format!("{hkcu}\\{prog}\\shell\\open\\command"), "/ve".into(), "/d".into(), format!("\"{exe}\" \"%1\""), "/f".into()],
+            vec!["add".into(), format!("{hkcu}\\{prog}\\DefaultIcon"), "/ve".into(), "/d".into(), file_assoc_icon(), "/f".into()],
+            vec!["add".into(), format!("{hkcu}\\.mid"), "/ve".into(), "/d".into(), prog.into(), "/f".into()],
+            vec!["add".into(), format!("{hkcu}\\.midi"), "/ve".into(), "/d".into(), prog.into(), "/f".into()],
+        ]
+    } else {
+        vec![
+            vec!["delete".into(), format!("{hkcu}\\.mid"), "/f".into()],
+            vec!["delete".into(), format!("{hkcu}\\.midi"), "/f".into()],
+            vec!["delete".into(), format!("{hkcu}\\{prog}"), "/f".into()],
+        ]
+    }
+}
+
+#[tauri::command]
+fn file_assoc(enabled: bool) -> serde_json::Value {
+    #[cfg(target_os = "windows")]
+    {
+        let mut failed = 0;
+        for args in file_assoc_plan(enabled) {
+            match Command::new("reg.exe").args(&args).creation_flags(0x08000000).output() {
+                Ok(o) if o.status.success() => {}
+                _ => failed += 1,
+            }
+        }
+        if failed == 0 { serde_json::json!({ "ok": true, "enabled": enabled }) }
+        else { serde_json::json!({ "ok": false, "enabled": enabled, "error": format!("{failed} registry commands failed") }) }
+    }
+    #[cfg(not(target_os = "windows"))]
+    { serde_json::json!({ "ok": false, "reason": "unsupported" }) }
+}
+
+
 fn wallpaper_scan_folder_at(dir: &Path) -> serde_json::Value {
     if !dir.is_dir() { return serde_json::json!({ "ok": false, "error": "文件夹不存在" }); }
     let mut out: Vec<serde_json::Value> = Vec::new();
@@ -2591,7 +2639,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, db_kv_get, db_kv_set,
-            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, model_list,
+            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
@@ -2632,6 +2680,18 @@ mod check_midi_tests {
         assert_eq!(super::save_binary_bytes(&serde_json::json!({ "data": [1,2] })), vec![1,2]);
         assert_eq!(super::save_binary_bytes(&serde_json::json!({ "bytes": "ab" })), b"ab".to_vec());
         assert!(super::save_binary_bytes(&serde_json::json!({})).is_empty());
+    }
+
+    #[test]
+    fn file_assoc_plan_shape() {
+        let on = super::file_assoc_plan(true);
+        assert_eq!(on.len(), 4);
+        assert!(on[0].join(" ").contains("FuFumidi.MIDI"));
+        assert!(on.iter().any(|a| a.iter().any(|x| x.contains(".mid"))));
+        let off = super::file_assoc_plan(false);
+        assert_eq!(off.len(), 3);
+        assert_eq!(off[0][0], "delete");
+        assert!(super::file_assoc_icon().ends_with('"'));
     }
 
     #[test]
