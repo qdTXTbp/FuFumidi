@@ -740,6 +740,11 @@ fn db_playlists_list() -> Vec<serde_json::Value> {
 }
 
 #[tauri::command]
+fn db_playlists_delete(id: String) -> bool {
+    open_db().map(|conn| conn.execute("DELETE FROM playlists WHERE id = ?1", params![id]).is_ok()).unwrap_or(false)
+}
+
+#[tauri::command]
 fn db_playlists_put(item: serde_json::Value) -> bool {
     let id = item.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
     if id.is_empty() { return false; }
@@ -1171,7 +1176,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, db_kv_get, db_kv_set,
-            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, check_midi, delete_midi, rename_midi, wallpaper_defaults, model_list,
+            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, delete_midi, rename_midi, wallpaper_defaults, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
@@ -1197,12 +1202,27 @@ fn main() {
 #[cfg(test)]
 mod check_midi_tests {
     use super::check_midi_items;
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn tmpdir(tag: &str) -> std::path::PathBuf {
         let p = std::env::temp_dir().join(format!("fufumidi-checkmidi-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    #[test]
+    fn playlist_crud_roundtrip() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let root = tmpdir("playlist-crud");
+        std::env::set_var("FUFUMIDI_DATA_ROOT", &root);
+        assert_eq!(super::db_playlists_put(serde_json::json!({ "id": "p1", "name": "PL", "songIds": ["a"] })), true);
+        let list = super::db_playlists_list();
+        assert!(list.iter().any(|p| p["id"] == "p1" && p["songIds"][0] == "a"));
+        assert_eq!(super::db_playlists_delete("p1".to_string()), true);
+        assert!(!super::db_playlists_list().iter().any(|p| p["id"] == "p1"));
+        std::env::remove_var("FUFUMIDI_DATA_ROOT");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1225,6 +1245,7 @@ mod check_midi_tests {
 
     #[test]
     fn delete_rename_roundtrip() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let root = tmpdir("library-ops");
         std::env::set_var("FUFUMIDI_DATA_ROOT", &root);
         let midi = root.join("midi");

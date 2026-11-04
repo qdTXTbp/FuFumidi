@@ -57,7 +57,7 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 | pick_file / pick_directory / pick_audio / pick_audio_files / pick_image / pick_music_xml | 原生文件/目录对话框（tauri-plugin-dialog 2.8.4，Rust 直接调用） | 实弹验收：打开 pick_file 后 PowerShell 发 Esc，Promise 解析为 null（dialog-check.mjs）；选文件仍可人工复验 |
 | model_list | 13 个核心模型条目（basic/piano/hft/MuScriptor×3/yourmt3/miros/aria/beat_this/audio_tagger/hnsep/HTDemucs4_6stems）；exists 按 models 目录真实大小判断 | smoke 断言 13 条、id 齐全、含 separate 条目 |
 | db_status / db_songs_list / db_songs_put / db_songs_delete | **共享 Electron SQLite**（legacy `fufumidi.sqlite`；测试态用 dataRoot 独立库），按 id upsert/删除 | smoke 往返通过；真实库只读验收读到 **1972 首** |
-| db_playlists_list / db_playlists_put | 同一 SQLite 的 playlists 表 | 默认歌单 + smoke-pl 出现 |
+| db_playlists_list / db_playlists_put / db_playlists_delete | 同一 SQLite 的 playlists 表 | smoke 默认歌单 + smoke-pl；Rust 单测 put/list/delete 往返 |
 | db_kv_get / db_kv_set | 同一 SQLite 的 kv 表 | smoke 写 {a:1} → 读回 |
 | check_midi | 与 Electron library:checkMidi 同语义：只认数据根 midi/ 内、非空文件，返回 missing | Rust 单测：根内文件保留、缺失/根外文件进 missing |
 | wallpaper_defaults | 扫描桌面 mp4/webm/mov，最多 4 个、按名排序 | Rust 单测：排序/截断/扩展名过滤 |
@@ -166,7 +166,16 @@ worker running=true seq=1；输出 MIDI 头 `MThd`。剩余：cancel/pause、UI 
   renderer 为 `<embedded>`，真实转录 **5.3 s**；详见 `docs/rust/TAURI-BUILD.md`；
 - 限制：安装包未签名；Electron 回退基准为 E2E 35/35 + `pack:base` 成功（未重打 Electron 安装包）。
 
-## 4. 当前命令清单（50 条）
+## 3.6 IPC 覆盖（静态统计，2026-11-04）
+
+- `npm run tauri:coverage` / `node scripts/tauri/ipc-coverage.mjs --write`：
+  只解析 preload 与 Tauri 桥的方法名，不启动窗口；
+- 当前：preload 265 方法 / Tauri 97 方法 / **168 未映射**；preload invoke 250 / tauri call 88；
+- 缺口分类：设置杂项 28、diffsinger 19、utau/voicebank 18、模型/安装 14、导出/渲染 14、
+  资源/音频 13、rvc 12、曲库/数据 11、文件/诊断 11、事件/窗口 10、GPU 8、更新/测速 6、其他 4；
+- 明细见 [IPC-COVERAGE.md](IPC-COVERAGE.md)。
+
+## 4. 当前命令清单（51 条）
 
 host_info, app_version, ping, python_selfcheck, engine_probe, convert, engine_worker_status,
 load_settings, save_settings, db_kv_get, db_kv_set, db_status, db_songs_list, db_songs_put,
@@ -175,7 +184,8 @@ save_binary, soundfont_list, dep_check, diag_export, notify, open_output, open_e
 presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
 presets_reorder, presets_reorder_to, presets_restore, set_transcribe_pause,
 pick_file, pick_directory, pick_audio, pick_audio_files, pick_image, pick_music_xml, check_midi,
-wallpaper_defaults, delete_midi, rename_midi, list_audio_files, library_stats, read_soundfont。
+wallpaper_defaults, delete_midi, rename_midi, list_audio_files, library_stats, read_soundfont,
+db_playlists_delete。
 
 ## 4.1 下一步
 

@@ -311,6 +311,9 @@
 - **Tauri 曲库/音频辅助命令**：`list_audio_files`（递归音频扫描）、`library_stats`（顶层文件数/字节）、
   `read_soundfont`（SF2 原始字节，512MB 保护；SF3 转换仍留在 Electron/Python 路径）；
   Rust 测试覆盖音频扩展过滤/递归/统计；命令总数 **50**。
+- **Tauri 歌单删除 + IPC 覆盖基线**：`db_playlists_delete`（SQLite 往返单测）命令总数 **51**；
+  新增 `npm run tauri:coverage` 静态统计（不弹窗）：preload **265** 方法 / Tauri **97** 方法 /
+  未映射 **168**（250 invoke vs 88 call），分类明细写入 `docs/rust/IPC-COVERAGE.md`，作为后续迁移路线图。
 - **T-117 曲库/设置共享 Electron 数据（重要）**：Rust 用 rusqlite 直读/写
   `%APPDATA%/FuFumidi/fufumidi/fufumidi.sqlite`（songs/playlists/kv），设置优先读 legacy
   settings.json；只读验收实测 **1972 首真实曲目**、57 个设置键、侧栏「全部曲目 1972」正常；

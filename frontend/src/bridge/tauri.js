@@ -195,6 +195,7 @@ export function installTauriBridge() {
     dbSongsDelete: (id) => call('db_songs_delete', { id }),
     dbPlaylistsList: () => call('db_playlists_list'),
     dbPlaylistsPut: (item) => call('db_playlists_put', { item }),
+    dbPlaylistsDelete: (id) => call('db_playlists_delete', { id }),
 
     // ---- 可选 Rust 核心：Tauri 原生即 Rust，无需外部二进制 ----
     rustStatus: () => Promise.resolve({ ok: true, available: false, binary: null, version: null }),
