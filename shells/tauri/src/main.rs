@@ -810,6 +810,78 @@ fn rvc_import_files(files: serde_json::Value, opts: Option<serde_json::Value>) -
     rvc_import_files_at(&rvc_root(), &files, &opts.unwrap_or_else(|| serde_json::json!({})))
 }
 
+fn rvc_import_zip_at(root: &Path, archive: &Path, opts: &serde_json::Value) -> serde_json::Value {
+    if !archive.is_file() { return oto_err("压缩包不存在"); }
+    let ext = archive.extension().and_then(|x| x.to_str()).unwrap_or("").to_ascii_lowercase();
+    if ext != "zip" { return oto_err("只支持 .zip 模型压缩包"); }
+    let base = opts.get("name").and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()).map(|s| s.to_string()).unwrap_or_else(|| archive.file_stem().and_then(|x| x.to_str()).unwrap_or("rvc").to_string());
+    let id = rvc_unique_id(root, &rvc_slug(opts.get("id").and_then(|v| v.as_str()).unwrap_or(&base)));
+    let dest = root.join(&id);
+    let result = (|| -> Result<serde_json::Value, String> {
+        std::fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
+        let file = std::fs::File::open(archive).map_err(|e| e.to_string())?;
+        let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+        if zip.len() > 20000 { return Err("压缩包条目过多".to_string()); }
+        let mut total: u64 = 0;
+        for i in 0..zip.len() {
+            let mut e = zip.by_index(i).map_err(|x| x.to_string())?;
+            let name = e.name().replace('\\', "/");
+            if name.is_empty() || name.contains("..") || name.starts_with('/') { continue; }
+            total += e.size();
+            if total > 4 * 1024 * 1024 * 1024 { return Err("压缩包解压后过大（>4GB）".to_string()); }
+            let out = dest.join(&name);
+            if e.is_dir() { std::fs::create_dir_all(&out).map_err(|x| x.to_string())?; continue; }
+            if let Some(parent) = out.parent() { std::fs::create_dir_all(parent).map_err(|x| x.to_string())?; }
+            let mut w = std::fs::File::create(&out).map_err(|x| x.to_string())?;
+            std::io::copy(&mut e, &mut w).map_err(|x| x.to_string())?;
+        }
+        let mut inner = dest.clone();
+        if rvc_detect(&dest).get("engine").and_then(|v| v.as_str()).unwrap_or("").is_empty() {
+            let dirs: Vec<PathBuf> = std::fs::read_dir(&dest).map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect()).unwrap_or_default();
+            if dirs.len() == 1 && !rvc_detect(&dirs[0]).get("engine").and_then(|v| v.as_str()).unwrap_or("").is_empty() { inner = dirs[0].clone(); }
+        }
+        let detected = rvc_detect(&inner);
+        if detected.get("engine").and_then(|v| v.as_str()).unwrap_or("").is_empty() { return Err("没认出这是什么模型：压缩包内没有 .pth 或 config.yaml + .pt".to_string()); }
+        let manifest = std::fs::read_to_string(inner.join("manifest.json")).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()).unwrap_or_else(|| serde_json::json!({}));
+        // 压缩包可能多一层：model 以解压根为 dir，文件路径加相对前缀，list/remove 只认顶层目录。
+        let prefix = inner.strip_prefix(&dest).map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+        let mut files_val = manifest.get("files").cloned().unwrap_or_else(|| detected["files"].clone());
+        if !prefix.is_empty() {
+            if let Some(o) = files_val.as_object_mut() {
+                for v in o.values_mut() {
+                    if let Some(s) = v.as_str() { if !s.is_empty() { *v = serde_json::json!(format!("{prefix}/{s}")); } }
+                }
+            }
+        }
+        let model = serde_json::json!({
+            "id": id, "name": base, "engine": detected["engine"],
+            "version": manifest.get("version").cloned().unwrap_or_else(|| serde_json::json!("")),
+            "sr": manifest.get("sr").and_then(|v| v.as_u64()).or_else(|| detected.get("sr").and_then(|v| v.as_u64())).unwrap_or(0),
+            "f0": manifest.get("f0").and_then(|v| v.as_bool()).unwrap_or(true),
+            "dir": oto_path_text(&dest), "files": files_val,
+            "defaults": manifest.get("defaults").cloned().unwrap_or_else(|| rvc_defaults_value()), "source": "zip",
+            "lang": manifest.get("lang").cloned().unwrap_or_else(|| serde_json::json!("")), "work": manifest.get("work").cloned().unwrap_or_else(|| serde_json::json!("")),
+        });
+        std::fs::write(dest.join("model.json"), serde_json::to_string_pretty(&model).map_err(|x| x.to_string())?).map_err(|x| x.to_string())?;
+        Ok(serde_json::json!({ "ok": true, "model": model }))
+    })();
+    if result.is_err() { let _ = std::fs::remove_dir_all(&dest); }
+    result.unwrap_or_else(|e| oto_err(&e))
+}
+
+#[tauri::command]
+fn rvc_pick_zip(app: AppHandle) -> serde_json::Value {
+    match app.dialog().file().set_title("选择 RVC 模型压缩包").add_filter("ZIP", &["zip"]).blocking_pick_file().and_then(file_path_string) {
+        Some(path) => serde_json::json!({ "ok": true, "path": path }),
+        None => serde_json::json!({ "canceled": true }),
+    }
+}
+
+#[tauri::command]
+fn rvc_import_zip(path: String, opts: Option<serde_json::Value>) -> serde_json::Value {
+    rvc_import_zip_at(&rvc_root(), Path::new(&path), &opts.unwrap_or_else(|| serde_json::json!({})))
+}
+
 fn data_root_overridden() -> bool {
     std::env::var("FUFUMIDI_DATA_ROOT").map(|p| !p.trim().is_empty()).unwrap_or(false)
 }
@@ -4149,7 +4221,7 @@ fn main() {
             pick_file, pick_directory, pick_audio, pick_audio_files, pick_image, pick_music_xml,
             list_midi_files, list_audio_files, library_stats, read_soundfont, read_binary, save_binary,
             convert, probe, refine, cancel, set_transcribe_pause, engine_worker_status,
-            utau_list_voicebanks, voicebank_unified, utau_read_oto, utau_save_oto, utau_delete_voicebank, utau_import_voicebank_zip, utau_export_voicebank, utau_export_voicebank_zip, rvc_list, rvc_remove, rvc_pick_folder, rvc_pick_files, rvc_import_folder, rvc_import_files
+            utau_list_voicebanks, voicebank_unified, utau_read_oto, utau_save_oto, utau_delete_voicebank, utau_import_voicebank_zip, utau_export_voicebank, utau_export_voicebank_zip, rvc_list, rvc_remove, rvc_pick_folder, rvc_pick_files, rvc_pick_zip, rvc_import_folder, rvc_import_files, rvc_import_zip
         ])
         .setup(|_app| {
             println!("[fufumidi-shell] {}", serde_json::to_string(&host_info_json()).unwrap_or_default());
@@ -5812,6 +5884,43 @@ mod rvc_tests {
         let r = rvc_list_at(&root);
         assert_eq!(r["models"][0]["ready"], false);
         assert_eq!(r["models"][0]["missing"][0], "absent.pth");
+        let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+
+#[cfg(test)]
+mod rvc_zip_tests {
+    use super::{rvc_import_zip_at, rvc_list_at};
+    use std::io::Write as _;
+
+    #[test]
+    fn import_zip_flat_nested_and_invalid() {
+        let root = std::env::temp_dir().join(format!("fufumidi-rvc-zip-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let mkzip = |name: &str, entries: &[(&str, &[u8])]| {
+            let p = root.join(name);
+            let f = std::fs::File::create(&p).unwrap();
+            let mut z = zip::ZipWriter::new(f);
+            let opt = zip::write::SimpleFileOptions::default();
+            for (n, b) in entries { z.start_file(*n, opt).unwrap(); z.write_all(b).unwrap(); }
+            z.finish().unwrap();
+            p
+        };
+        let flat = mkzip("Flat.zip", &[("voice.pth", b"pth"), ("voice.index", b"idx")]);
+        let r1 = rvc_import_zip_at(&root, &flat, &serde_json::json!({ "name": "Flat Model" }));
+        assert_eq!(r1["ok"], true, "{}", r1);
+        assert_eq!(r1["model"]["name"], "Flat Model");
+        assert_eq!(r1["model"]["engine"], "rvc");
+        let nested = mkzip("Nested.zip", &[("inner/sub/voice.pth", b"pth")]);
+        let r2 = rvc_import_zip_at(&root, &nested, &serde_json::json!({}));
+        assert_eq!(r2["ok"], true, "{}", r2);
+        let listed = rvc_list_at(&root);
+        assert_eq!(listed["models"].as_array().unwrap().len(), 2);
+        assert!(listed["models"].as_array().unwrap().iter().all(|m| m["ready"] == true));
+        let bad = mkzip("Bad.zip", &[("readme.txt", b"none")]);
+        assert_eq!(rvc_import_zip_at(&root, &bad, &serde_json::json!({}))["ok"], false);
         let _ = std::fs::remove_dir_all(root);
     }
 }

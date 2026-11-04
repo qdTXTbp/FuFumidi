@@ -224,6 +224,8 @@ export function installTauriBridge() {
     onGpuProgress: (cb) => listen('gpu:progress', cb),
 
     // ---- 翻唱模型（本地）----
+    rvcPickZip: () => call('rvc_pick_zip'),
+    rvcImportZip: (p, opts) => call('rvc_import_zip', { path: p, opts: opts || {} }),
     rvcPickFolder: () => call('rvc_pick_folder'),
     rvcPickFiles: () => call('rvc_pick_files'),
     rvcImportFolder: (dir, opts) => call('rvc_import_folder', { dir, opts: opts || {} }),
