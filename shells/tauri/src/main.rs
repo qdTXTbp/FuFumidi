@@ -1767,6 +1767,31 @@ fn ogg_duration(b: &[u8]) -> Option<f64> {
     }
     None
 }
+fn aiff_extended_rate(b: &[u8]) -> f64 {
+    if b.len() < 10 { return 0.0; }
+    let exp = (((b[0] & 0x7f) as i32) << 8) | b[1] as i32;
+    let mant = u64::from_be_bytes([b[2],b[3],b[4],b[5],b[6],b[7],b[8],b[9]]);
+    if exp == 0 && mant == 0 { return 0.0; }
+    let frac = mant as f64 / 9223372036854775808.0;
+    frac * 2f64.powi(exp - 16383)
+}
+
+fn aiff_duration(b: &[u8]) -> Option<f64> {
+    if b.len() < 12 || &b[0..4] != b"FORM" || !(&b[8..12] == b"AIFF" || &b[8..12] == b"AIFC") { return None; }
+    let mut i = 12usize;
+    while i + 8 <= b.len() {
+        let id = &b[i..i+4];
+        let size = u32::from_be_bytes([b[i+4],b[i+5],b[i+6],b[i+7]]) as usize;
+        let body = i + 8;
+        if id == b"COMM" && size >= 18 && body + 18 <= b.len() {
+            let frames = u32::from_be_bytes([b[body+2],b[body+3],b[body+4],b[body+5]]) as f64;
+            let rate = aiff_extended_rate(&b[body+8..body+18]);
+            if rate > 0.0 { return Some(frames / rate); }
+        }
+        i = body.saturating_add(size).saturating_add(size % 2);
+    }
+    None
+}
 fn audio_duration_at(p: &str) -> serde_json::Value {
     let path = Path::new(p);
     let Ok(meta) = std::fs::metadata(path) else { return serde_json::json!({ "ok": false, "error": "not found" }); };
@@ -1780,6 +1805,7 @@ fn audio_duration_at(p: &str) -> serde_json::Value {
         "flac" => flac_duration(&head),
         "m4a" | "mp4" | "m4b" => mp4_duration(&head),
         "ogg" | "oga" | "opus" => ogg_duration(&head),
+        "aiff" | "aif" | "aifc" => aiff_duration(&head),
         "mp3" => mp3_duration(path),
         _ => None,
     };
@@ -3527,6 +3553,24 @@ mod check_midi_tests {
         assert_eq!(m["audio"]["sampleRate"], 48000);
         assert_eq!(super::sanitize_export_name("a:b/c", "wav"), "a_b_c.wav");
         assert_eq!(super::write_export_at(&root, "empty", "wav", &[], &meta, "test")["ok"], false);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn audio_duration_aiff() {
+        let root = tmpdir("audio-aiff");
+        let f = root.join("clip.aiff");
+        let mut b: Vec<u8> = Vec::new();
+        b.extend_from_slice(b"FORM"); b.extend_from_slice(&30u32.to_be_bytes()); b.extend_from_slice(b"AIFF");
+        b.extend_from_slice(b"COMM"); b.extend_from_slice(&18u32.to_be_bytes());
+        b.extend_from_slice(&1u16.to_be_bytes());
+        b.extend_from_slice(&44100u32.to_be_bytes());
+        b.extend_from_slice(&16u16.to_be_bytes());
+        b.extend_from_slice(&[0x40,0x0E,0xAC,0x44,0,0,0,0,0,0]);
+        std::fs::write(&f, &b).unwrap();
+        let r = super::audio_duration_at(f.to_str().unwrap());
+        assert_eq!(r["ok"], true, "{}", r);
+        assert!((r["seconds"].as_f64().unwrap() - 1.0).abs() < 0.001);
         let _ = std::fs::remove_dir_all(root);
     }
 
