@@ -15,6 +15,7 @@ const steps = [
   { name: 'cover-engine-smoke', cmd: npm, args: ['run', 'tauri:cover-engine-smoke'] },
   { name: 'separate-smoke', cmd: npm, args: ['run', 'tauri:separate-smoke'] },
   { name: 'cargo-test', cmd: 'cargo', args: ['test', '--offline'], cwd: path.join(root, 'shells', 'tauri') },
+  { name: 'cargo-clippy', cmd: 'cargo', args: ['clippy', '--offline', '--', '-D', 'warnings'], cwd: path.join(root, 'shells', 'tauri') },
 ];
 if (!quick) {
   steps.splice(3, 0, { name: 'hidden-e2e', cmd: 'node', args: ['scripts/e2e/run.mjs'] });

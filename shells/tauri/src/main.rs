@@ -356,7 +356,7 @@ fn oto_bank_dir(root: &Path, voicebank: Option<&str>) -> Result<PathBuf, &'stati
 
 fn oto_b64_encode(data: &[u8]) -> String {
     const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
         let b0 = chunk[0] as u32;
         let b1 = *chunk.get(1).unwrap_or(&0) as u32;
@@ -749,7 +749,7 @@ fn rvc_import_folder_at(root: &Path, dir: &str, name_hint: Option<&str>) -> serd
         "f0": manifest.get("f0").and_then(|v| v.as_bool()).unwrap_or(true),
         "dir": oto_path_text(d),
         "files": manifest.get("files").cloned().unwrap_or_else(|| detected["files"].clone()),
-        "defaults": manifest.get("defaults").cloned().unwrap_or_else(|| rvc_defaults_value()),
+        "defaults": manifest.get("defaults").cloned().unwrap_or_else(rvc_defaults_value),
         "source": "folder", "lang": manifest.get("lang").cloned().unwrap_or_else(|| serde_json::json!("")),
         "work": manifest.get("work").cloned().unwrap_or_else(|| serde_json::json!("")),
     });
@@ -861,7 +861,7 @@ fn rvc_import_zip_at(root: &Path, archive: &Path, opts: &serde_json::Value) -> s
             "sr": manifest.get("sr").and_then(|v| v.as_u64()).or_else(|| detected.get("sr").and_then(|v| v.as_u64())).unwrap_or(0),
             "f0": manifest.get("f0").and_then(|v| v.as_bool()).unwrap_or(true),
             "dir": oto_path_text(&dest), "files": files_val,
-            "defaults": manifest.get("defaults").cloned().unwrap_or_else(|| rvc_defaults_value()), "source": "zip",
+            "defaults": manifest.get("defaults").cloned().unwrap_or_else(rvc_defaults_value), "source": "zip",
             "lang": manifest.get("lang").cloned().unwrap_or_else(|| serde_json::json!("")), "work": manifest.get("work").cloned().unwrap_or_else(|| serde_json::json!("")),
         });
         std::fs::write(dest.join("model.json"), serde_json::to_string_pretty(&model).map_err(|x| x.to_string())?).map_err(|x| x.to_string())?;
@@ -1351,7 +1351,7 @@ fn video_export_end(app: AppHandle, state: State<'_, VideoExportState>, opts: se
     let mut out = opts.get("targetPath").and_then(|v| v.as_str()).unwrap_or("").to_string();
     if out.is_empty() {
         let name = opts.get("name").and_then(|v| v.as_str()).unwrap_or("FuFumidi-video").trim().trim_end_matches(".mid").to_string();
-        let picked = app.dialog().file().set_title("导出视频 MP4").set_file_name(&format!("{}{}", if name.is_empty() { "FuFumidi-video" } else { &name }, ".mp4")).add_filter("MP4", &["mp4"]).blocking_save_file();
+        let picked = app.dialog().file().set_title("导出视频 MP4").set_file_name(format!("{}{}", if name.is_empty() { "FuFumidi-video" } else { &name }, ".mp4")).add_filter("MP4", &["mp4"]).blocking_save_file();
         let Some(p) = picked.and_then(|p| p.into_path().ok()) else { let _ = std::fs::remove_file(&st.path); return serde_json::json!({ "ok": false, "canceled": true }); };
         out = p.display().to_string();
     }
@@ -2241,7 +2241,7 @@ fn run_refine(app: AppHandle, req: serde_json::Value) -> serde_json::Value {
     let err_thread = stderr.map(|s| std::thread::spawn(move || { let mut buf = String::new(); let _ = BufReader::new(s).read_to_string(&mut buf); buf }));
     let mut result: Option<serde_json::Value> = None;
     if let Some(stdout) = stdout {
-        for line in BufReader::new(stdout).lines().flatten() {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
             if let Some(rest) = line.strip_prefix("###RESULT ") { if let Ok(v) = serde_json::from_str::<serde_json::Value>(rest) { result = Some(v); } }
             let _ = app.emit("engine:refine:log", serde_json::json!({ "id": id, "line": line }));
         }
@@ -2840,7 +2840,7 @@ fn sanitize_midi_base(name: &str) -> String {
         c => c,
     }).collect();
     base = base.split_whitespace().collect::<Vec<_>>().join(" ");
-    base = base.trim_end_matches(|c: char| c == '.' || c == ' ').to_string();
+    base = base.trim_end_matches(['.', ' ']).to_string();
     if base.is_empty() { base = "untitled".to_string(); }
     if base.chars().count() > 120 { base = base.chars().take(120).collect(); }
     base
@@ -2864,7 +2864,7 @@ fn write_midi_at(root: &Path, opts: &serde_json::Value) -> serde_json::Value {
     if std::fs::read(&same).ok().as_deref() == Some(bytes.as_slice()) {
         return serde_json::json!({ "ok": true, "path": same.display().to_string(), "existed": true });
     }
-    let mut target = if !prev.is_empty() { PathBuf::from(prev) } else if same.exists() { same.clone() } else { same.clone() };
+    let mut target = if !prev.is_empty() { PathBuf::from(prev) } else { same.clone() };
     if !prev.is_empty() && !target.starts_with(&root_canon) { target = same.clone(); }
     if target == same && same.exists() {
         let mut n = 2;
@@ -3275,7 +3275,7 @@ fn export_stems_zip(app: AppHandle, payload: serde_json::Value) -> serde_json::V
 
 fn unix_to_iso(ts: u64) -> String {
     let days = (ts / 86400) as i64;
-    let secs = (ts % 86400) as u64;
+    let secs = ts % 86400;
     let z = days + 719468;
     let era = if z >= 0 { z } else { z - 146096 } / 146097;
     let doe = z - era * 146097;
@@ -3299,7 +3299,7 @@ fn sanitize_export_name(name: &str, ext: &str) -> String {
         c => c,
     }).collect();
     base = base.split_whitespace().collect::<Vec<_>>().join(" ");
-    base = base.trim_end_matches(|c: char| c == '.' || c == ' ').to_string();
+    base = base.trim_end_matches(['.', ' ']).to_string();
     if base.is_empty() { base = "export".to_string(); }
     if base.chars().count() > 120 { base = base.chars().take(120).collect(); }
     let e: String = ext.trim_start_matches('.').chars().filter(|c| c.is_ascii_alphanumeric()).collect();
@@ -3645,7 +3645,7 @@ fn prune_logs(dir: &Path, keep: usize) -> (u64, u64) {
         let mtime = m.and_then(|x| x.modified().ok()).unwrap_or(std::time::UNIX_EPOCH);
         rows.push((mtime, size, p));
     }
-    rows.sort_by(|a, b| b.0.cmp(&a.0));
+    rows.sort_by_key(|a| std::cmp::Reverse(a.0));
     let mut bytes = 0u64;
     let mut removed = 0u64;
     for (_, size, p) in rows.into_iter().skip(keep) {
@@ -4250,7 +4250,7 @@ fn sanitize_rename(base: &str) -> String {
     for ch in ['\\', '/', ':', '*', '?', '"', '<', '>', '|'] { s = s.replace(ch, " "); }
     s = s.replace(['\r', '\n', '\t'], " ");
     s = s.split_whitespace().collect::<Vec<_>>().join(" ");
-    s = s.trim_end_matches(|c: char| c == '.' || c == ' ').trim().to_string();
+    s = s.trim_end_matches(['.', ' ']).trim().to_string();
     if s.chars().count() > 120 { s = s.chars().take(120).collect(); }
     s
 }

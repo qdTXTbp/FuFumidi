@@ -187,3 +187,10 @@ Tauri 默认从 GitHub 下载 `nsis-3.13.zip`，本机直连超时。已把工�
 - `npm run tauri:acceptance` **ok:true**；
 - 覆盖 typecheck / audit / test:ui / 隐藏 E2E / 三个 smoke / cargo test / release build / host+engine self-check；
 - release 构建增量 1.46s；engine self-check warm=1；无残留/窗口。
+
+## 26. Clippy 清零
+
+- `cargo clippy --offline -- -D warnings` **通过**；
+- 修复 11 条：div_ceil、redundant closure、needless borrow、lines().flatten() 无限 Err 风险、char 数组 trim、相同 if 分支、u64 自转、sort_by_key；
+- cargo test 118/118（+1 ignored），typecheck/build/smoke/audit 通过；
+- clippy 已加入 `tauri:acceptance`。

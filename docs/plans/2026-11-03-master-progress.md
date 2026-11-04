@@ -576,3 +576,5 @@
 - **一键验收脚本**：`npm run tauri:acceptance` / `-- --quick`；quick 实测 ok:true（typecheck/audit/test:ui/video/cover/separate smoke/cargo）。
 
 - **全量一键验收**：`npm run tauri:acceptance` ok:true（11 步，含隐藏 E2E/release/self-check）；无残留/窗口。
+
+- **Clippy 清零**：-D warnings 通过；修 11 条（div_ceil/closure/borrow/flatten/char/if/cast/sort）；cargo 118；已进 acceptance。
