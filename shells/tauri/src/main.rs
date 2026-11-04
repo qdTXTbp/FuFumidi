@@ -945,6 +945,29 @@ async fn rvc_probe(id: String) -> serde_json::Value {
     }).await.unwrap_or_else(|e| oto_err(&e.to_string()))
 }
 
+/// 文件关联冷启动：从 argv 里挑第一个存在的 .mid/.midi（跳过 Tauri 自己的参数）。
+fn pending_open_from_args<I: IntoIterator<Item = String>>(args: I) -> Option<PathBuf> {
+    for raw in args.into_iter().skip(1) {
+        if raw.starts_with('-') { continue; }
+        let p = PathBuf::from(&raw);
+        let ext = p.extension().and_then(|x| x.to_str()).unwrap_or("").to_ascii_lowercase();
+        if (ext == "mid" || ext == "midi") && p.is_file() { return Some(p); }
+    }
+    None
+}
+
+struct PendingOpen(Mutex<Option<PathBuf>>);
+
+#[tauri::command]
+fn take_pending_open_file(state: State<'_, PendingOpen>) -> serde_json::Value {
+    let path = state.0.lock().unwrap_or_else(|e| e.into_inner()).take();
+    let Some(path) = path else { return serde_json::Value::Null };
+    match std::fs::read(&path) {
+        Ok(bytes) => serde_json::json!({ "name": path.file_name().and_then(|x| x.to_str()).unwrap_or("opened.mid"), "bytes": bytes }),
+        Err(_) => serde_json::Value::Null,
+    }
+}
+
 fn data_root_overridden() -> bool {
     std::env::var("FUFUMIDI_DATA_ROOT").map(|p| !p.trim().is_empty()).unwrap_or(false)
 }
@@ -4267,11 +4290,13 @@ fn main() {
         seq: Arc::new(AtomicU64::new(0)),
         jobs: Arc::new(Mutex::new(HashMap::new())),
     };
+    let pending_open = PendingOpen(Mutex::new(pending_open_from_args(std::env::args())));
     let zoom_state = ZoomState(Arc::new(Mutex::new(1.0)));
     let update_preferred_state = UpdatePreferredState(Mutex::new(None));
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(state)
+        .manage(pending_open)
         .manage(zoom_state)
         .manage(update_preferred_state)
         .invoke_handler(tauri::generate_handler![
@@ -4284,7 +4309,7 @@ fn main() {
             pick_file, pick_directory, pick_audio, pick_audio_files, pick_image, pick_music_xml,
             list_midi_files, list_audio_files, library_stats, read_soundfont, read_binary, save_binary,
             convert, probe, refine, cancel, set_transcribe_pause, engine_worker_status,
-            utau_list_voicebanks, voicebank_unified, utau_read_oto, utau_save_oto, utau_delete_voicebank, utau_import_voicebank_zip, utau_export_voicebank, utau_export_voicebank_zip, rvc_list, rvc_remove, rvc_pick_folder, rvc_pick_files, rvc_pick_zip, rvc_import_folder, rvc_import_files, rvc_import_zip, rvc_probe
+            utau_list_voicebanks, voicebank_unified, utau_read_oto, utau_save_oto, utau_delete_voicebank, utau_import_voicebank_zip, utau_export_voicebank, utau_export_voicebank_zip, take_pending_open_file, rvc_list, rvc_remove, rvc_pick_folder, rvc_pick_files, rvc_pick_zip, rvc_import_folder, rvc_import_files, rvc_import_zip, rvc_probe
         ])
         .setup(|_app| {
             println!("[fufumidi-shell] {}", serde_json::to_string(&host_info_json()).unwrap_or_default());
@@ -6019,5 +6044,23 @@ mod rvc_probe_tests {
         assert_eq!(patch["f0"], false);
         assert!(rvc_find_model(&root, "nope").is_none());
         let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+mod pending_open_tests {
+    #[test]
+    fn picks_only_existing_midi_args() {
+        let dir = std::env::temp_dir().join(format!("fufumidi-open-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mid = dir.join("song.MID");
+        std::fs::write(&mid, b"mid").unwrap();
+        let txt = dir.join("note.txt");
+        std::fs::write(&txt, b"x").unwrap();
+        let args = vec!["fufumidi-shell.exe".to_string(), "--flag".to_string(), txt.display().to_string(), mid.display().to_string()];
+        let picked = super::pending_open_from_args(args).unwrap();
+        assert_eq!(picked, mid);
+        assert!(super::pending_open_from_args(vec!["exe".to_string(), dir.join("missing.mid").display().to_string()]).is_none());
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

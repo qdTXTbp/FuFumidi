@@ -53,6 +53,7 @@ export function installTauriBridge() {
   //   支持双击 .mid 打开；Tauri 侧没有对应实现，所以这里只能返回一个空取消函数 ——
   //   即**Tauri 构建下双击 .mid 仍然不生效**。要补齐得在 src-tauri 里接文件关联并 emit 同名事件。
   onOpenFile: () => () => {},
+    takePendingOpenFile: () => call('take_pending_open_file'),
 
     // ---- 设置 ----
     getSettings: () => call('load_settings'),

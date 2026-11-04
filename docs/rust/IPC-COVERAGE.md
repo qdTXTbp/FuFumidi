@@ -5,10 +5,10 @@
 | 指标 | 数值 |
 |---|---:|
 | preload 暴露方法 | 265 |
-| Tauri 桥已映射方法 | 156 |
-| 尚未映射 | **110** |
+| Tauri 桥已映射方法 | 157 |
+| 尚未映射 | **109** |
 | preload IPC invoke 通道 | 250 |
-| Tauri call 通道 | 150 |
+| Tauri call 通道 | 151 |
 
 ## 缺口分类
 
@@ -23,8 +23,8 @@
 | gpu/运行时增强 | 8 |
 | 事件/窗口 | 7 |
 | 更新/测速 | 4 |
-| 文件/诊断 | 4 |
 | 其他 | 3 |
+| 文件/诊断 | 3 |
 | 曲库/数据 | 2 |
 | rvc | 1 |
 
@@ -126,7 +126,6 @@ srRemove
 srStatus
 status
 submit
-takePendingOpenFile
 updateSpeedtest
 utauAliasRange
 utauAliases

@@ -235,20 +235,20 @@ GPU 环境（未设 `FUFUMIDI_DISABLE_GPU=1`）自动 −1，`FUFUMIDI_MAX_WORKE
 
 - `npm run tauri:coverage` / `node scripts/tauri/ipc-coverage.mjs --write`：
   只解析 preload 与 Tauri 桥的方法名，不启动窗口；
-- 当前：preload 265 方法 / Tauri **156** 方法 / **110 未映射**；preload invoke 250 / tauri call **150**；
+- 当前：preload 265 方法 / Tauri **157** 方法 / **109 未映射**；preload invoke 250 / tauri call **151**；
 - 缺口分类：设置杂项 28、diffsinger 19、utau/voicebank 18、模型/安装 14、导出/渲染 14、
   资源/音频 13、rvc 12、曲库/数据 11、文件/诊断 11、事件/窗口 10、GPU 8、更新/测速 6、其他 4；
 - 明细见 [IPC-COVERAGE.md](IPC-COVERAGE.md)。
 - 前端实际调用审计：`npm run tauri:call-audit`（`docs/rust/BRIDGE-CALLS.md`），
   当前 212 个去重调用 / 104 未找到实现（启发式，含动态调用误报）。
-- 参数契约审计：`npm run tauri:arg-audit`（`docs/rust/ARG-AUDIT.md`），当前 134 命令 / 23 不一致
+- 参数契约审计：`npm run tauri:arg-audit`（`docs/rust/ARG-AUDIT.md`），当前 135 命令 / 23 不一致
   （主要来自尚未实现的 bridge 命令）；已修正 readSidecarLyrics/modelImportLocal/renameMidi/
   projectOpen/autosaveRead/autosaveClear 的 JS camelCase→Rust snake_case 参数错配。
 
-## 4. 当前命令清单（134 条）
+## 4. 当前命令清单（135 条）
 
 host_info, app_version, ping, python_selfcheck, engine_probe, convert, engine_worker_status,
-load_settings, save_settings, update_sources, update_set_preferred_source, utau_list_voicebanks, voicebank_unified, utau_read_oto, utau_save_oto, utau_delete_voicebank, utau_import_voicebank_zip, utau_export_voicebank, utau_export_voicebank_zip, rvc_list, rvc_remove, rvc_pick_folder, rvc_pick_files, rvc_import_folder, rvc_import_files, rvc_pick_zip, rvc_import_zip, rvc_catalog, rvc_open_catalog_page, rvc_probe, db_kv_get, db_kv_set, db_status, db_songs_list, db_songs_put,
+load_settings, save_settings, update_sources, update_set_preferred_source, utau_list_voicebanks, voicebank_unified, utau_read_oto, utau_save_oto, utau_delete_voicebank, utau_import_voicebank_zip, utau_export_voicebank, utau_export_voicebank_zip, rvc_list, rvc_remove, rvc_pick_folder, rvc_pick_files, rvc_import_folder, rvc_import_files, rvc_pick_zip, rvc_import_zip, rvc_catalog, rvc_open_catalog_page, rvc_probe, take_pending_open_file, db_kv_get, db_kv_set, db_status, db_songs_list, db_songs_put,
 db_songs_delete, db_playlists_list, db_playlists_put, model_list, list_midi_files, read_binary,
 save_binary, soundfont_list, dep_check, diag_export, notify, open_output, open_external, cancel,
 presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,

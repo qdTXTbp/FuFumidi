@@ -6,9 +6,9 @@
 | 指标 | 数值 |
 |---|---:|
 | 前端调用的 bridge 方法（去重） | 213 |
-| Tauri 顶层方法 | 117 |
+| Tauri 顶层方法 | 118 |
 | Tauri 嵌套方法 | 50 |
-| **未找到实现** | **84** |
+| **未找到实现** | **83** |
 
 ## 未找到实现的方法
 
@@ -72,7 +72,6 @@
 - `soundfonts` — frontend/src/audio.js
 - `soundfonts.list` — frontend/src/audio.js
 - `storage` — frontend/src/components/StoragePanel.vue
-- `takePendingOpenFile` — frontend/src/App.vue
 - `tasks` — frontend/src/App.vue
 - `tasks.list` — frontend/src/App.vue
 - `tasks.onUpdate` — frontend/src/App.vue
