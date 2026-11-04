@@ -6,9 +6,9 @@
 | 指标 | 数值 |
 |---|---:|
 | 前端调用的 bridge 方法（去重） | 212 |
-| Tauri 顶层方法 | 89 |
+| Tauri 顶层方法 | 90 |
 | Tauri 嵌套方法 | 43 |
-| **未找到实现** | **114** |
+| **未找到实现** | **113** |
 
 ## 未找到实现的方法
 
@@ -20,7 +20,6 @@
 - `coverPickDir` — frontend/src/views/ViewCover.vue
 - `coverRun` — frontend/src/views/ViewCover.vue
 - `coverSingers` — frontend/src/views/ViewCover.vue
-- `diagHealth` — frontend/src/components/SettingsPanel.vue
 - `diffsingerMsCancelDownload` — frontend/src/App.vue, frontend/src/views/DiffSingerCatalog.vue
 - `diffsingerMsCatalog` — frontend/src/views/DiffSingerCatalog.vue, frontend/src/views/ViewModels.vue
 - `diffsingerMsDownload` — frontend/src/views/DiffSingerCatalog.vue

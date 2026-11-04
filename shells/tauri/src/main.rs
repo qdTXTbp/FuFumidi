@@ -561,6 +561,35 @@ fn presets_restore() -> serde_json::Value {
 
 fn midi_root() -> PathBuf { data_dir().join("midi") }
 
+fn parse_health_json(stdout: &str) -> Option<serde_json::Value> {
+    let t = stdout.trim();
+    if t.is_empty() { return None; }
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(t) { return Some(v); }
+    for line in t.lines().rev() {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(line.trim()) { return Some(v); }
+    }
+    None
+}
+
+#[tauri::command]
+fn diag_health() -> serde_json::Value {
+    let Some(py) = python_path() else { return serde_json::json!({ "ok": false, "error": "python runtime not found" }); };
+    let Some(engine) = engine_dir() else { return serde_json::json!({ "ok": false, "error": "engine not found" }); };
+    let script = engine.join("health.py");
+    if !script.exists() { return serde_json::json!({ "ok": false, "error": "health.py not found" }); }
+    match Command::new(&py).arg(&script).arg("--json").env("PYTHONIOENCODING", "utf-8").output() {
+        Ok(out) => {
+            let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+            let report = parse_health_json(&stdout);
+            let ok = out.status.success() && report.is_some();
+            serde_json::json!({ "ok": ok, "report": report, "error": if ok { serde_json::Value::Null } else { serde_json::json!(stderr.chars().rev().take(600).collect::<String>().chars().rev().collect::<String>()) }, "raw": stdout.chars().rev().take(2000).collect::<String>().chars().rev().collect::<String>() })
+        }
+        Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
+    }
+}
+
+
 fn autostart_value() -> String {
     let exe = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default();
     format!("\"{exe}\"")
@@ -2110,7 +2139,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, db_kv_get, db_kv_set,
-            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, model_list,
+            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
@@ -2144,6 +2173,14 @@ mod check_midi_tests {
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    #[test]
+    fn health_json_parsing() {
+        let v = super::parse_health_json("{\n  \"ok\": true,\n  \"report\": {\"report_text\": \"x\"}\n}").unwrap();
+        assert_eq!(v["report"]["report_text"], "x");
+        assert_eq!(super::parse_health_json("noise\n{\"ok\":false}\n").unwrap()["ok"], false);
+        assert!(super::parse_health_json("   ").is_none());
     }
 
     #[test]

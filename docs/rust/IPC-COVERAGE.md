@@ -5,10 +5,10 @@
 | 指标 | 数值 |
 |---|---:|
 | preload 暴露方法 | 265 |
-| Tauri 桥已映射方法 | 124 |
-| 尚未映射 | **141** |
+| Tauri 桥已映射方法 | 125 |
+| 尚未映射 | **140** |
 | preload IPC invoke 通道 | 250 |
-| Tauri call 通道 | 116 |
+| Tauri call 通道 | 117 |
 
 ## 缺口分类
 
@@ -22,9 +22,9 @@
 | 资源/音频/扩展 | 11 |
 | 导出/渲染 | 11 |
 | gpu/运行时增强 | 8 |
-| 文件/诊断 | 7 |
 | 事件/窗口 | 7 |
 | 更新/测速 | 6 |
+| 文件/诊断 | 6 |
 | 其他 | 4 |
 | 曲库/数据 | 4 |
 
@@ -47,7 +47,6 @@ dbCloudSongDir
 dbCloudSongPut
 demo
 detect
-diagHealth
 diffsingerCancelRuntimeInstall
 diffsingerCancelVoicebankDownload
 diffsingerDeleteVoicebank
