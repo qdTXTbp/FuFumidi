@@ -79,7 +79,9 @@
     "test:zip": "node --test scripts/test-zip-safe.mjs",
     "design:shoot": "node scripts/design/shoot.mjs",
     "tauri:smoke": "node scripts/tauri/smoke.mjs",
-    "tauri:build": "npm run build:ui && cargo build --manifest-path shells/tauri/Cargo.toml"
+    "tauri:build": "npm run build:ui && cargo build --manifest-path shells/tauri/Cargo.toml",
+    "tauri:release": "npm run build:ui && cd shells/tauri && tauri build --no-bundle",
+    "tauri:bundle": "npm run build:ui && cd shells/tauri && tauri build"
   },
   "dependencies": {
     "adm-zip": "^0.6.0",
@@ -87,6 +89,7 @@
     "webwallgl": "^3.0.0"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "2.12.4",
     "electron": "^37.10.3",
     "electron-builder": "^26.15.3"
   }

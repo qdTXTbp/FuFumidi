@@ -79,6 +79,17 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 worker running=true seq=1；输出 MIDI 头 `MThd`。剩余：cancel/pause、UI 队列侧进度绑定、
 批量并发、模型列表等 host 通道（T-115 扩面）。
 
+### 3.1.1 Release 构建（T-119 第一步，2026-11-04）
+
+- Tauri CLI 锁到 **2.12.4**（devDependency，配合 crate tauri 2.12.5）；
+- `npm run tauri:release` = `build:ui` + `tauri build --no-bundle`；
+  冷编译 **1m38s**，产物 **12.49 MB**（`poc/tauri-poc/target/release/fufumidi-shell.exe`）；
+- **Release 壳冒烟 24/24 全绿**（`node scripts/tauri/smoke.mjs --exe <release>`）：
+  真实 UI、Python 3.12.10、worker、真实转录（1 s WAV → 1 音符，7.9 s）、曲库/预设/取消/暂停全通过；
+- `npm run tauri:bundle` 已留出入口，但 **bundle 仍未启用**：需要配置
+  `bundle.resources`（resources/python、engine、soundfonts、models 随包/按需）并接 NSIS；
+  安装版与 Electron 回退属于 T-119 剩余工作。
+
 ### 3.2.1 关键修复：Tauri 桥注入时序 + 嵌入 renderer 的重建（2026-11-04）
 
 - **桥注入时序**：`api.ts` 原本用 `const bridge = window.fuBridge` 在模块求值时捕获；
