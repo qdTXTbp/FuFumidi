@@ -40,6 +40,17 @@ export default async function (app) {
   await new Promise((r) => setTimeout(r, 150));
   if (await count() !== base + 1) throw new Error('session redo 未生效');
 
+  // 保存/自动保存轮询不得清掉 redo：undo → markSaved → 等 >4s → redo 仍可用
+  await app.key('Ctrl+Z');
+  await new Promise((r) => setTimeout(r, 150));
+  if (!(await app.eval('' + E + '.canRedo()'))) throw new Error('undo 后 redo 应可重做');
+  await app.eval("window.__fufumidiDebug.session().markSaved(window.__fufumidiDebug.docId(), Date.now())");
+  await new Promise((r) => setTimeout(r, 4500));
+  if (!(await app.eval('' + E + '.canRedo()'))) throw new Error('保存/自动保存轮询清掉了 redo');
+  await app.key('Ctrl+Shift+Z');
+  await new Promise((r) => setTimeout(r, 150));
+  if (await count() !== base + 1) throw new Error('保存轮询后 redo 失败');
+
   // KeepAlive 跨页保持同一 doc/engine
   await app.navigate('#/home');
   await app.waitFor('location.hash.indexOf("home") >= 0', { timeout: 15000 });

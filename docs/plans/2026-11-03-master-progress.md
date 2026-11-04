@@ -339,7 +339,7 @@
   **第十批（接入）**：`EditorCanvas` 新增 `history` prop，删除内部 undo/redo 数组与裁剪逻辑，
   快照/命令全部走 session 引擎（fallback 本地引擎）；undo/redo 收敛为一次 engine 调用 + selection.clear+afterEdit；
   `pushMark`/长按取消用 `seq()/dropLast()`；`ViewEdit` 在 doc 切换时先同步 `histRef` 再 await 关旧 doc；
-  新增隐藏 E2E `edit-undo-session`（单栈 bytes、跨页保留、切歌隔离）。
+  新增隐藏 E2E `edit-undo-session`（单栈 bytes、跨页保留、切歌隔离、保存/自动保存轮询后 redo 仍存活）。
   **编辑页 P-011 已完成**：隐藏全量 **39/39** 通过；**跨页统一（编辑↔编排）仍未做**，编排页仍用 tabbed registry。
 - **Tauri check_midi 已补**：Rust 实现与 Electron 同语义（只认数据根 midi/ 内非空文件），
   桥补 `checkMidi`；Tauri 曲库自愈不再因缺命令而跳过。Rust 单测覆盖根内保留/缺失/根外路径。
