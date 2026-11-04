@@ -570,3 +570,5 @@
 - **separate/UM 后全量 E2E**：隐藏全量 **41/41**（158 命令源码）；新增 host 命令不影响现有页面流程。
 
 - **分离进度 id**：separate_audio 的 engine:separate:progress 补 `id`（sepN），ViewTranscribe 的 currentJob 过滤才会接收；cargo **118/118 + 1 ignored**。
+
+- **158 命令 release（分离进度 id）**：2m24s、0 warning；host/engine self-check 通过；无窗口/残留。

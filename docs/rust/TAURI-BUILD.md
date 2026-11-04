@@ -169,3 +169,9 @@ Tauri 默认从 GitHub 下载 `nsis-3.13.zip`，本机直连超时。已把工�
 - release 构建 2m24s、**0 warning**；
 - host/engine self-check 通过（embedded renderer / warm=1 / 无残留）；
 - 含 GPU 统一内存实验；本机无 cudart，实际返回 backend-missing。
+
+## 23. 2026-11-04 158 命令 release（分离进度 id）
+
+- 补 SEPARATE progress id 后 release 构建 2m24s、**0 warning**；
+- host/engine self-check 通过（embedded renderer / warm=1 / 无残留）；
+- 含 separate/UM/cover/video/plugin/tasks；真实分离推理未跑。
