@@ -561,6 +561,28 @@ fn presets_restore() -> serde_json::Value {
 
 fn midi_root() -> PathBuf { data_dir().join("midi") }
 
+fn clear_user_data_at(root: &Path, scopes: &[String]) -> serde_json::Value {
+    let has = |s: &str| scopes.iter().any(|x| x == s);
+    let mut done: Vec<String> = Vec::new();
+    let rm = |p: &Path| { let _ = std::fs::remove_dir_all(p); };
+    if has("models") { rm(&root.join("models")); done.push("models".to_string()); }
+    if has("soundfonts") { rm(&root.join("soundfonts")); done.push("soundfonts".to_string()); }
+    if has("deps") {
+        for d in ["gpu-enhancements", "cache", "pip-cache"] { rm(&root.join(d)); }
+        done.push("deps".to_string());
+    }
+    if has("playdata") { done.push("playdata".to_string()); }
+    let need_restart = done.iter().any(|x| x == "models" || x == "deps");
+    serde_json::json!({ "ok": true, "done": done, "needRestart": need_restart })
+}
+
+#[tauri::command]
+fn clear_user_data(scopes: Option<Vec<String>>) -> serde_json::Value {
+    let list = scopes.unwrap_or_else(|| vec!["models".into(), "soundfonts".into(), "deps".into(), "playdata".into()]);
+    clear_user_data_at(&data_dir(), &list)
+}
+
+
 fn detect_model_dest(archive: &Path, files: &[String]) -> Option<String> {
     let joined = files.join("\n").replace('\\', "/").to_ascii_lowercase();
     for (needle, dest) in [
@@ -2258,7 +2280,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, db_kv_get, db_kv_set,
-            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, model_list,
+            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
@@ -2292,6 +2314,29 @@ mod check_midi_tests {
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    #[test]
+    fn clear_user_data_scopes() {
+        let root = tmpdir("clear-user-data");
+        for d in ["models", "soundfonts", "cache", "midi"] { std::fs::create_dir_all(root.join(d)).unwrap(); }
+        std::fs::write(root.join("models/m.bin"), b"m").unwrap();
+        std::fs::write(root.join("soundfonts/s.sf2"), b"s").unwrap();
+        std::fs::write(root.join("cache/c.bin"), b"c").unwrap();
+        std::fs::write(root.join("midi/keep.mid"), b"k").unwrap();
+        std::fs::write(root.join("settings.json"), b"{}").unwrap();
+        let r = super::clear_user_data_at(&root, &["models".to_string()]);
+        assert_eq!(r["ok"], true);
+        assert_eq!(r["needRestart"], true);
+        assert!(!root.join("models").exists());
+        assert!(root.join("soundfonts/s.sf2").exists());
+        let r2 = super::clear_user_data_at(&root, &["soundfonts".to_string(), "deps".to_string(), "playdata".to_string()]);
+        assert_eq!(r2["done"].as_array().unwrap().len(), 3);
+        assert!(!root.join("soundfonts").exists());
+        assert!(!root.join("cache").exists());
+        assert!(root.join("midi/keep.mid").exists(), "midi preserved");
+        assert!(root.join("settings.json").exists(), "settings preserved");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

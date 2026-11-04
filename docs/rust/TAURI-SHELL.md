@@ -82,6 +82,7 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 | autostart_get / autostart_set | 通过 HKCU Run 注册项查询/设置开机自启 | Rust 单测：当前 exe 值加引号、查询返回布尔；**设置会写注册表，测试不调用** |
 | diag_health | 调用 engine/health.py --json，解析脱敏体检报告（兼容 ###RESULT 信封） | Rust 单测：###RESULT/纯 JSON/噪声尾行/空输出；另有 ignored 真机冒烟（实测 5.64s 通过） |
 | pick_model_archive / model_import_local | 选本地模型 ZIP→安全解压→识别 MuScriptor/Aria-AMT/钢琴模型→复制到 models/<dest>；7z/tar 明确报错 | Rust 单测：ZIP 导入落盘、识别 muscriptor/small、7z 拒绝 |
+| clear_user_data | 按 scope 清除 models/soundfonts/deps（GPU/缓存）/playdata；**MIDI、设置、歌单永不清** | Rust 单测（临时目录）：单 scope/多 scope、needRestart、MIDI/settings 保留 |
 | open_folder | 打开目录（仅目录） | 实际打开资源管理器不在无头会话触发 |
 | soundfont_list | 扫描 renderer/vendor/soundfonts + dataDir/soundfonts（sf2/sf3） | 开发树返回 GeneralUser.sf2 |
 | dep_check | Rust 启动 Python `deps.py check`，解析 `###RESULT` 的 groups | 返回 universal/piano/aria/muscriptor/separate/transkun 6 组 |
@@ -188,14 +189,14 @@ worker running=true seq=1；输出 MIDI 头 `MThd`。剩余：cancel/pause、UI 
 
 - `npm run tauri:coverage` / `node scripts/tauri/ipc-coverage.mjs --write`：
   只解析 preload 与 Tauri 桥的方法名，不启动窗口；
-- 当前：preload 265 方法 / Tauri **127** 方法 / **138 未映射**；preload invoke 250 / tauri call **119**；
+- 当前：preload 265 方法 / Tauri **128** 方法 / **137 未映射**；preload invoke 250 / tauri call **120**；
 - 缺口分类：设置杂项 28、diffsinger 19、utau/voicebank 18、模型/安装 14、导出/渲染 14、
   资源/音频 13、rvc 12、曲库/数据 11、文件/诊断 11、事件/窗口 10、GPU 8、更新/测速 6、其他 4；
 - 明细见 [IPC-COVERAGE.md](IPC-COVERAGE.md)。
 - 前端实际调用审计：`npm run tauri:call-audit`（`docs/rust/BRIDGE-CALLS.md`），
-  当前 212 个去重调用 / 111 未找到实现（启发式，含动态调用误报）。
+  当前 212 个去重调用 / 110 未找到实现（启发式，含动态调用误报）。
 
-## 4. 当前命令清单（82 条）
+## 4. 当前命令清单（83 条）
 
 host_info, app_version, ping, python_selfcheck, engine_probe, convert, engine_worker_status,
 load_settings, save_settings, db_kv_get, db_kv_set, db_status, db_songs_list, db_songs_put,
@@ -209,7 +210,7 @@ db_playlists_delete, data_root, open_data_root, clean_temp, has_midi, verify_mid
 get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear,
 read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open,
 storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject,
-autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local。
+autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data。
 
 ## 4.1 下一步
 

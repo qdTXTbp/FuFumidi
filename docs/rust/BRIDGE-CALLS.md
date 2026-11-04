@@ -6,14 +6,13 @@
 | 指标 | 数值 |
 |---|---:|
 | 前端调用的 bridge 方法（去重） | 212 |
-| Tauri 顶层方法 | 92 |
+| Tauri 顶层方法 | 93 |
 | Tauri 嵌套方法 | 43 |
-| **未找到实现** | **111** |
+| **未找到实现** | **110** |
 
 ## 未找到实现的方法
 
 - `appUninstall` — frontend/src/components/SettingsPanel.vue
-- `clearUserData` — frontend/src/components/SettingsPanel.vue
 - `coverCancel` — frontend/src/views/ViewCover.vue
 - `coverOpen` — frontend/src/views/ViewCover.vue
 - `coverPickAudio` — frontend/src/views/ViewCover.vue

@@ -5,10 +5,10 @@
 | 指标 | 数值 |
 |---|---:|
 | preload 暴露方法 | 265 |
-| Tauri 桥已映射方法 | 127 |
-| 尚未映射 | **138** |
+| Tauri 桥已映射方法 | 128 |
+| 尚未映射 | **137** |
 | preload IPC invoke 通道 | 250 |
-| Tauri call 通道 | 119 |
+| Tauri call 通道 | 120 |
 
 ## 缺口分类
 
@@ -25,8 +25,8 @@
 | 事件/窗口 | 7 |
 | 更新/测速 | 6 |
 | 文件/诊断 | 5 |
-| 其他 | 4 |
 | 曲库/数据 | 4 |
+| 其他 | 3 |
 
 ## 尚未映射的方法
 
@@ -35,7 +35,6 @@ appUninstall
 cancelInstall
 catalog
 clearFinished
-clearUserData
 confirmInstall
 coverCancel
 coverOpen

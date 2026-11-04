@@ -371,6 +371,10 @@
   7z/tar 明确报错仍走 Electron）；桥补 pickModelArchive/modelImportLocal；Rust 测试 ZIP 导入/
   识别/7z 拒绝；命令总数 **82**，覆盖 127 方法/138 未映射（119 call），bridge 未实现 **111**，
   cargo test **22/22 + 1 ignored**。
+- **Tauri 清除用户数据**：`clear_user_data`（按 scope 清 models/soundfonts/deps/playdata；
+  **MIDI、settings、歌单永不清**；needRestart 提示）；桥补 clearUserData；Rust 测试临时目录
+  单/多 scope、MIDI/settings 保留；命令总数 **83**，覆盖 128 方法/137 未映射（120 call），
+  bridge 未实现 **110**，cargo test **23/23 + 1 ignored**。
 - **T-117 曲库/设置共享 Electron 数据（重要）**：Rust 用 rusqlite 直读/写
   `%APPDATA%/FuFumidi/fufumidi/fufumidi.sqlite`（songs/playlists/kv），设置优先读 legacy
   settings.json；只读验收实测 **1972 首真实曲目**、57 个设置键、侧栏「全部曲目 1972」正常；
