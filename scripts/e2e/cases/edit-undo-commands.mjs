@@ -211,5 +211,21 @@ export default async function (app) {
   const draftUndo = await app.eval("(" + S + ".tracks[0].notes || []).map(n => n.vel)");
   if (JSON.stringify(draftUndo) !== JSON.stringify(draftBefore)) throw new Error('applyDraft undo 未恢复');
 
+  // 历史面板回退：click 第 i 行 = 撤销该步及之后
+  await clear();
+  const histBase = await count();
+  await app.eval("(" + E + ".addNote(0, 72, 120), true)");
+  await app.eval("(" + E + ".addNote(120, 74, 120), true)");
+  await app.eval("(" + E + ".addNote(240, 76, 120), true)");
+  await new Promise((r) => setTimeout(r, 150));
+  if (await count() !== histBase + 3) throw new Error('历史回退测试前置音符数不对');
+  await app.eval("(window.__fufumidiDebug.openHistory(), true)");
+  await app.eval("(window.__fufumidiDebug.undoToHistory(1), true)");
+  await new Promise((r) => setTimeout(r, 150));
+  if (await count() !== histBase + 1) throw new Error('历史面板回退 2 步失败: ' + await count());
+  await app.eval("(window.__fufumidiDebug.undoToHistory(0), true)");
+  await new Promise((r) => setTimeout(r, 150));
+  if (await count() !== histBase) throw new Error('历史面板回退最后一步失败: ' + await count());
+
   // 隐藏窗口下 Page.captureScreenshot 偶发超时；本用例的验收证据是上面的状态断言，不依赖截图。
 }

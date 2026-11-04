@@ -1267,6 +1267,21 @@ const helpOpen = ref(false);
 
 // 撤销历史快照
 function openHistory() { historyOpen.value = true; }
+/** 历史面板（新→旧）第 i 行：撤销该步及之后的所有操作，保留该步之前的状态。 */
+function undoToHistory(i) {
+  const list = editor.value ? editor.value.historySnapshots() : [];
+  const steps = Math.min(list.length, Math.max(0, Number(i) + 1));
+  let done = 0;
+  for (let k = 0; k < steps; k++) {
+    if (!editor.value) break;
+    const before = editor.value.historySnapshots().length;
+    editor.value.undo();
+    if (editor.value.historySnapshots().length >= before) break; // undo 无可撤销时不前进
+    done++;
+  }
+  histRev.value++;
+  if (done) toast(t('已撤销') + ' ' + done + ' ' + t('步'), 'ok');
+}
 /* 依赖 historyOpen：撤销栈是普通数组（不是响应式的），computed 若只依赖 editor，
    第一次打开后就会一直缓存旧列表 —— 再点「历史」看到的还是上一次的快照。 */
 const historyList = computed(() => {
@@ -2388,6 +2403,7 @@ onMounted(async () => {
         stepOn, stepCursorTick, listOpen, listDraft, viewMode, sel,
         // 表达映射（§3.7）验收用：动作表 / 展开结果 / 导出字节（不落盘）
         song: () => song.value, ksMap, exprMap, exprDraft, artPlan, tracksForExport, articulationPlan,
+        openHistory, undoToHistory, historyList,
         newMidi, openKSMap, saveKSMap,
         exportBytes: () => {
           const s = song.value;
@@ -3304,12 +3320,12 @@ onBeforeUnmount(() => {
     <div v-if="historyOpen" class="ed-modal-mask" v-focus-trap role="dialog" aria-modal="true"
          :aria-label="t('撤销历史')" @click.self="historyOpen = false" @keydown.esc="historyOpen = false">
       <div class="ed-modal">
-        <div class="ed-modal-head"><b>{{ t('撤销历史') }}</b><span class="muted small">{{ t('点击条目回退到该状态') }}</span><button class="icon-btn" style="margin-left:auto" @click="historyOpen = false"><Icon name="minus" :size="14" /></button></div>
+        <div class="ed-modal-head"><b>{{ t('撤销历史') }}</b><span class="muted small">{{ t('点击条目撤销该步及之后') }}</span><button class="icon-btn" style="margin-left:auto" @click="historyOpen = false"><Icon name="minus" :size="14" /></button></div>
         <div class="ks-list">
           <div v-for="(h, i) in historyList" :key="i" class="ks-row">
             <span class="ks-label">#{{ historyList.length - i }}</span>
             <span class="muted small"><b>{{ t(h.label) }}</b> · {{ h.ti >= 0 ? t('轨道 ') + (h.ti + 1) : t('全部') }} · {{ h.notes }}{{ t(' 个音符 · ') }}{{ fmtBytes(h.bytes) }} · {{ h.at ? new Date(h.at).toLocaleTimeString() : '—' }}</span>
-            <button class="btn sm" @click="historyOpen = false">{{ t('撤销') }}</button>
+            <button class="btn sm" @click="undoToHistory(i)">{{ t('撤销') }}</button>
           </div>
           <div v-if="!historyList.length" class="muted small">{{ t('暂无撤销记录') }}</div>
         </div>

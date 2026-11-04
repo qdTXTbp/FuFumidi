@@ -327,8 +327,9 @@
   E2E 覆盖踏板 undo/redo。CC 泳道拖拽仍走快照。
   **第六批**：`commitPreview` 改为一条 update 命令（预览前后字段 diff，撤销回预览前）；
   `applyDraft` 列表编辑器批量写回也走 update 命令；E2E 覆盖预览提交与草稿写回的 undo/redo。
-  尚未完成：CC 泳道拖拽仍走快照；历史面板行内回退、
-  与 `session.js` 应用级单栈合流未做。**仍不能宣称 P-011 整体完成。**
+  **第七批**：历史面板行内「撤销」不再是空操作：点击第 i 行连续 undo（该步及之后），面板文案/EN/JA 同步；
+  E2E 覆盖 3 步历史回退 2 步/最后 1 步。
+  尚未完成：CC 泳道拖拽仍走快照；与 `session.js` 应用级单栈合流未做。**仍不能宣称 P-011 整体完成。**
 - **Tauri check_midi 已补**：Rust 实现与 Electron 同语义（只认数据根 midi/ 内非空文件），
   桥补 `checkMidi`；Tauri 曲库自愈不再因缺命令而跳过。Rust 单测覆盖根内保留/缺失/根外路径。
   命令总数 **44**；本轮全部无头验证（cargo test / typecheck / build / audit）。

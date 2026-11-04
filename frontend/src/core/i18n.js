@@ -3232,6 +3232,8 @@ export const I18N_MAP = {
   '技法名（如 Legato）': 'Technique name (e.g. Legato)',
   '当前轨道 ': 'This track has ',
   '点击条目回退到该状态': 'Click an item to restore that state',
+  '点击条目撤销该步及之后': 'Click an item to undo that step and all later steps',
+  '已撤销': 'Undone',
   '为选中的 ': 'Add lyrics to ',
   '输入歌词（如：爱）': 'Enter lyrics (e.g. love)',
   '编辑功能说明': 'Editor feature notes',
