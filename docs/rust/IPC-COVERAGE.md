@@ -5,10 +5,10 @@
 | 指标 | 数值 |
 |---|---:|
 | preload 暴露方法 | 265 |
-| Tauri 桥已映射方法 | 113 |
-| 尚未映射 | **152** |
+| Tauri 桥已映射方法 | 114 |
+| 尚未映射 | **151** |
 | preload IPC invoke 通道 | 250 |
-| Tauri call 通道 | 104 |
+| Tauri call 通道 | 105 |
 
 ## 缺口分类
 
@@ -21,7 +21,7 @@
 | 导出/渲染 | 14 |
 | 资源/音频/扩展 | 13 |
 | rvc | 12 |
-| 文件/诊断 | 9 |
+| 文件/诊断 | 8 |
 | gpu/运行时增强 | 8 |
 | 事件/窗口 | 7 |
 | 更新/测速 | 6 |
@@ -41,7 +41,6 @@ cleanup
 clearFinished
 clearUserData
 confirmInstall
-copyAsset
 coverCancel
 coverOpen
 coverPickAudio

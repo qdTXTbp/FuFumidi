@@ -329,6 +329,9 @@
 - **Tauri 歌词/定位**：`read_sidecar_lyrics`（同名 .lrc/.LRC → base64）、`reveal_midi`（资源管理器定位，
   根外/缺失回退 midi 目录）；桥补 readSidecarLyrics/revealMidi；Rust 测试 base64/命中/缺失/回退；
   命令总数 **66**，覆盖 113 方法/152 未映射（104 call）。
+- **Tauri 资产复制/打开目录**：`copy_asset`（分轨导出资产复制，自动建父目录）、`open_folder`
+  （仅目录）；桥补 project.copyAsset；Rust 测试复制字节/源缺失；命令总数 **68**，覆盖 114 方法/
+  151 未映射（105 call）。
 - **T-117 曲库/设置共享 Electron 数据（重要）**：Rust 用 rusqlite 直读/写
   `%APPDATA%/FuFumidi/fufumidi/fufumidi.sqlite`（songs/playlists/kv），设置优先读 legacy
   settings.json；只读验收实测 **1972 首真实曲目**、57 个设置键、侧栏「全部曲目 1972」正常；

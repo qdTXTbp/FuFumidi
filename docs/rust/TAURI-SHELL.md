@@ -71,6 +71,8 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 | autosave_write / list / read / clear | 崩溃恢复草稿（dataRoot/temp/autosave，≤32MB，原子 rename，安全 docId） | Rust 单测：写/列/读/清、非法 docId 文件名安全化 |
 | read_sidecar_lyrics | 读取同名 .lrc/.LRC，返回 base64 + 字节数 | Rust 单测：base64 编码、命中 .lrc、缺失返回 not found |
 | reveal_midi | 在资源管理器中定位曲库文件；根外/缺失回退 midi 目录 | Rust 单测：空路径回退；实际打开资源管理器不在无头会话触发 |
+| copy_asset | 复制分轨导出资产（自动建父目录） | Rust 单测：复制字节一致、源缺失报错 |
+| open_folder | 打开目录（仅目录） | 实际打开资源管理器不在无头会话触发 |
 | soundfont_list | 扫描 renderer/vendor/soundfonts + dataDir/soundfonts（sf2/sf3） | 开发树返回 GeneralUser.sf2 |
 | dep_check | Rust 启动 Python `deps.py check`，解析 `###RESULT` 的 groups | 返回 universal/piano/aria/muscriptor/separate/transkun 6 组 |
 | diag_export | 写 dataDir/diagnostics-<ts>.json（host/python/models/soundfonts/dataDir） | 文件生成，ok=true |
@@ -176,12 +178,12 @@ worker running=true seq=1；输出 MIDI 头 `MThd`。剩余：cancel/pause、UI 
 
 - `npm run tauri:coverage` / `node scripts/tauri/ipc-coverage.mjs --write`：
   只解析 preload 与 Tauri 桥的方法名，不启动窗口；
-- 当前：preload 265 方法 / Tauri **113** 方法 / **152 未映射**；preload invoke 250 / tauri call **104**；
+- 当前：preload 265 方法 / Tauri **114** 方法 / **151 未映射**；preload invoke 250 / tauri call **105**；
 - 缺口分类：设置杂项 28、diffsinger 19、utau/voicebank 18、模型/安装 14、导出/渲染 14、
   资源/音频 13、rvc 12、曲库/数据 11、文件/诊断 11、事件/窗口 10、GPU 8、更新/测速 6、其他 4；
 - 明细见 [IPC-COVERAGE.md](IPC-COVERAGE.md)。
 
-## 4. 当前命令清单（66 条）
+## 4. 当前命令清单（68 条）
 
 host_info, app_version, ping, python_selfcheck, engine_probe, convert, engine_worker_status,
 load_settings, save_settings, db_kv_get, db_kv_set, db_status, db_songs_list, db_songs_put,
@@ -193,7 +195,7 @@ pick_file, pick_directory, pick_audio, pick_audio_files, pick_image, pick_music_
 wallpaper_defaults, delete_midi, rename_midi, list_audio_files, library_stats, read_soundfont,
 db_playlists_delete, data_root, open_data_root, clean_temp, has_midi, verify_midi, dupe_midi,
 get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear,
-read_sidecar_lyrics, reveal_midi。
+read_sidecar_lyrics, reveal_midi, copy_asset, open_folder。
 
 ## 4.1 下一步
 

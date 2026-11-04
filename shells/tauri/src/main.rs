@@ -595,6 +595,34 @@ fn reveal_target(p: &str) -> (String, bool) {
     (midi_root().display().to_string(), true)
 }
 
+fn copy_asset_files(src: &str, dest: &str) -> serde_json::Value {
+    if src.is_empty() || dest.is_empty() { return serde_json::json!({ "ok": false, "error": "missing src/dest" }); }
+    if !Path::new(src).exists() { return serde_json::json!({ "ok": false, "error": "source not found" }); }
+    if let Some(parent) = Path::new(dest).parent() { let _ = std::fs::create_dir_all(parent); }
+    match std::fs::copy(src, dest) {
+        Ok(_) => serde_json::json!({ "ok": true, "savedTo": dest }),
+        Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
+    }
+}
+
+#[tauri::command]
+fn copy_asset(src: String, dest: String) -> serde_json::Value { copy_asset_files(&src, &dest) }
+
+#[tauri::command]
+fn open_folder(p: String) -> serde_json::Value {
+    let target = PathBuf::from(&p);
+    if !target.is_dir() { return serde_json::json!({ "ok": false, "error": "not a directory" }); }
+    #[cfg(target_os = "windows")]
+    {
+        match std::process::Command::new("explorer").arg(&target).spawn() {
+            Ok(_) => serde_json::json!({ "ok": true, "path": target.display().to_string() }),
+            Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    { serde_json::json!({ "ok": false, "error": "unsupported platform" }) }
+}
+
 #[tauri::command]
 fn reveal_midi(p: Option<String>) -> serde_json::Value {
     let (target, fell_back) = reveal_target(p.as_deref().unwrap_or(""));
@@ -1527,7 +1555,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, db_kv_get, db_kv_set,
-            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, model_list,
+            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
@@ -1560,6 +1588,20 @@ mod check_midi_tests {
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    #[test]
+    fn copy_asset_roundtrip() {
+        let root = tmpdir("copy-asset");
+        let src = root.join("src.wav");
+        std::fs::write(&src, b"1234").unwrap();
+        let dest = root.join("sub/dest.wav");
+        let r = super::copy_asset_files(src.to_str().unwrap(), dest.to_str().unwrap());
+        assert_eq!(r["ok"], true);
+        assert_eq!(std::fs::read(&dest).unwrap(), b"1234");
+        let bad = super::copy_asset_files(root.join("none").to_str().unwrap(), dest.to_str().unwrap());
+        assert_eq!(bad["ok"], false);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
