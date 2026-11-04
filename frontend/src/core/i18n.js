@@ -6531,6 +6531,7 @@ export const I18N_MAP = {
   '未安装分轨模型': 'Stem model not installed',
   '去资源中心下载': 'Download in Resources',
   '自动 = 6–12 轨，按音符数与置信度评分，核心角色（鼓/人声/贝斯）优先': 'Auto = 6–12 tracks, scored by note count and confidence; core roles (drums/vocals/bass) first',
+  '量化终点（关闭则保持时值）': 'Quantize note ends too (off keeps durations)',
   '当前曲目': 'Current song',
   '移除 / 删除': 'Remove / Delete',
   '键位设置': 'Key bindings',

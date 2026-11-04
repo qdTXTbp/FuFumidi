@@ -194,6 +194,12 @@
 - 契约：新增 `onStemProgress` 订阅后重新生成 schema，`check:contracts` 零漂移。
 - E2E `transcribe-stem-ui`：预算 5 档、状态徽标、开关联动禁用，全绿。
 
+## 14.1 量化增强（2026-11-04）
+
+- 快速量化支持强度与终点选项（EditorCanvas quantize(opts)）；智能量化弹窗默认强度 100%，
+  新增「量化终点（关闭则保持时值）」——默认保持时值，断奏/齐奏收尾可显式打开。
+- E2E `edit-quantize`：非网格音符 → 全选 → 1/8 + 量化终点 → 起点/终点均落网格 → Ctrl+Z 恢复，全绿。
+
 ## 15. 范围变更：取消 Rust/ONNX 替换 Python 引擎（2026-11-04）
 
 - 用户决定（原话）：「Rust/ONNX 替换 Python 引擎,这一项改动不执行了」；同时要求「注意让现有的模型都能使用」。

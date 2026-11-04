@@ -1237,7 +1237,8 @@ let audioEl = null;
 const sqOpen = ref(false);
 const sqGrid = ref(8);
 const sqGroove = ref('none');
-const sqStrength = ref(60);
+const sqStrength = ref(100); // 专业默认：100% 量化；需要保留律动再往下调
+const sqEnd = ref(false);    // 是否同时量化音符终点（默认保持时值）
 
 // 逻辑编辑器弹窗
 const logicOpen = ref(false);
@@ -1423,7 +1424,14 @@ function applySmartQuantize() {
       else if (g === 'custom') { try { const arr = JSON.parse(localStorage.getItem('fufumidi_custom_groove') || '[]'); if (arr.length) offset = (arr[step % arr.length] || 0) * gridTicks; } catch (e) {} }
     }
     const target = Math.max(0, Math.round(ideal + offset * strength));
-    n.end = n.end - n.start + target;
+    if (sqEnd.value) {
+      // 终点也量化（同样按 strength 插值），适合断奏/齐奏收尾；
+      // 默认关闭 = 保持原时值，避免把刻意保留的连奏/人性化拖尾抹平。
+      const qEnd = Math.max(0, Math.round(n.end / gridTicks) * gridTicks);
+      n.end = Math.max(target + 1, Math.round(n.end + (qEnd - n.end) * strength));
+    } else {
+      n.end = n.end - n.start + target;
+    }
     n.start = target;
     count++;
   }
@@ -2589,7 +2597,7 @@ onBeforeUnmount(() => {
         <div class="adv-row">
           <span class="et-label">{{ t('生成') }}</span>
           <button class="et-btn" :title="t('基于当前旋律/和弦自动生成 贝斯+分解和弦+铺底')" @click="addAccompaniment"><Icon name="spark" :size="14" />{{ t('智能伴奏') }}</button>
-          <button class="et-btn" :title="t('智能量化：网格 + Groove 模板')" @click="openSmartQuantize"><Icon name="quantize" :size="14" />{{ t('智能量化') }}</button>
+          <button class="et-btn" data-guide="smart-quantize" :title="t('智能量化：网格 + Groove 模板')" @click="openSmartQuantize"><Icon name="quantize" :size="14" />{{ t('智能量化') }}</button>
         </div>
         <div class="adv-row">
           <span class="et-label">{{ t('批处理') }}</span>
@@ -3101,7 +3109,7 @@ onBeforeUnmount(() => {
         <div class="ed-modal-head"><b>{{ t('智能量化') }}</b><span class="muted small">{{ t('网格 + Groove 模板') }}</span><button class="icon-btn" style="margin-left:auto" @click="sqOpen = false"><Icon name="minus" :size="14" /></button></div>
         <div class="adv-form-grid">
           <label>{{ t('网格') }}
-            <select v-model="sqGrid" class="select-input" style="width:100%">
+            <select v-model="sqGrid" data-guide="sq-grid" class="select-input" style="width:100%">
               <option :value="4">1/4</option><option :value="8">1/8</option><option :value="16">1/16</option><option :value="32">1/32</option>
             </select>
           </label>
@@ -3111,11 +3119,12 @@ onBeforeUnmount(() => {
             </select>
           </label>
           <label class="span2">{{ t('强度') }}<NumSlider v-model="sqStrength" :min="0" :max="100" style="width:100%" no-input /> <span class="muted small">{{ sqStrength }}%</span></label>
+          <label class="span2" :title="t('量化终点（关闭则保持时值）')"><input type="checkbox" v-model="sqEnd" data-guide="sq-end" /> {{ t('量化终点（关闭则保持时值）') }}</label>
         </div>
         <div class="ed-modal-foot">
           <button class="btn sm" @click="extractGroove">{{ t('提取选中为 Groove') }}</button>
           <button class="btn sm" @click="sqOpen = false">{{ t('取消') }}</button>
-          <button class="btn sm primary" @click="applySmartQuantize">{{ t('应用量化') }}</button>
+          <button class="btn sm primary" data-guide="sq-apply" @click="applySmartQuantize">{{ t('应用量化') }}</button>
         </div>
       </div>
     </div>

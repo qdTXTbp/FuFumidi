@@ -506,14 +506,23 @@ function moveNotes(arr, dTick, dMidi) {
   }
   afterEdit();
 }
-function quantize(arr, ratio) {
+function quantize(arr, ratio, opts = {}) {
   const tr = curTrack(); if (!tr || !arr.length) return;
   const s = song(); const st = (s.tpb * (ratio || props.snapRatio)) || 1;
+  const strength = opts.strength == null ? 1 : Math.max(0, Math.min(1, Number(opts.strength)));
+  const quantizeEnd = opts.end !== false;
   pushState('量化');
   for (const n of arr) {
     const q = tick => Math.max(0, Math.round(tick / st) * st);
-    const ns = q(n.start), ne = q(n.end);
-    n.start = ns; n.end = Math.max(ns + 1, ne);
+    const len = n.end - n.start;
+    const ns = Math.max(0, Math.round(n.start + (q(n.start) - n.start) * strength));
+    if (quantizeEnd) {
+      const qe = q(n.end);
+      n.end = Math.max(ns + 1, Math.round(n.end + (qe - n.end) * strength));
+    } else {
+      n.end = Math.max(ns + 1, ns + len);
+    }
+    n.start = ns;
   }
   afterEdit();
 }
@@ -1874,7 +1883,7 @@ function setInsert(ticks, dot) {
   if (dot != null) insertDot.value = !!dot;
 }
 function deleteSelected() { if (selection.size) deleteNotes([...selection]); }
-function quantizeSelected(ratio) { if (selection.size) quantize([...selection], ratio); }
+function quantizeSelected(ratio, opts) { if (selection.size) quantize([...selection], ratio, opts); }
 function transposeSelected(d) { if (selection.size) transpose([...selection], d); }
 function velRampSelected(dir) { if (selection.size) velRamp([...selection], dir); }
 function selectAll() {
