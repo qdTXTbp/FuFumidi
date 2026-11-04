@@ -3557,6 +3557,16 @@ mod check_midi_tests {
     }
 
     #[test]
+    fn audio_duration_unsupported_extension() {
+        let root = tmpdir("audio-unsupported");
+        let f = root.join("clip.wma");
+        std::fs::write(&f, b"not supported").unwrap();
+        let r = super::audio_duration_at(f.to_str().unwrap());
+        assert_eq!(r["ok"], false);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn audio_duration_aiff() {
         let root = tmpdir("audio-aiff");
         let f = root.join("clip.aiff");

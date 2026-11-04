@@ -394,7 +394,7 @@
 - **Tauri 智能修正 refine**：调 engine/smart_midi.py refine（audio/midi/out/mode/stemBalance/窗口参数），逐行 emit engine:refine:log，解析 ###RESULT；Rust 测试参数拼装；**真机引擎冒烟已完成**：合成 2 秒 WAV + 2 音符 MIDI，smart_midi 2.32s 返回 ###RESULT ok、输出 76 字节 MIDI；命令的 stderr 现会并入错误尾部；命令总数 **113**，arg 审计 24→**23**，cargo test **38/38 + 1 ignored**。
 - **Tauri 音频时长补 M4A/MP4**：解析 MP4 box/`mvhd` 得到时长；合成 M4A 2s 单测通过；audio_duration 现覆盖 WAV/FLAC/MP3/M4A，cargo test **39/39 + 1 ignored**。
 - **Tauri 音频时长补 OGG**：解析 OggS 页 granule + Vorbis 采样率 / Opus preskip；合成 1s OGG 单测；audio_duration 覆盖 WAV/FLAC/MP3/M4A/OGG，cargo test **40/40 + 1 ignored**。
-- **Tauri 音频时长补 AIFF/AIFC**：FORM/COMM + 80-bit extended sample rate；合成 1s AIFF 单测；audio_duration 覆盖 WAV/FLAC/MP3/M4A/OGG/AIFF，cargo test **41/41 + 1 ignored**。
+- **Tauri 音频时长补 AIFF/AIFC**：FORM/COMM + 80-bit extended sample rate；合成 1s AIFF 单测；audio_duration 覆盖 WAV/FLAC/MP3/M4A/OGG/AIFF，cargo test **41/41 + 1 ignored**；另补未知扩展名 `.wma` 返回 unsupported 的回退测试，cargo test **42/42 + 1 ignored**。
 - **隐藏窗口 E2E 恢复**：新增 `FUFUMIDI_E2E_HIDDEN=1`（E2E 启动器自动设置），主窗口与 splash 全程 `show:false`，**不弹窗**；隐藏模式实测 `shortcuts-config` 1/1、关键 9 子集 **9/9** 通过（smoke/edit-basic/track-crud/arrange-tabs-undo/arrange-playback/autosave/export/storage/tasks）。全量 37 用例尝试时工具 600s 超时，未拿到完整结果（非用例失败证据），后续可后台分段跑。
 - **T-117 曲库/设置共享 Electron 数据（重要）**：Rust 用 rusqlite 直读/写
   `%APPDATA%/FuFumidi/fufumidi/fufumidi.sqlite`（songs/playlists/kv），设置优先读 legacy
