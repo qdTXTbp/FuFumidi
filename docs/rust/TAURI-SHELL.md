@@ -89,6 +89,7 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 | save_binary（修复） | 原先只认 `{path,bytes}`，前端实际传 `{name,data}` → 保存 MIDI/壁纸导出失败；现支持原生保存对话框 + data/bytes 两种字节 | Rust 单测：data/bytes/空值解析；真实对话框不在无头触发 |
 | wallpaper_list / add_local / remove_local / scan_folder | 本地动态壁纸（Electron legacy wallpapers/，.ok 标记、mp4/webm/mov、删除校验 basename）；扫描文件夹（图片/视频，深度 3、≤600） | Rust 单测：添加/列表/删除、../ 拒绝、扫描过滤 txt/空文件 |
 | file_assoc | MIDI 文件关联开关：HKCU .mid/.midi → FuFumidi.MIDI，图标用 build/icon.ico（开发）或 exe | Rust 单测：开/关注册表命令计划；**测试不写注册表** |
+| take_pending_open_file | 冷启动从 argv 取第一个存在的 .mid/.midi（跳过 -flag），读字节返回 {name,bytes} 并清空；App.vue 兜底主动取一次后 importFiles | Rust 单测：MID 选中/非 MID 跳过/缺失忽略 |
 | gpu_status / gpu_uninstall | 读取 dataRoot/gpu-enhancements 下 cuda/rocm/xpu；返回当前 Python、rocm 是否需 3.12；卸载删除对应目录 | Rust 单测（临时目录）：识别 cuda、卸载删除、非法类型拒绝；真实 Python 版本读取在测试中执行 |
 | wallpaper_set_desktop | 静态图片设为桌面：HKCU Desktop Wallpaper/WallpaperStyle/TileWallpaper + `rundll32 user32.dll,UpdatePerUserSystemParameters` | Rust 单测：注册表命令计划/路径；**测试不改真实桌面** |
 | plugins_list / rescan / set_enabled / open_dir | 调 engine/plugin_render.py list（--dir 来自 settings/env），按 settings.plugins_enabled 标 enabled；开关写 settings；打开插件目录 | Rust 单测：输出解析/启用映射、设置写入；真实 Python 插件列表未在测试中跑（手工无窗口跑过返回空列表） |
