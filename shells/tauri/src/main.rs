@@ -131,9 +131,12 @@ fn dir_size_depth(p: &Path, depth: u32) -> u64 {
 }
 
 fn push_model(items: &mut Vec<serde_json::Value>, id: &str, name: &str, kind: &str, path: PathBuf, min_size: u64, note: &str) {
+    // 启动期不能对 33GB 的 models 目录做递归 dir_size：那会让资源中心/转录页
+    // 首次打开卡数十秒（实测冷启动的主要卡顿来源之一）。目录型模型只要
+    // “目录里至少有一个条目”就算存在；准确体积由资源中心异步统计。
     let (exists, size) = if path.is_dir() {
-        let s = dir_size(&path);
-        (s >= min_size && s > 0, s)
+        let has = std::fs::read_dir(&path).map(|mut rd| rd.next().is_some()).unwrap_or(false);
+        (has, 0)
     } else if let Ok(m) = std::fs::metadata(&path) {
         (m.len() >= min_size && m.len() > 0, m.len())
     } else {
@@ -1889,7 +1892,17 @@ fn load_settings() -> serde_json::Value {
 
 #[tauri::command]
 fn save_settings(s: serde_json::Value) -> serde_json::Value {
-    match write_json(&settings_path(), &s) {
+    // 前端有时只提交部分键（theme/ui_mode 等）；直接整文件覆盖会把
+    // data_root_last、音色库等持久键清掉。这里按顶层合并，保留未提交的键。
+    let path = settings_path();
+    let mut merged = read_json(&path);
+    let Some(incoming) = s.as_object() else { return serde_json::json!({ "ok": false, "error": "settings must be an object" }); };
+    if let Some(dst) = merged.as_object_mut() {
+        for (k, v) in incoming { dst.insert(k.clone(), v.clone()); }
+    } else {
+        merged = s;
+    }
+    match write_json(&path, &merged) {
         Ok(_) => serde_json::json!({ "ok": true }),
         Err(e) => serde_json::json!({ "ok": false, "error": e }),
     }
@@ -5187,7 +5200,26 @@ fn engine_self_check() -> serde_json::Value {
         None => serde_json::json!({ "ok": false, "pid": pid, "error": "engine worker did not return ###RESULT" }),
     }
 }
+/// 无窗口排障日志：Tauri 启动/退出/panic 追加到数据根 logs/tauri-start.log。
+fn tauri_log(msg: &str) {
+    let dir = data_dir().join("logs");
+    let _ = std::fs::create_dir_all(&dir);
+    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    use std::io::Write as _;
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("tauri-start.log")) {
+        let _ = writeln!(f, "[{}] {}", unix_to_iso(ts), msg);
+    }
+}
+
 fn main() {
+    std::panic::set_hook(Box::new(|info| {
+        let msg = format!("panic: {}", info);
+        let dir = data_dir().join("logs");
+        let _ = std::fs::create_dir_all(&dir);
+        use std::io::Write as _;
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("tauri-start.log")) { let _ = writeln!(f, "{msg}"); }
+    }));
+    tauri_log(&format!("start pid={} exe={} data={} args={:?}", std::process::id(), std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default(), data_dir().display(), std::env::args().collect::<Vec<_>>()));
     if std::env::args().any(|a| a == "--self-check") {
         println!("{}", serde_json::to_string_pretty(&host_info_json()).unwrap_or_default());
         return;
@@ -5264,12 +5296,14 @@ fn main() {
         .expect("error while building FuFumidi Tauri shell");
     app.run(|app_handle, event| {
         if let tauri::RunEvent::Exit = event {
+            tauri_log("exit");
             if let Some(st) = app_handle.try_state::<WorkerState>() {
                 // 取消在途 job 并 kill 暖 worker，退出后不留 Python 进程。
                 st.pool.shutdown();
             }
         }
     });
+    tauri_log("run-returned");
 }
 
 #[cfg(test)]

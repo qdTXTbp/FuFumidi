@@ -757,6 +757,7 @@ onMounted(() => {
       tabsStore.hydrate((state.songs || []).map((s) => s.id));
       if (state.currentId) tabsStore.open(state.currentId, (state.songs.find((s) => s.id === state.currentId) || {}).name || state.currentId);
     } catch (e) {}
+    try { window.__fufumidiSplashDone && window.__fufumidiSplashDone(); } catch (e) {}
   });
   setTimeout(restoreSessionView, 350);   // 等首屏路由/曲库恢复稳定后再套用会话
   playlistStore.hydrateFromDb();

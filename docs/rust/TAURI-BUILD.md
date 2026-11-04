@@ -222,3 +222,12 @@ Tauri 默认从 GitHub 下载 `nsis-3.13.zip`，本机直连超时。已把工�
 - 同目录新增 python/、engine/（Tauri 资源；resources 下 Electron 资源保留）；
 - 安装目录无窗口自检：dataDir=E:/Midi/FuFumidi/FuFumidiData、models=13、engine worker warm=1、--stem-smoke ok/6 tracks；
 - 未启动可见窗口；等待用户点桌面快捷方式验收。
+
+## 31. 2026-11-04 冷启动 / splash / 设置保护
+
+- 冷启动：静态 #boot-splash（内联 CSS 环形动画）在 Vue 之前出现；App 恢复曲库/会话后隐藏，15s 兜底；窗口底色 #0b0e14；
+- model_list 不再对 33GB 目录递归 dir_size（冷启动卡顿主因之一），目录型只判非空；
+- startup log：数据根 logs/tauri-start.log（启动/退出/panic），用于窗口打不开时排障；
+- settings 保存改为顶层合并，防止部分保存清掉 data_root_last/音色库；
+- release 2m33s、0 warning；安装目录产物 16,946,688 bytes，SHA-256 `d11147f126f2cd5c1ec64decdef73a794a81b841d4d39ffd1f9a82f54ca949d5`；
+- full E2E 41/41；cargo 121/121；clippy 0。

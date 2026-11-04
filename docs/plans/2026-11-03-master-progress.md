@@ -588,3 +588,5 @@
 - **stem merge fail-closed**：非零退出不报成功；release 2m26/0 warning；SHA b75b77c6…32f2。
 
 - **安装目录切换到 Tauri**：E:/Midi/FuFumidi/FuFumidi.exe 已由 Electron 换为 Tauri release（备份 FuFumidi.electron-6.5.0-beta.1.exe）；同目录 python/engine；无窗口自检 models=13、stem-smoke ok/6 tracks；等用户点快捷方式验收。
+
+- **冷启动/splash**：静态加载动画（Vue 前显示，恢复曲库后隐藏）；model_list 去掉 33GB 递归扫描；窗口底色；startup log；settings 顶层合并保护 data_root_last；release d11147f1/16,946,688；E2E 41/41、cargo 121、clippy 0。

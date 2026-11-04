@@ -41,7 +41,7 @@
 - `npm run audit`：0
 - `cargo test --offline`：**114 passed / 0 failed / 1 ignored**
 - `npm run tauri:handler-audit`：**158/158** 已注册，并已并入 `npm run audit`
-- release build：通过（158 命令，2m32s、0 warning，见 `TAURI-BUILD.md` §28）
+- release build：通过（158 命令，2m33s、0 warning，见 `TAURI-BUILD.md` §31）
 - `npm run tauri:video-smoke`：ok=true / 15827 bytes（合成 H.264+WAV 封装）
 - `npm run tauri:cover-smoke`：ok=true / status 0，engine_cover.py 参数面存在
 - `npm run tauri:cover-engine-smoke`：ok=true / status 0，真实 analyze 合成音频并返回 ###RESULT（不含 RVC/分离/混音）
@@ -123,8 +123,8 @@ cargo build --release --offline
 ## 9. Release 产物指纹
 
 - 文件：`poc/tauri-poc/target/release/fufumidi-shell.exe`
-- 大小：**16,935,936 bytes**
-- SHA-256：`b75b77c6905501c6452b76ecb89c6df751e68c61e3485b6b4805572f399032f2`
+- 大小：**16,946,688 bytes**
+- SHA-256：`d11147f126f2cd5c1ec64decdef73a794a81b841d4d39ffd1f9a82f54ca949d5`
 - Authenticode：**NotSigned**（未签名；符合当前外部前置未采购的状态）
 
 ## 10. 转录/分轨恢复（2026-11-04 夜间）
@@ -141,3 +141,11 @@ cargo build --release --offline
 - Electron 备份：E:/Midi/FuFumidi/FuFumidi.electron-6.5.0-beta.1.exe；
 - 安装目录自检：dataDir=E:/Midi/FuFumidi/FuFumidiData、models=13、engine warm=1、--stem-smoke ok/6 tracks；
 - 可见窗口仍为 0（未在自动化里启动 UI，等你验收）。
+
+## 12. 冷启动与加载动画（2026-11-04）
+
+- 静态 splash 在 Vue 之前显示，曲库/会话恢复后隐藏；
+- model_list 不再递归统计 33GB 目录；窗口底色 #0b0e14；
+- startup log：数据根 logs/tauri-start.log；
+- settings 部分保存不再清掉 data_root_last（本轮曾发生一次，已从备份恢复并修复合并逻辑）；
+- full E2E 41/41。

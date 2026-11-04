@@ -10,6 +10,29 @@
 
 </head>
 <body>
+<style>
+  #boot-splash{position:fixed;inset:0;z-index:99999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;background:radial-gradient(60% 70% at 50% 42%,#141b28 0%,#0b0e14 62%,#07090d 100%);color:#e8f1ff;font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;transition:opacity .38s ease,visibility .38s ease}
+  #boot-splash.done{opacity:0;visibility:hidden;pointer-events:none}
+  .bs-orbit{position:relative;width:86px;height:86px;display:grid;place-items:center}
+  .bs-orbit::before{content:"";position:absolute;inset:0;border-radius:50%;border:1px solid rgba(120,200,255,.16);box-shadow:0 0 48px rgba(60,170,255,.16),inset 0 0 30px rgba(60,170,255,.08)}
+  .bs-orbit::after{content:"";position:absolute;inset:5px;border-radius:50%;border:2px solid transparent;border-top-color:#7fd4ff;border-right-color:rgba(127,212,255,.35);animation:bs-spin 1.05s linear infinite;filter:drop-shadow(0 0 7px rgba(80,190,255,.55))}
+  .bs-core{width:17px;height:17px;border-radius:5px;background:linear-gradient(145deg,#eaf7ff,#62c8ff);box-shadow:0 0 24px rgba(90,195,255,.75);animation:bs-pulse 1.8s ease-in-out infinite}
+  .bs-name{font-size:21px;letter-spacing:.34em;text-indent:.34em;font-weight:600;color:#eaf7ff;text-shadow:0 0 28px rgba(90,190,255,.28)}
+  .bs-sub{font-size:12px;letter-spacing:.14em;color:#7f96b3}
+  .bs-bar{width:168px;height:2px;border-radius:2px;background:rgba(127,212,255,.12);overflow:hidden}
+  .bs-bar i{display:block;width:40%;height:100%;border-radius:2px;background:linear-gradient(90deg,transparent,#7fd4ff,transparent);animation:bs-sweep 1.5s ease-in-out infinite}
+  @keyframes bs-spin{to{transform:rotate(360deg)}}
+  @keyframes bs-pulse{0%,100%{transform:scale(.86);opacity:.8}50%{transform:scale(1.06);opacity:1}}
+  @keyframes bs-sweep{0%{transform:translateX(-120%)}100%{transform:translateX(360%)}}
+  @media (prefers-reduced-motion:reduce){.bs-orbit::after,.bs-core,.bs-bar i{animation:none}}
+  </style>
+  <div id="boot-splash" role="status" aria-live="polite">
+    <div class="bs-orbit"><div class="bs-core"></div></div>
+    <div class="bs-name">FuFumidi</div>
+    <div class="bs-sub">正在载入曲库 · 音频引擎 · 界面</div>
+    <div class="bs-bar"><i></i></div>
+  </div>
+
 <div id="app"></div>
 <!-- js-synth（libfluidsynth ~2.4MB）改为按需懒加载：仅启用 SF2 音色库时由 core/synth.js
      动态注入。同步加载会阻塞 Vue 首帧渲染（module 脚本必须等同步脚本执行完），拖慢启动。 -->
