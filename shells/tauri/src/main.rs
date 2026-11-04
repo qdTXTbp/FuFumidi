@@ -36,12 +36,84 @@ fn data_dir() -> PathBuf {
             return pb;
         }
     }
+    // 与 Electron 版数据根对齐：安装目录旁的 FuFumidiData（存在则用），否则 %APPDATA%/FuFumidi/FuFumidiData。
+    if let Some(d) = exe_dir() {
+        for c in [d.join("../FuFumidiData"), d.join("FuFumidiData")] {
+            if c.is_dir() {
+                let _ = std::fs::create_dir_all(&c);
+                return c;
+            }
+        }
+    }
     let base = std::env::var("APPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(|_| std::env::temp_dir());
-    let pb = base.join("FuFumidi");
+    let pb = base.join("FuFumidi").join("FuFumidiData");
     let _ = std::fs::create_dir_all(&pb);
     pb
+}
+
+fn models_dir() -> PathBuf { data_dir().join("models") }
+
+fn dir_size(p: &Path) -> u64 {
+    let Ok(rd) = std::fs::read_dir(p) else { return 0 };
+    let mut total = 0u64;
+    for e in rd.flatten() {
+        let path = e.path();
+        if path.is_dir() { total += dir_size(&path); }
+        else if let Ok(m) = e.metadata() { total += m.len(); }
+    }
+    total
+}
+
+fn push_model(items: &mut Vec<serde_json::Value>, id: &str, name: &str, kind: &str, path: PathBuf, min_size: u64, note: &str) {
+    let (exists, size) = if path.is_dir() {
+        let s = dir_size(&path);
+        (s >= min_size && s > 0, s)
+    } else if let Ok(m) = std::fs::metadata(&path) {
+        (m.len() >= min_size && m.len() > 0, m.len())
+    } else {
+        (false, 0)
+    };
+    items.push(serde_json::json!({
+        "id": id, "name": name, "kind": kind, "path": path.display().to_string(),
+        "size": size, "exists": exists, "downloadable": true, "note": note,
+        "arch": "", "use": "", "runtime": ""
+    }));
+}
+
+fn bundled_models_dir() -> Option<PathBuf> {
+    let mut cands = vec![repo_root_from_manifest().join("resources/models")];
+    if let Some(d) = exe_dir() {
+        cands.push(d.join("../resources/models"));
+        cands.push(d.join("resources/models"));
+    }
+    cands.into_iter().find(|p| p.is_dir())
+}
+
+/// 模型列表（T-115/T-117 过渡实现）：核心条目 + 分离模型，占位字段与 Electron model:list 对齐。
+/// 完整目录仍以 main/models.js 为准；这里保证 UI 能拿到 id/exists/kind，不再一律空态。
+#[tauri::command]
+fn model_list() -> Vec<serde_json::Value> {
+    let dir = models_dir();
+    let mut items = Vec::new();
+    push_model(&mut items, "basic_pitch", "通用转录（int8 量化）", "transcribe", dir.join("basic_pitch_quant.onnx"), 1000, "basic-pitch ONNX int8");
+    push_model(&mut items, "piano_transcription", "钢琴转录模型", "transcribe", dir.join("piano_transcription/note_F1=0.9677_pedal_F1=0.9186.pth"), 1_000_000, "piano CRNN");
+    push_model(&mut items, "hft_transformer", "hFT-Transformer", "transcribe", dir.join("hft_transformer"), 1_000_000, "Sony ISMIR2023");
+    push_model(&mut items, "muscriptor_small", "MuScriptor Small", "transcribe", dir.join("muscriptor/small/model.safetensors"), 10_000_000, "103M");
+    push_model(&mut items, "muscriptor_medium", "MuScriptor Medium", "transcribe", dir.join("muscriptor/medium/model.safetensors"), 100_000_000, "307M");
+    push_model(&mut items, "muscriptor_large", "MuScriptor Large", "transcribe", dir.join("muscriptor/large/model.safetensors"), 500_000_000, "1.4B");
+    push_model(&mut items, "yourmt3", "YourMT3+", "transcribe", dir.join("yourmt3"), 1_000_000, "YPTF");
+    push_model(&mut items, "miros", "MIROS", "transcribe", dir.join("miros"), 1_000_000, "AMT 2025");
+    push_model(&mut items, "aria_amt", "Aria-AMT", "transcribe", dir.join("aria_amt"), 1_000_000, "Whisper-style piano");
+    push_model(&mut items, "beat_this", "Beat This!", "transcribe", dir.join("hub/checkpoints/beat_this-final0.ckpt"), 100_000, "beat grid");
+    let tagger = if dir.join("audio-tagger").is_dir() { dir.join("audio-tagger") }
+        else if let Some(b) = bundled_models_dir() { b.join("audio-tagger") }
+        else { dir.join("audio-tagger") };
+    push_model(&mut items, "audio_tagger", "Audio Tagger / CED", "transcribe", tagger, 100_000, "instrument tags");
+    push_model(&mut items, "hnsep", "hnsep (Worldline v11)", "transcribe", dir.join("hnsep"), 100_000, "harmonic separation");
+    push_model(&mut items, "htdemucs4_6stems", "HTDemucs4 6stems", "separate", dir.join("multi/htdemucs4_6stems"), 1_000_000, "6-stem separation");
+    items
 }
 
 fn settings_path() -> PathBuf { data_dir().join("settings.json") }
@@ -463,7 +535,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, db_kv_get, db_kv_set,
-            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put,
+            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, model_list,
             list_midi_files, read_binary, save_binary,
             convert, engine_worker_status
         ])

@@ -258,8 +258,12 @@
   db_playlists_list/db_playlists_put`（JSON store，原子 rename，dataDir 可覆盖）；命令总数 **20**。
   smoke 增加 **uiRoutes**：`#/transcribe → #/resources → #/piano3d → #/music → #/home` 逐页渲染，
   实测 textLen 658–1404、#app 挂载、无崩溃；smoke **15 项**全绿。
-- 页面数据仍缺 `model_list/presets/soundfont_list` 等通道（显示空态，不是崩溃）；
-  下一步：T-115 扩面优先补 UI 必需通道，T-117 继续 settings/song/task host 化，cancel/pause 与批量并发。
+- **T-115 再扩面 + 数据根对齐**：新增 `model_list`（13 个核心模型条目，真实 exists/size），
+  命令总数 **21**；默认数据根优先安装目录旁 `FuFumidiData`，否则 `%APPDATA%/FuFumidi/FuFumidiData`
+  （与 Electron 版布局一致，模型目录=数据根/models）。
+- smoke 增至 **16 项**全绿（新增 modelList：13 条、id 齐全、含 separate）；UI 路由 textLen 未回退。
+- 页面数据仍缺 `presets_list/soundfont_list/dep_check` 等通道；
+  下一步：T-115 继续补这些 UI 必需通道，T-117 继续 settings/song/task host 化，cancel/pause 与批量并发。
 
 ## 17. 待收口（下一轮）
 
