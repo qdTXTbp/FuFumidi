@@ -558,3 +558,5 @@
 - **cover 后端后全量 E2E**：隐藏全量 **41/41**（156 命令源码）；cover 桥接不影响现有页面流程。
 
 - **Tauri 人声分离**：separate_audio 同步跑 music2midi.py separate（复用分离模型解析），发 engine:separate:log/progress；cancel sepN kill；Rust args 测试；命令 **157**，覆盖 **181/85**，call 173；真实分离未跑。
+
+- **157 命令 release（分离）**：2m17s、0 warning；host/engine self-check 通过；无窗口/残留。

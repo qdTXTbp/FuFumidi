@@ -151,3 +151,9 @@ Tauri 默认从 GitHub 下载 `nsis-3.13.zip`，本机直连超时。已把工�
 - `npm run tauri:cover-engine-smoke`：合成 1s WAV，调 `engine_cover.py analyze`（显式 vocals/instrumental，跳过分离模型）；
 - 实测 ok=true / status 0，返回 `###RESULT {stage:"analyze", ok:true}`；
 - 验证引擎启动/读音频/结果协议；不含 RVC 转换、分离、混音。
+
+## 20. 2026-11-04 157 命令 release（分离）
+
+- release 构建 2m17s、**0 warning**；
+- host/engine self-check 通过（embedded renderer / warm=1 / 无残留）；
+- 含 separate_audio；真实分离仍未跑（本机无分离模型权重）。
