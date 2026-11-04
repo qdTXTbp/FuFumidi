@@ -97,7 +97,8 @@ pub fn run(req: &serde_json::Value, app: Option<&AppHandle>) -> Option<serde_jso
     let mut merge = Command::new(&py);
     merge.current_dir(&eng).arg("stem_merge.py").args(["--out", &out_mid.display().to_string(), "--manifest-in", &manifest_in.display().to_string(), "--manifest-out", &manifest_out.display().to_string(), "--budget", budget]).creation_flags(0x08000000);
     apply_engine_env(&mut merge);
-    if merge.status().is_err() { return None; }
+    let merged_ok = merge.status().map(|s| s.success()).unwrap_or(false);
+    if !merged_ok { return None; }
     if let Some(a) = app { let _ = a.emit("engine:stem-progress", serde_json::json!({ "id": id, "stage": "done", "percent": 100 })); }
     Some(serde_json::json!({ "ok": true, "out": out_mid.display().to_string(), "tracks": built, "manifest": manifest_out.display().to_string(), "fallback": false }))
 }
