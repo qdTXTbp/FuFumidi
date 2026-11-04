@@ -77,6 +77,7 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 | audio_duration | 读文件头取时长：WAV RIFF/fmt/data、FLAC STREAMINFO、MP3 逐帧扫描、M4A/MP4 mvhd、OGG Vorbis/Opus 页 granule、AIFF/AIFC COMM；其他格式 unsupported | Rust 单测：1s WAV/FLAC/M4A/OGG/AIFF、100 帧 MP3（约 2.61s）、坏文件 false |
 | export_audio | 渲染端字节落盘：文件名清洗、原子写、sidecar manifest（SHA-256/格式/采样率/时长/ISO createdAt），支持 targetPath 或保存对话框 | Rust 单测：字节落盘、manifest sha256/采样率/ISO 时间、非法名清洗、空字节拒绝 |
 | export_stems_zip | 分轨 ZIP 打包（≤100 轨、总 ≤2GB、文件名清洗、targetPath 或保存对话框） | Rust 单测：两轨 ZIP 条目/字节、非法名清洗、空列表拒绝 |
+| video_export_begin / write / abort / end | 流式落盘：begin 建 temp 文件、write 追加、abort 删除、end 保存对话框 + ffmpeg 封装（imageio_ffmpeg，H.264 copy + AAC）；h264/webm | 无单测；真实编码/封装未跑 |
 | pick_cover | 选图片→data URL（png/jpeg/webp/bmp，≤6MB） | Rust 单测：jpeg MIME/base64、gif 拒绝、>6MB 拒绝；真实对话框不在无头会话触发 |
 | export_dawproject | DAWproject ZIP（project.xml/metadata.xml，≤200 文件，拒绝路径穿越，对话框或 filePath） | Rust 单测：两文件 ZIP 内容、../ 条目跳过、空列表拒绝 |
 | autostart_get / autostart_set | 通过 HKCU Run 注册项查询/设置开机自启 | Rust 单测：当前 exe 值加引号、查询返回布尔；**设置会写注册表，测试不调用** |
@@ -265,7 +266,7 @@ wallpaper_defaults, delete_midi, rename_midi, list_audio_files, library_stats, r
 db_playlists_delete, data_root, open_data_root, clean_temp, has_midi, verify_midi, dupe_midi,
 get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear,
 read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open,
-storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject,
+storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, video_export_begin, video_export_write, video_export_abort, video_export_end, pick_cover, export_dawproject,
 autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data,
 check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin,
 wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc,
