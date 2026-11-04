@@ -1832,6 +1832,73 @@ fn omr_sr_status() -> serde_json::Value { sr_status_at(&omr_root()) }
 #[tauri::command]
 fn omr_sr_remove() -> serde_json::Value { let _ = std::fs::remove_dir_all(omr_root().join("waifu2x")); omr_sr_status() }
 
+fn github_json(url: &str) -> Result<serde_json::Value, String> {
+    let out = Command::new("curl.exe").args(["-s", "-L", "--max-time", "25", "-H", "User-Agent: FuFumidi-Update", url]).creation_flags(0x08000000).output().map_err(|e| e.to_string())?;
+    if !out.status.success() { return Err(format!("curl exit {}", out.status)); }
+    serde_json::from_slice::<serde_json::Value>(&out.stdout).map_err(|e| e.to_string())
+}
+
+fn release_asset(rel: &serde_json::Value) -> Option<&serde_json::Value> {
+    rel.get("assets").and_then(|v| v.as_array()).and_then(|a| a.iter().find(|x| x.get("name").and_then(|n| n.as_str()).map(|n| n.to_ascii_lowercase().contains("install")).unwrap_or(false)))
+}
+
+fn update_check_remote(channel: &str) -> serde_json::Value {
+    let releases = match github_json("https://api.github.com/repos/qdTXTbp/FuFumidi/releases?per_page=10") {
+        Ok(v) => v, Err(e) => return serde_json::json!({ "ok": false, "error": e }),
+    };
+    let arr = match releases.as_array() { Some(a) => a, None => return serde_json::json!({ "ok": false, "error": "GitHub releases 不是数组" }) };
+    let want_beta = channel.eq_ignore_ascii_case("beta");
+    let Some(rel) = arr.iter().find(|r| want_beta || r.get("prerelease").and_then(|v| v.as_bool()) != Some(true)) else {
+        return serde_json::json!({ "ok": false, "error": "没有匹配通道的版本" });
+    };
+    let tag = rel.get("tag_name").and_then(|v| v.as_str()).unwrap_or("");
+    let latest = tag.trim_start_matches(|c| c == 'v' || c == 'V').to_string();
+    let asset = release_asset(rel);
+    serde_json::json!({
+        "ok": true, "current": env!("CARGO_PKG_VERSION"), "latest": latest, "tag": tag,
+        "channel": if want_beta || rel.get("prerelease").and_then(|v| v.as_bool()) == Some(true) { "beta" } else { "stable" },
+        "notes": rel.get("body").and_then(|v| v.as_str()).unwrap_or("").chars().take(500).collect::<String>(),
+        "url": asset.and_then(|a| a.get("browser_download_url")).and_then(|v| v.as_str()).map(|s| s.to_string()),
+        "name": asset.and_then(|a| a.get("name")).and_then(|v| v.as_str()).map(|s| s.to_string()),
+        "html": rel.get("html_url").and_then(|v| v.as_str()).unwrap_or(""), "source": "github"
+    })
+}
+
+#[tauri::command]
+fn update_check(channel: Option<String>) -> serde_json::Value { update_check_remote(channel.as_deref().unwrap_or("stable")) }
+
+#[tauri::command]
+fn update_list() -> serde_json::Value {
+    match github_json("https://api.github.com/repos/qdTXTbp/FuFumidi/releases?per_page=10") {
+        Ok(v) => serde_json::Value::Array(v.as_array().map(|a| a.iter().map(|x| serde_json::json!({
+            "tag": x.get("tag_name").cloned().unwrap_or(serde_json::Value::Null),
+            "name": x.get("name").cloned().unwrap_or(serde_json::Value::Null),
+            "prerelease": x.get("prerelease").cloned().unwrap_or(serde_json::json!(false)),
+            "body": x.get("body").and_then(|b| b.as_str()).unwrap_or("").chars().take(240).collect::<String>(),
+            "assets": x.get("assets").and_then(|v| v.as_array()).map(|a| a.iter().map(|z| serde_json::json!({ "name": z.get("name"), "url": z.get("browser_download_url"), "size": z.get("size") })).collect::<Vec<_>>()).unwrap_or_default()
+        })).collect::<Vec<_>>()).unwrap_or_default()),
+        Err(e) => serde_json::json!({ "error": e }),
+    }
+}
+
+#[tauri::command]
+fn update_notes(tag: Option<String>) -> serde_json::Value {
+    let t = tag.unwrap_or_default(); let t = if t.starts_with('v') { t } else { format!("v{t}") };
+    match github_json(&format!("https://api.github.com/repos/qdTXTbp/FuFumidi/releases/tags/{t}")) {
+        Ok(v) => serde_json::json!({ "ok": true, "body": v.get("body").and_then(|b| b.as_str()).unwrap_or("") }),
+        Err(e) => serde_json::json!({ "ok": false, "error": e }),
+    }
+}
+
+#[tauri::command]
+fn launch_updater(channel: Option<String>) -> serde_json::Value {
+    let r = update_check_remote(channel.as_deref().unwrap_or("stable"));
+    let Some(url) = r.get("html").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) else { return serde_json::json!({ "ok": false, "error": "没有可用的发布页" }); };
+    #[cfg(target_os = "windows")]
+    { match Command::new("cmd").args(["/C", "start", "", url]).creation_flags(0x08000000).spawn() { Ok(_) => serde_json::json!({ "ok": true, "manual": true, "url": url }), Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }) } }
+    #[cfg(not(target_os = "windows"))] { let _ = url; serde_json::json!({ "ok": false, "error": "not supported" }) }
+}
+
 fn data_root_overridden() -> bool {
     std::env::var("FUFUMIDI_DATA_ROOT").map(|p| !p.trim().is_empty()).unwrap_or(false)
 }
@@ -5335,6 +5402,10 @@ fn main() {
         return;
     }
     let argv: Vec<String> = std::env::args().collect();
+    if argv.iter().any(|a| a == "--update-check") {
+        println!("{}", serde_json::to_string_pretty(&update_check_remote("beta")).unwrap_or_default());
+        return;
+    }
     if let Some(i) = argv.iter().position(|a| a == "--stem-smoke") {
         let audio = argv.get(i + 1).cloned().unwrap_or_default();
         let out = argv.get(i + 2).cloned().unwrap_or_default();
@@ -5376,7 +5447,7 @@ fn main() {
         .manage(separation_state)
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
-            renderer_ready, load_settings, save_settings, update_sources, update_set_preferred_source, db_kv_get, db_kv_set,
+            renderer_ready, update_check, update_list, update_notes, launch_updater, load_settings, save_settings, update_sources, update_set_preferred_source, db_kv_get, db_kv_set,
             tasks_list, tasks_cancel, tasks_clear_finished, db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, cover_singers, cover_pick_audio, cover_pick_dir, cover_open, cover_cancel, cover_run, video_export_begin, video_export_write, video_export_abort, video_export_end, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, wallpaper_set_desktop, gpu_status, gpu_uninstall, gpu_unified_memory_experiment, plugins_list, plugins_rescan, plugins_set_enabled, plugins_installed_list, plugins_platform_info, plugins_catalog, plugins_open_platform, plugins_install_from_platform, plugins_confirm_install, plugins_cancel_install, plugins_open_dir, plugins_open_docs, open_edit_guide, sf_workshop_list, sf_workshop_import, sf_workshop_delete, sf_workshop_open_dir, model_list, omr_engine_status, omr_engine_open_dir, omr_engine_remove, omr_lang_status, omr_lang_remove, omr_homr_status, omr_homr_remove, omr_sr_status, omr_sr_remove,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,

@@ -8,7 +8,7 @@
 - 分支：`feat/audio-tagger-auto-probe`
 - 最新代码提交：`e24fffa`（验收文档另提交）
 - Electron 原版基线：6.5.0-beta.1（`47f6062`）
-- Tauri 命令：**168**（handler 注册审计 168/168）
+- Tauri 命令：**172**（handler 注册审计 172/172）
 - 前端 bridge 方法：**182 / 265**
 - 未映射：**84**
 - 前端 invoke 通道：**250**，Tauri 已接 **184**
@@ -40,8 +40,8 @@
 - `npm run typecheck`：0
 - `npm run audit`：0
 - `cargo test --offline`：**114 passed / 0 failed / 1 ignored**
-- `npm run tauri:handler-audit`：**168/168** 已注册，并已并入 `npm run audit`
-- release build：通过（158 命令，2m33s、0 warning，见 `TAURI-BUILD.md` §31）
+- `npm run tauri:handler-audit`：**172/172** 已注册，并已并入 `npm run audit`
+- release build：通过（172 命令，2m24s、0 warning，见 `TAURI-BUILD.md` §36）
 - `npm run tauri:video-smoke`：ok=true / 15827 bytes（合成 H.264+WAV 封装）
 - `npm run tauri:cover-smoke`：ok=true / status 0，engine_cover.py 参数面存在
 - `npm run tauri:cover-engine-smoke`：ok=true / status 0，真实 analyze 合成音频并返回 ###RESULT（不含 RVC/分离/混音）
@@ -123,8 +123,8 @@ cargo build --release --offline
 ## 9. Release 产物指纹
 
 - 文件：`poc/tauri-poc/target/release/fufumidi-shell.exe`
-- 大小：**17,033,216 bytes**
-- SHA-256：`6215c1e0d9286ac597de0877b70660232e7a77d833d9fa082934bf829721eb23`
+- 大小：**17,064,448 bytes**
+- SHA-256：`05b19f821b8cf6050ce9bcae53e4176bbe3ab7dcd511d72057506cda31752a06`
 - Authenticode：**NotSigned**（未签名；符合当前外部前置未采购的状态）
 
 ## 10. 转录/分轨恢复（2026-11-04 夜间）

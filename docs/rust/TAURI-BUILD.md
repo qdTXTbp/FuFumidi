@@ -259,3 +259,10 @@ Tauri 默认从 GitHub 下载 `nsis-3.13.zip`，本机直连超时。已把工�
 - 同时修复替换 splash 时误删 #app 根节点（E2E smoke 首屏超时暴露）；
 - smoke 新增“splash 必须在首屏后关闭”断言；E2E smoke 通过；
 - release 2m24s、0 warning；安装版 17,033,216 bytes，SHA-256 `6215c1e0d9286ac597de0877b70660232e7a77d833d9fa082934bf829721eb23`。
+
+## 36. 2026-11-04 GitHub 更新检查
+
+- update_check/list/notes 走 GitHub Releases API（curl.exe，25s 超时）；launch_updater 打开发布页，不自动安装（安装包未签名）；
+- CLI `--update-check` 实测 ok，current/latest=6.5.0-beta.1，asset FuFumidi.Install.exe；
+- release 2m24s、0 warning；安装版 17,064,448 bytes，SHA-256 `05b19f821b8cf6050ce9bcae53e4176bbe3ab7dcd511d72057506cda31752a06`；
+- 自动更新/签名/安装仍未完成。
