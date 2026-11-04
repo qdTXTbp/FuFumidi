@@ -544,3 +544,5 @@
 - **翻唱 cover 后端**：coverSingers/PickAudio/PickDir/Open/Cancel/Run；Run 组 engine_cover.py args（默认不分离；选分离模型明确报错未迁移），spawn 读 ###PROG/###RESULT 发 cover:progress；桥补 onCoverProgress；Rust args 测试；命令 **156**，覆盖 **178/88**，call 172；真实引擎未跑。
 
 - **156 命令 release（cover）**：移除 CoverJob 未使用 id 后 2m20s、0 warning；engine self-check 通过；无窗口/残留。
+
+- **coverSingers 字段对齐**：只返回 engine=rvc，补 kind/ready/note/arch/sr/lang/work（对齐 Electron rvcSingers），缺文件给出名单；Rust 单测过滤/arch/引用说明；cargo **116/116 + 1 ignored**。

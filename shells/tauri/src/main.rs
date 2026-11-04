@@ -1426,10 +1426,34 @@ fn cover_args(opts: &serde_json::Value) -> Result<Vec<String>, String> {
     Ok(a)
 }
 
+fn cover_singers_from_models(models: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    models.iter().filter(|m| m.get("engine").and_then(|v| v.as_str()) == Some("rvc")).map(|m| {
+        let ready = m.get("ready").and_then(|v| v.as_bool()).unwrap_or(false);
+        let missing: Vec<String> = m.get("missing").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect()).unwrap_or_default();
+        let note = if !ready { if missing.is_empty() { "引擎未识别".to_string() } else { format!("缺文件：{}", missing.join("、")) } }
+            else if m.get("external").and_then(|v| v.as_bool()).unwrap_or(false) { "引用式导入（源目录在应用外，删除只注销条目）".to_string() }
+            else { "已导入".to_string() };
+        let sr = m.get("sr").and_then(|v| v.as_u64()).unwrap_or(0);
+        let mut arch_parts = vec!["RVC".to_string()];
+        if let Some(v) = m.get("version").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) { arch_parts.push(v.to_string()); }
+        if sr > 0 { arch_parts.push(sr.to_string()); }
+        let arch = arch_parts.join(" · ");
+        serde_json::json!({
+            "kind": "rvc", "id": m.get("id").cloned().unwrap_or(serde_json::Value::Null),
+            "name": m.get("name").cloned().unwrap_or(serde_json::Value::Null),
+            "dir": m.get("dir").cloned().unwrap_or(serde_json::Value::Null),
+            "ready": ready, "note": note, "arch": arch,
+            "sr": sr, "lang": m.get("lang").cloned().unwrap_or_else(|| serde_json::json!("")),
+            "work": m.get("work").cloned().unwrap_or_else(|| serde_json::json!("")),
+        })
+    }).collect()
+}
+
 #[tauri::command]
 fn cover_singers() -> serde_json::Value {
     let list = rvc_list_at(&rvc_root());
-    serde_json::json!({ "ok": true, "rvc": list.get("models").cloned().unwrap_or_else(|| serde_json::json!([])) })
+    let models = list.get("models").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    serde_json::json!({ "ok": true, "rvc": cover_singers_from_models(&models) })
 }
 
 #[tauri::command]
@@ -6885,5 +6909,23 @@ mod cover_args_tests {
         let sep = serde_json::json!({ "audio": audio.display().to_string(), "outdir": out.display().to_string(), "singer": { "id": "m1" }, "sepModel": { "id": "htdemucs4_6stems" } });
         assert!(super::cover_args(&sep).is_err());
         let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[cfg(test)]
+mod cover_singers_tests {
+    #[test]
+    fn filters_rvc_and_counts_arch() {
+        let models = vec![
+            serde_json::json!({ "id": "a", "name": "A", "engine": "rvc", "ready": true, "dir": "/x", "sr": 40000, "version": "v2", "lang": "zh", "work": "w", "external": true }),
+            serde_json::json!({ "id": "b", "name": "B", "engine": "ddsp", "ready": true }),
+            serde_json::json!({ "id": "c", "name": "C", "engine": "rvc", "ready": false, "missing": ["m.pth"] }),
+        ];
+        let out = super::cover_singers_from_models(&models);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0]["id"], "a");
+        assert_eq!(out[0]["arch"], "RVC · v2 · 40000");
+        assert!(out[0]["note"].as_str().unwrap().contains("引用式"));
+        assert!(out[1]["note"].as_str().unwrap().contains("m.pth"));
     }
 }

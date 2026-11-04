@@ -30,7 +30,7 @@
 | UTAU 声库 | 列表/OTO 读写/删除/导入 zip/导出目录/导出 zip | Rust 单测 + bridge |
 | RVC 模型 | 列表/删除/文件夹/文件/zip 导入/内置目录/probe；通用 modelDelete 的 rvc: 前缀委托 RVC 删除 | Rust 单测；probe 真实模型未跑 |
 | 插件中心 | catalog/platformInfo/installedList/openPlatform；两段式 installFromPlatform→confirmInstall→cancelInstall；离线 manifest 缓存；覆盖安装回滚备份 | Rust 单测：manifest/路径穿越/盘符/回滚代码；真实平台下载/插件执行未跑 |
-| 翻唱 Cover | 歌手/选音频/选目录/打开/取消/run；默认不分离；cover:progress 事件 | Rust args 单测；真实 engine_cover.py 未跑；分离模型路径解析未迁移 |
+| 翻唱 Cover | 歌手/选音频/选目录/打开/取消/run；歌手字段对齐；默认不分离；cover:progress 事件 | Rust args/歌手映射单测；真实 engine_cover.py 未跑；分离模型路径解析未迁移 |
 
 ## 3. 门禁结果（当前源码）
 
