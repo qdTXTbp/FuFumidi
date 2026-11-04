@@ -85,7 +85,8 @@ Tauri 默认从 GitHub 下载 `nsis-3.13.zip`，本机直连超时。已把工�
 
 ## 9. 命令注册审计
 
-- `npm run tauri:handler-audit`：扫描所有 `#[tauri::command]` 与 `generate_handler![]`，缺一即退出 1。
+- `npm run tauri:handler-audit`：扫描所有 `#[tauri::command]` 与 `generate_handler![]`，缺一即退出 1；
+- **已并入 `npm run audit`**，普通质量门禁即可拦住漏注册。
 - 当前 **136/136** 已注册；本轮修掉 `model_delete` 漏挂（桥 `modelDelete` 原本会运行时失败）。
 
 ## 10. 2026-11-04 复验（单实例修复后）
