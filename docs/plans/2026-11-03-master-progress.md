@@ -308,7 +308,8 @@
   静音 clip 减少事件数；用例通过，E2E 总数 36。真实声卡听感仍待人工验收。
 - **原生文件对话框已接入（T-115/T-117 之间）**：`tauri-plugin-dialog 2.8.4`，
   新增 pick_file/pick_directory/pick_audio/pick_audio_files/pick_image/pick_music_xml（命令共 **43 条**）；
-  安装版 smoke **25 项**全绿（新增 dialogs 接线断言）；用户实际点选操作仍待验收。
+  安装版 smoke **25 项**全绿（新增 dialogs 接线断言）；另用 `dialog-check.mjs` 实弹打开系统对话框
+  并 PowerShell 发 Esc，`pick_file` Promise 解析 null —— **原生对话框已实测可开可关**（选文件可人工复验）。
   剩余：安装包签名（需证书）；Electron 安装包已产出但安装冒烟待交互桌面。
   下一步：T-115 继续补这些 UI 必需通道，T-117 继续 settings/song/task host 化，批量并发与 T-119 双构建。
 

@@ -54,7 +54,7 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 | presets_list / save / delete / last_used | Rust 读写 dataRoot/presets.json；内置表由 engine/presets.py 生成并嵌入（builtin_presets.json） | 9 个内置预设 + 11 个 model_defaults；保存 Smoke Preset → last_used；删除后消失 |
 | presets_set_model / reorder / reorder_to / restore | 模型→预设绑定、排序、恢复内置 | 绑定 basic→Smoke Preset、解绑、删除均成功 |
 | set_transcribe_pause | 写/删 `dataRoot/engine.pause`，引擎 pause_gate 监听（worker 启动时注入 FUFUMIDI_PAUSE_FILE） | 120 s WAV：暂停后 900 ms 仍未结束（settledEarly=false），继续后完成，pausedConv.ok=true |
-| pick_file / pick_directory / pick_audio / pick_audio_files / pick_image / pick_music_xml | 原生文件/目录对话框（tauri-plugin-dialog 2.8.4，Rust 直接调用） | 桥 6 个方法均为 function；安装版 smoke 通过（人工点选仍待验收） |
+| pick_file / pick_directory / pick_audio / pick_audio_files / pick_image / pick_music_xml | 原生文件/目录对话框（tauri-plugin-dialog 2.8.4，Rust 直接调用） | 实弹验收：打开 pick_file 后 PowerShell 发 Esc，Promise 解析为 null（dialog-check.mjs）；选文件仍可人工复验 |
 | model_list | 13 个核心模型条目（basic/piano/hft/MuScriptor×3/yourmt3/miros/aria/beat_this/audio_tagger/hnsep/HTDemucs4_6stems）；exists 按 models 目录真实大小判断 | smoke 断言 13 条、id 齐全、含 separate 条目 |
 | db_status / db_songs_list / db_songs_put / db_songs_delete | **共享 Electron SQLite**（legacy `fufumidi.sqlite`；测试态用 dataRoot 独立库），按 id upsert/删除 | smoke 往返通过；真实库只读验收读到 **1972 首** |
 | db_playlists_list / db_playlists_put | 同一 SQLite 的 playlists 表 | 默认歌单 + smoke-pl 出现 |
@@ -126,6 +126,9 @@ worker running=true seq=1；输出 MIDI 头 `MThd`。剩余：cancel/pause、UI 
 - smoke 增加 **uiRoutes**：依次进入 `#/transcribe → #/resources → #/piano3d → #/music#/home`，
   实测每页 textLen 658–1404、#app 已挂载、无页面崩溃（模型数据仍因 model_list 未迁而为空，
   属于下一步 T-115/T-117 范围，不是显示故障）。
+
+**原生对话框实弹验收**：`node scripts/tauri/dialog-check.mjs`（打开真实系统对话框 → 发 Esc →
+断言 `pick_file` Promise 解析 null；截图 `shells/tauri/artifacts/dialog-cancel.png`）。
 
 **冒烟命令**：`npm run tauri:smoke`（`scripts/tauri/smoke.mjs`）：
 
