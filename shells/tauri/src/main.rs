@@ -417,6 +417,21 @@ fn utau_save_oto(voicebank: Option<String>, base64: Option<String>) -> serde_jso
     utau_save_oto_at(&data_dir().join("voicebanks"), voicebank.as_deref(), base64.as_deref())
 }
 
+fn utau_delete_voicebank_at(root: &Path, voicebank: Option<&str>) -> serde_json::Value {
+    let dir = match oto_bank_dir(root, voicebank) { Ok(d) => d, Err(e) => return oto_err(e) };
+    let root_c = match root.canonicalize() { Ok(r) => r, Err(_) => return oto_err("声库目录不存在") };
+    if dir == root_c { return oto_err("不能删除声库根目录"); }
+    match std::fs::remove_dir_all(&dir) {
+        Ok(_) => serde_json::json!({ "ok": true, "dir": oto_path_text(&dir) }),
+        Err(e) => oto_err(&e.to_string()),
+    }
+}
+
+#[tauri::command]
+fn utau_delete_voicebank(voicebank: Option<String>) -> serde_json::Value {
+    utau_delete_voicebank_at(&data_dir().join("voicebanks"), voicebank.as_deref())
+}
+
 fn data_root_overridden() -> bool {
     std::env::var("FUFUMIDI_DATA_ROOT").map(|p| !p.trim().is_empty()).unwrap_or(false)
 }
@@ -3717,7 +3732,7 @@ fn main() {
             pick_file, pick_directory, pick_audio, pick_audio_files, pick_image, pick_music_xml,
             list_midi_files, list_audio_files, library_stats, read_soundfont, read_binary, save_binary,
             convert, probe, refine, cancel, set_transcribe_pause, engine_worker_status,
-            utau_list_voicebanks, voicebank_unified, utau_read_oto, utau_save_oto
+            utau_list_voicebanks, voicebank_unified, utau_read_oto, utau_save_oto, utau_delete_voicebank
         ])
         .setup(|_app| {
             println!("[fufumidi-shell] {}", serde_json::to_string(&host_info_json()).unwrap_or_default());
@@ -5144,5 +5159,23 @@ mod oto_tests {
         let r = utau_save_oto_at(&root, Some(bank.to_str().unwrap()), Some(&oto_b64_encode(&raw)));
         assert_eq!(r["ok"], false, "{}", r);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn delete_voicebank_removes_only_child_dirs() {
+        use super::utau_delete_voicebank_at;
+        let root = tmpdir("delete-bank");
+        let bank = root.join("bank");
+        std::fs::create_dir_all(bank.join("nested")).unwrap();
+        std::fs::write(bank.join("oto.ini"), b"x").unwrap();
+        let r = utau_delete_voicebank_at(&root, Some(bank.to_str().unwrap()));
+        assert_eq!(r["ok"], true, "{}", r);
+        assert!(!bank.exists());
+        assert_eq!(utau_delete_voicebank_at(&root, None)["ok"], false);
+        assert_eq!(utau_delete_voicebank_at(&root, Some(root.to_str().unwrap()))["ok"], false, "root must be refused");
+        let outside = tmpdir("delete-outside");
+        assert_eq!(utau_delete_voicebank_at(&root, Some(outside.to_str().unwrap()))["ok"], false);
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(outside);
     }
 }

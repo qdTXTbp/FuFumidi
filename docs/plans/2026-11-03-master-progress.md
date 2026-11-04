@@ -432,6 +432,7 @@
 - **Tauri 本地动态壁纸**：wallpaper_list/add_local/remove_local（共享 Electron legacy wallpapers/，.ok 标记、mp4/webm/mov、basename 校验）；桥补 bridge.wallpaper；Rust 测试添加/列表/删除/../ 拒绝；命令总数 **95**，arg 审计不一致 42→**39**，cargo test **28/28 + 1 ignored**。
 - **Tauri 壁纸文件夹扫描**：wallpaper_scan_folder（图片/视频，深度 3、≤600、跳过点文件/空文件）；桥 wallpaper.scanFolder（合并重复 wallpaper 对象）；Rust 测试过滤与排序；命令总数 **96**，覆盖 133 方法/132 未映射（128 call），bridge 未实现 **104**，cargo test **29/29 + 1 ignored**。
 - **Tauri MIDI 文件关联**：file_assoc（HKCU .mid/.midi→FuFumidi.MIDI；开发用 build/icon.ico，打包用 exe；隐藏 reg.exe；失败计数回报）；桥补 fileAssoc；Rust 测试开/关命令计划，**测试不写注册表**；命令总数 **97**，arg 审计不一致 39→**38**，cargo test **30/30 + 1 ignored**。
+- **Tauri UTAU 删除声库**：`utau_delete_voicebank` 只删 dataRoot/voicebanks 子目录，canonicalize 校验并拒绝根/根外；桥/类型补 utauDeleteVoicebank；Rust 测试 3 类拒绝/正常删除；命令 **120**，cargo test **96/96 + 1 ignored**；UI 侧已有 confirm 确认。
 - **Tauri UTAU oto.ini 读写**：`utau_read_oto`（原始字节 base64 + size + mtimeMs）、`utau_save_oto`（手写宽容 base64、空/8MB 上限、先写 `oto.ini.bak` 再覆盖、返回 backup）；路径 canonicalize 后限制在 dataRoot/voicebanks 内（比 Electron 更严）；6 项 Rust 测试；命令 **119**，cargo test **84/84 + 1 ignored**。
 - **Tauri UTAU/统一声库（只读）**：`utau_list_voicebanks`（voicebanks 根一层、character.txt/yaml/oto.ini 三标记、yaml name > txt name=/名前= > 目录名、BOM/lossy）、
   `voicebank_unified`（UTAU 任意目录 + DiffSinger dsconfig 根/下一层、递归 size、id=kind:name、两侧独立容错）；
