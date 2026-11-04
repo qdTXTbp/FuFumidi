@@ -90,6 +90,7 @@
     "tauri:video-smoke": "node scripts/tauri/video-mux-smoke.mjs",
     "tauri:cover-smoke": "node scripts/tauri/cover-cli-smoke.mjs",
     "tauri:cover-engine-smoke": "node scripts/tauri/cover-engine-smoke.mjs",
+    "tauri:separate-smoke": "node scripts/tauri/separate-cli-smoke.mjs",
     "tauri:sf-registry": "node scripts/tauri/gen-soundfont-registry.mjs"
   },
   "dependencies": {

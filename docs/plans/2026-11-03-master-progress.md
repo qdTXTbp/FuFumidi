@@ -560,3 +560,5 @@
 - **Tauri 人声分离**：separate_audio 同步跑 music2midi.py separate（复用分离模型解析），发 engine:separate:log/progress；cancel sepN kill；Rust args 测试；命令 **157**，覆盖 **181/85**，call 173；真实分离未跑。
 
 - **157 命令 release（分离）**：2m17s、0 warning；host/engine self-check 通过；无窗口/残留。
+
+- **separate CLI smoke**：新增 `npm run tauri:separate-smoke`，校验 music2midi.py separate 的 model/arch/stems/output 参数；实测 ok/status0；不跑推理。
