@@ -22,11 +22,15 @@ fn exe_dir() -> Option<PathBuf> {
     std::env::current_exe().ok()?.parent().map(|p| p.to_path_buf())
 }
 
-fn repo_root_from_manifest() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../")
-        .canonicalize()
-        .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
+/// 开发树根：**只在 debug 构建里用**。release 安装版必须只认 exe 旁/资源目录，
+/// 否则开发机上的 CARGO_MANIFEST_DIR 会掩盖打包漏文件的问题（实测踩过）。
+fn dev_root() -> Option<PathBuf> {
+    if cfg!(debug_assertions) {
+        Some(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../").canonicalize()
+            .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR"))))
+    } else {
+        None
+    }
 }
 
 fn data_dir() -> PathBuf {
@@ -84,10 +88,13 @@ fn push_model(items: &mut Vec<serde_json::Value>, id: &str, name: &str, kind: &s
 }
 
 fn bundled_models_dir() -> Option<PathBuf> {
-    let mut cands = vec![repo_root_from_manifest().join("resources/models")];
+    let mut cands = Vec::new();
+    if let Some(d) = dev_root() { cands.push(d.join("resources/models")); }
     if let Some(d) = exe_dir() {
-        cands.push(d.join("../resources/models"));
+        cands.push(d.join("models"));
         cands.push(d.join("resources/models"));
+        cands.push(d.join("../resources/models"));
+        cands.push(d.join("../models"));
     }
     cands.into_iter().find(|p| p.is_dir())
 }
@@ -98,7 +105,14 @@ fn bundled_models_dir() -> Option<PathBuf> {
 fn model_list() -> Vec<serde_json::Value> {
     let dir = models_dir();
     let mut items = Vec::new();
-    push_model(&mut items, "basic_pitch", "通用转录（int8 量化）", "transcribe", dir.join("basic_pitch_quant.onnx"), 1000, "basic-pitch ONNX int8");
+    let basic_path = if dir.join("basic_pitch_quant.onnx").exists() {
+        dir.join("basic_pitch_quant.onnx")
+    } else if let Some(b) = bundled_models_dir() {
+        b.join("basic_pitch_quant.onnx")
+    } else {
+        dir.join("basic_pitch_quant.onnx")
+    };
+    push_model(&mut items, "basic_pitch", "通用转录（int8 量化）", "transcribe", basic_path, 1000, "basic-pitch ONNX int8");
     push_model(&mut items, "piano_transcription", "钢琴转录模型", "transcribe", dir.join("piano_transcription/note_F1=0.9677_pedal_F1=0.9186.pth"), 1_000_000, "piano CRNN");
     push_model(&mut items, "hft_transformer", "hFT-Transformer", "transcribe", dir.join("hft_transformer"), 1_000_000, "Sony ISMIR2023");
     push_model(&mut items, "muscriptor_small", "MuScriptor Small", "transcribe", dir.join("muscriptor/small/model.safetensors"), 10_000_000, "103M");
@@ -160,20 +174,27 @@ fn python_path() -> Option<PathBuf> {
         if pb.exists() { return Some(pb); }
     }
     let mut cands: Vec<PathBuf> = Vec::new();
-    if let Some(d) = exe_dir() {
-        cands.push(d.join("python/python.exe"));
-        cands.push(d.join("../resources/python/python.exe"));
+    if let Some(d) = dev_root() {
         cands.push(d.join("resources/python/python.exe"));
     }
-    cands.push(repo_root_from_manifest().join("resources/python/python.exe"));
+    if let Some(d) = exe_dir() {
+        cands.push(d.join("python/python.exe"));
+        cands.push(d.join("resources/python/python.exe"));
+        cands.push(d.join("../resources/python/python.exe"));
+    }
     cands.into_iter().find(|p| p.exists())
 }
 
-fn renderer_dir() -> PathBuf { repo_root_from_manifest().join("renderer/dist") }
+fn renderer_dir() -> PathBuf {
+    if let Some(d) = dev_root() { d.join("renderer/dist") }
+    else { exe_dir().unwrap_or_default().join("renderer/dist") }
+}
 
 fn host_info_json() -> serde_json::Value {
     let py = python_path();
     let renderer = renderer_dir();
+    let renderer_on_disk = renderer.join("index.html").exists();
+    let embedded = !cfg!(debug_assertions) && !renderer_on_disk;
     serde_json::json!({
         "ok": true,
         "product": "FuFumidi",
@@ -182,8 +203,8 @@ fn host_info_json() -> serde_json::Value {
         "dataDir": data_dir().display().to_string(),
         "python": py.as_ref().map(|p| p.display().to_string()),
         "pythonExists": py.as_ref().map(|p| p.exists()).unwrap_or(false),
-        "renderer": renderer.display().to_string(),
-        "rendererExists": renderer.join("index.html").exists(),
+        "renderer": if embedded { "<embedded>".to_string() } else { renderer.display().to_string() },
+        "rendererExists": renderer_on_disk || embedded,
     })
 }
 
@@ -268,8 +289,12 @@ fn db_kv_set(key: String, value: serde_json::Value) -> serde_json::Value {
 }
 
 fn soundfont_dirs() -> Vec<PathBuf> {
-    let mut dirs = vec![repo_root_from_manifest().join("renderer/vendor/soundfonts")];
+    let mut dirs = Vec::new();
+    if let Some(d) = dev_root() { dirs.push(d.join("renderer/vendor/soundfonts")); }
     if let Some(d) = exe_dir() {
+        dirs.push(d.join("soundfonts"));
+        dirs.push(d.join("resources/soundfonts"));
+        dirs.push(d.join("../resources/soundfonts"));
         dirs.push(d.join("../renderer/vendor/soundfonts"));
         dirs.push(d.join("../soundfonts"));
     }
@@ -571,8 +596,10 @@ fn list_midi_files(dir: String) -> Vec<String> {
 }
 
 fn engine_dir() -> Option<PathBuf> {
-    let mut cands = vec![repo_root_from_manifest().join("engine")];
+    let mut cands = Vec::new();
+    if let Some(d) = dev_root() { cands.push(d.join("engine")); }
     if let Some(d) = exe_dir() {
+        cands.push(d.join("resources/engine"));
         cands.push(d.join("../resources/engine"));
         cands.push(d.join("engine"));
         cands.push(d.join("../engine"));
@@ -593,6 +620,10 @@ fn engine_probe() -> serde_json::Value {
     let started = std::time::Instant::now();
     let out = match Command::new(&py)
         .current_dir(&eng)
+        .env("FUFUMIDI_DATA_DIR", data_dir())
+        .env("FUFUMIDI_MODELS_DIR", models_dir())
+        .env("TORCH_HOME", models_dir())
+        .envs(bundled_models_dir().map(|p| ("FUFUMIDI_MODELS_BUNDLED_DIR", p)).into_iter().collect::<std::collections::HashMap<_, _>>())
         .args(["music2midi.py", "probe"])
         .output()
     {
@@ -659,7 +690,12 @@ fn spawn_worker() -> Result<Worker, String> {
         .current_dir(&eng)
         .args(["music2midi.py", "worker"])
         .env("PYTHONIOENCODING", "utf-8")
+        .env("PYTHONUTF8", "1")
         .env("FUFUMIDI_PAUSE_FILE", pause_file())
+        .env("FUFUMIDI_DATA_DIR", data_dir())
+        .env("FUFUMIDI_MODELS_DIR", models_dir())
+        .env("TORCH_HOME", models_dir())
+        .envs(bundled_models_dir().map(|p| ("FUFUMIDI_MODELS_BUNDLED_DIR", p)).into_iter().collect::<std::collections::HashMap<_, _>>())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

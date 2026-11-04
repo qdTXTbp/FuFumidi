@@ -24,10 +24,24 @@
     }
   },
   "bundle": {
-    "active": false,
-    "targets": "all",
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
     "icon": [
       "icons/icon.ico"
-    ]
+    ],
+    "resources": {
+      "bundle/python/": "python/",
+      "bundle/engine/": "engine/",
+      "bundle/soundfonts/": "soundfonts/",
+      "bundle/models/": "models/",
+      "bundle/elevate.exe": "elevate.exe"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
   }
 }

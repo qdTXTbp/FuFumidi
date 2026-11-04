@@ -285,8 +285,11 @@
   13 项品牌资产 + Tauri 图标全绿。
 - **T-119 第一步：release 构建**：锁 Tauri CLI 2.12.4（devDependency），新增
   `npm run tauri:release`；冷编译 1m38s，产物 **12.49 MB**；release 壳跑完整 smoke
-  **24/24**（真实转录 7.9 s、worker、曲库、预设、取消、暂停）。bundle（resources/NSIS）
-  与 Electron 回退仍待做。
+  **24/24**（真实转录 7.9 s、worker、曲库、预设、取消、暂停）。
+- **T-119 NSIS 安装包已打通**：`npm run tauri:bundle` 产出 **237.81 MiB** 安装包；
+  安装后 **814 MB**；安装目录内 python/engine/soundfonts/models 全量落盘；
+  安装版 smoke **24/24**，host_info 证实资源来自安装目录，真实转录 **4.2 s**。
+  NSIS 工具链经代理预置（SHA1 校验）。限制：未签名、exe 名未改、Electron 回退未双跑。
   下一步：T-115 继续补这些 UI 必需通道，T-117 继续 settings/song/task host 化，批量并发与 T-119 双构建。
 
 ## 17. 待收口（下一轮）

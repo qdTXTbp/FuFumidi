@@ -136,6 +136,14 @@ worker running=true seq=1；输出 MIDI 头 `MThd`。剩余：cancel/pause、UI 
 - 实测输出：version 6.5.0-beta.1、Python 3.12.10、settings 42 往返、MIDI 头 `MThd`、字节 4 往返；
 - 截图：`shells/tauri/artifacts/smoke.png`（真实 UI）。
 
+### 3.5 NSIS 安装包（T-119，2026-11-04）
+
+- `npm run tauri:bundle` 成功产出 **237.81 MiB** 安装包；安装后 **814 MB**，资源在安装根目录
+  （python/engine/soundfonts/models）；
+- **安装版 smoke 24/24 全绿**，host_info 证实 python/engine 来自安装目录（不再用开发树），
+  真实转录 **4.2 s**；详见 `docs/rust/TAURI-BUILD.md`；
+- 限制：未签名、exe 名仍为 fufumidi-shell.exe、Electron 回退未双跑。
+
 ## 4. 当前命令清单（37 条）
 
 host_info, app_version, ping, python_selfcheck, engine_probe, convert, engine_worker_status,

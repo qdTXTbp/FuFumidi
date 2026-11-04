@@ -1,3 +1,6 @@
 /target
 /artifacts
 /gen
+
+# 打包暂存的 resources（802MB，由 npm run tauri:stage 生成）
+/bundle

@@ -81,7 +81,8 @@
     "tauri:smoke": "node scripts/tauri/smoke.mjs",
     "tauri:build": "npm run build:ui && cargo build --manifest-path shells/tauri/Cargo.toml",
     "tauri:release": "npm run build:ui && cd shells/tauri && tauri build --no-bundle",
-    "tauri:bundle": "npm run build:ui && cd shells/tauri && tauri build"
+    "tauri:bundle": "npm run build:ui && npm run tauri:stage && cd shells/tauri && tauri build",
+    "tauri:stage": "node scripts/tauri/stage-bundle.mjs"
   },
   "dependencies": {
     "adm-zip": "^0.6.0",
