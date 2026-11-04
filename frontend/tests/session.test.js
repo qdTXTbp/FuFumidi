@@ -77,7 +77,7 @@ test("C3 撤销栈上限与坏记录保护", () => {
   const s = createSessionStore({ maxUndo: 3 });
   s.open({ docId: "a" });
   for (let i = 0; i < 10; i++) s.pushUndo("a", { undo: () => {}, redo: () => {} });
-  assert.equal(s.get("a").undo.length, 3);
+  assert.equal(s.depth("a").undo, 3);
   assert.equal(s.pushUndo("a", { label: "没有函数" }), false);
   assert.equal(s.pushUndo("不存在", { undo: () => {} }), false);
   assert.equal(s.undo("不存在"), false);
@@ -127,7 +127,7 @@ test("C3 打开已存在 doc：保留撤销栈与脏标记，可更新标题/模
   const again = s.open({ docId: "a", title: "新标题", model: { x: 1 } });
   assert.equal(again.title, "新标题");
   assert.equal(again.model.x, 1);
-  assert.equal(again.undo.length, 1);
+  assert.equal(s.depth("a").undo, 1);
   assert.equal(s.isDirty("a"), true);
 });
 

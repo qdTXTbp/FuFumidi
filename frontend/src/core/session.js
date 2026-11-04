@@ -10,10 +10,13 @@
 //   · 撤销栈里放运行时函数（{undo,redo,label}），不参与序列化；
 //   · 每个 doc 的视图状态（zoom/scroll/selection/playhead）随快照走，恢复后回到原位。
 
+import { createEditorHistory } from './editor_history.js';
+
 let _autoId = 0;
 
 export function createSessionStore(opts = {}) {
-  const maxUndo = Math.max(1, Number(opts.maxUndo) || 200);
+  const maxUndo = Math.max(1, Number(opts.maxUndo) || 80);
+  const maxHistoryBytes = Math.max(1024, Number(opts.maxHistoryBytes) || 32 * 1024 * 1024);
   const docs = new Map();
   const listeners = new Set();
   let currentId = "";
@@ -35,8 +38,7 @@ export function createSessionStore(opts = {}) {
       view: Object.assign({ zoom: 1, scroll: 0, selection: null, playhead: 0 }, existed ? existed.view : {}, input.view || {}),
       dirtySeq: existed ? existed.dirtySeq : 0,
       savedSeq: existed ? existed.savedSeq : 0,
-      undo: existed ? existed.undo : [],
-      redo: existed ? existed.redo : [],
+      history: existed ? existed.history : createEditorHistory({ limit: maxUndo, maxBytes: maxHistoryBytes }),
       openedAt: existed ? existed.openedAt : now(),
       lastSavedAt: existed ? existed.lastSavedAt : now(),
       lastEditAt: existed ? existed.lastEditAt : 0,
@@ -71,7 +73,7 @@ export function createSessionStore(opts = {}) {
     if (!doc) return 0;
     doc.dirtySeq += 1;
     doc.lastEditAt = now();
-    doc.redo = [];                       // 新编辑让重做栈失效（标准行为）
+    // 新编辑的 redo 清空由 history.push() 负责；这里不再清，避免保存/脏标记误伤 redo
     emit("dirty", { docId: doc.docId, dirtySeq: doc.dirtySeq, label: label || "" });
     return doc.dirtySeq;
   }
@@ -81,30 +83,32 @@ export function createSessionStore(opts = {}) {
   function pushUndo(docId, entry) {
     const doc = get(docId);
     if (!doc || !entry || typeof entry.undo !== "function") return false;
-    doc.undo.push({ undo: entry.undo, redo: entry.redo || null, label: entry.label || "" });
-    if (doc.undo.length > maxUndo) doc.undo.splice(0, doc.undo.length - maxUndo);
-    doc.redo = [];
+    const redo = typeof entry.redo === "function" ? entry.redo : () => { throw new Error("redo unavailable"); };
+    try { doc.history.push({ label: entry.label || "", undo: entry.undo, redo, bytes: entry.bytes, kind: entry.kind, noteCount: entry.noteCount, ti: entry.ti, at: entry.at }); }
+    catch (_) { return false; }
     return true;
   }
-  function canUndo(docId) { const d = get(docId); return !!d && d.undo.length > 0; }
-  function canRedo(docId) { const d = get(docId); return !!d && d.redo.length > 0; }
+  function history(docId) { const d = get(docId); return d ? d.history : null; }
+  function depth(docId) { const h = history(docId); return h ? h.depth() : { undo: 0, redo: 0, bytes: 0, redoBytes: 0, undoLabel: "", redoLabel: "", seq: 0 }; }
+  function clearUndo(docId) { const h = history(docId); if (!h) return false; h.clear(); return true; }
+  function canUndo(docId) { const h = history(docId); return !!h && h.canUndo(); }
+  function canRedo(docId) { const h = history(docId); return !!h && h.canRedo(); }
   function undo(docId) {
     const doc = get(docId);
-    if (!doc || !doc.undo.length) return false;
-    const rec = doc.undo.pop();
-    try { rec.undo(); } catch (_) { return false; }
-    doc.redo.push(rec);
+    if (!doc) return false;
+    let label = null;
+    try { label = doc.history.undo(); } catch (_) { return false; }
+    if (label == null) return false;
     doc.dirtySeq += 1; doc.lastEditAt = now();
     emit("undo", doc.docId);
     return true;
   }
   function redo(docId) {
     const doc = get(docId);
-    if (!doc || !doc.redo.length) return false;
-    const rec = doc.redo.pop();
-    if (typeof rec.redo !== "function") return false;
-    try { rec.redo(); } catch (_) { return false; }
-    doc.undo.push(rec);
+    if (!doc) return false;
+    let label = null;
+    try { label = doc.history.redo(); } catch (_) { return false; }
+    if (label == null) return false;
     doc.dirtySeq += 1; doc.lastEditAt = now();
     emit("redo", doc.docId);
     return true;
@@ -171,7 +175,7 @@ export function createSessionStore(opts = {}) {
     return () => listeners.delete(fn);
   }
 
-  return { open, get, list, current, activate, close, markDirty, isDirty, dirtyCount, pushUndo, undo, redo, canUndo, canRedo, setView, getView, markSaved, shouldAutosave, snapshot, restore, subscribe };
+  return { open, get, list, current, activate, close, markDirty, isDirty, dirtyCount, pushUndo, undo, redo, canUndo, canRedo, history, depth, clearUndo, setView, getView, markSaved, shouldAutosave, snapshot, restore, subscribe };
 }
 
 /** 应用级单例（Vue 侧用；测试请自己 createSessionStore 以隔离） */

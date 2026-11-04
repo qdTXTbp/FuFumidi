@@ -331,7 +331,11 @@
   E2E 覆盖 3 步历史回退 2 步/最后 1 步。
   **第八批**：CC/PB 泳道拖拽改为一次手势一条命令：down 捕获 ccs/events 副本、up 比较后
   用 `makeReplaceCcStateCommand` 整体替换（undo/redo 副本隔离）；`edit-pb-lane` E2E 增加撤销清零/重做恢复。
-  尚未完成：与 `session.js` 应用级单栈合流未做。**仍不能宣称 P-011 整体完成。**
+  **第九批（存储层）**：`session.js` 每 doc 持有 `createEditorHistory` 引擎（80/32MB/超大 8MB 留 2）；
+  `pushUndo/undo/redo/canUndo/canRedo` 转发；新增 `history/depth/clearUndo`；`markDirty` 不再清 redo
+  （保存后撤销不会被 4s 自动保存轮询清空）；4 项 session-history 测试。**EditorCanvas 尚未用该引擎**，
+  仍是内部数组 + fallback；下一步加 `history` prop、删本地数组并接 ViewEdit。
+  尚未完成：EditorCanvas/ViewEdit 接 session 引擎；编排页跨页统一未做。**仍不能宣称 P-011 整体完成。**
 - **Tauri check_midi 已补**：Rust 实现与 Electron 同语义（只认数据根 midi/ 内非空文件），
   桥补 `checkMidi`；Tauri 曲库自愈不再因缺命令而跳过。Rust 单测覆盖根内保留/缺失/根外路径。
   命令总数 **44**；本轮全部无头验证（cargo test / typecheck / build / audit）。
