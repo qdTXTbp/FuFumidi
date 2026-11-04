@@ -133,3 +133,9 @@ Tauri 默认从 GitHub 下载 `nsis-3.13.zip`，本机直连超时。已把工�
 - 移除 CoverJob 未使用 id 后，release 构建 2m20s、**0 warning**；
 - engine self-check：真实 worker / warm=1 / 无残留；
 - 含 cover 后端；真实 engine_cover.py 仍未跑。
+
+## 17. 2026-11-04 156 命令 release（分离解析）
+
+- 去掉 resolver 重复的 best 变量后，release 构建 2m16s、**0 warning**；
+- engine self-check：真实 worker / warm=1 / 无残留；
+- 含 cover 分离模型解析；真实 engine_cover.py 仍未跑。

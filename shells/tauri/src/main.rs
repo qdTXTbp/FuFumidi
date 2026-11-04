@@ -1427,7 +1427,6 @@ fn cover_sep_resolve_at(root: &Path, id: &str) -> Result<(PathBuf, Option<PathBu
     }
     let Some(base) = base else { return Err(format!("找不到分离模型：{name}")) };
     let (weight, dir) = if base.is_file() { (base.clone(), base.parent().unwrap_or(root).to_path_buf()) } else {
-        let mut best: Option<(u64, PathBuf)> = None;
         fn find_weights(d: &Path, depth: u32, best: &mut Option<(u64, PathBuf)>) {
             if depth > 2 { return; }
             let Ok(rd) = std::fs::read_dir(d) else { return };
