@@ -211,6 +211,17 @@
 - 已同步：master-integrated-plan（G4/M3/M4/W-E/风险表）、master-ai-spec（R/T-3xx + R-014 硬约束）、
   rust-fullstack-plan、rust-rewrite-plan 顶部均加了取消横幅。
 
+## 15.1 方向确认：Tauri 继续 + 非 ML 尽量 Rust（2026-11-04）
+
+- 用户确认：「继续用 Tauri 替换 Electron」「在这些前提下,尽量都用 RUST 重写」→ [ADR-0002](../decisions/ADR-0002-tauri-rust-max-hybrid.md)。
+- 目标架构改为混合：**Tauri/Rust host** + Rust 非 ML（文件/工程/任务队列/下载更新/音频链/
+  MIDI·SF2·MusicXML·ustx/UTAU DSP）+ **Python 仅模型推理 sidecar** + Vue/WebView2 UI。
+- 计划同步：R-007/R-008/R-011 恢复执行；R-009/R-010 仍取消；新增 R-015（Tauri host 替代主进程）、
+  R-016（Python 只做推理）、T-117（Rust host 业务骨架）、T-118（Python sidecar supervisor）、
+  T-119（Tauri 默认分发 + Electron 回退）、T-214（UTAU/OpenUTAU DSP）；T-211（ONNX）取消；
+  T-402 改成「删除 Electron 主进程，保留 Python sidecar」。
+- 下一步：Tauri host 骨架（加载 renderer/dist + Python 发现/自检）→ T-115 IPC 纵切 → T-118 sidecar supervisor。
+
 ## 16. 现有模型可用性（硬约束 R-014）
 
 - 约束：转录/分轨/OMR/调教/翻唱的**模型格式、路径、ID、下载源不变**；Python 引擎随包保留。

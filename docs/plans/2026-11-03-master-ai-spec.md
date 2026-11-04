@@ -30,8 +30,9 @@ non_goals:
 > 本文件是「产品专业化升级」的执行层。AI 按本文件干活；人类背景读 human_doc。
 >
 > **范围变更（2026-11-04，用户决定，见 [ADR-0001](../decisions/ADR-0001-cancel-python-engine-replacement.md)）**：
-> **取消「Rust/ONNX 替换 Python 引擎」**。R-007…R-011、T-306…T-308 冻结，不再执行；
-> Python 引擎与**全部现有模型必须继续可用**（R-014）。Tauri 外壳去 Electron 是否继续另行确认。
+> **取消「Rust/ONNX 替换 Python 引擎」**：R-009/R-010、T-306…T-308 冻结；
+> **Tauri 去 Electron 继续**，并按「尽量都用 Rust 重写」推进非 ML（R-007/R-008/R-011 恢复；ADR-0002）；
+> Python 只保留模型推理 sidecar，**全部现有模型必须继续可用**（R-014）。
 > 所有任务有 ID、依赖、文件范围、验收命令、回滚方式；任何一条不满足都不算完成。
 
 ## 0. AI 使用规则（硬规则）
@@ -169,14 +170,16 @@ non_goals:
 | R-004 | 迁移桥：最后一个 Electron 版可下载并安装 Tauri 版 | 老用户演练升级成功 |
 | R-005 | 插件宿主 rquickjs 保 CommonJS 兼容 | 真实插件集零改动跑通 |
 | R-006 | printToPDF 等价方案（COM 或替代） | 页数/边距/字号逐页对比通过 |
-| ~~R-007~~ | ~~Rust 引擎 A 类~~（**已取消** 2026-11-04） | — |
-| ~~R-008~~ | ~~Rust 音频链~~（**已取消**） | — |
-| ~~R-009~~ | ~~ONNX 推理~~（**已取消**） | — |
+| R-007 | **Rust 非 ML A 类**（SMF/SF2/MusicXML/ustx/UTAU DSP；**恢复执行**，Python 推理不动） | 与 Python 输出对拍 100% |
+| R-008 | **Rust 音频链**（解码/重采样/DSP/编码；**恢复执行**，ffmpeg sidecar 允许） | 解码覆盖 m4a/mp3/flac/wav；null test 通过 |
+| ~~R-009~~ | ~~ONNX 推理替换~~（**已取消** 2026-11-04） | — |
 | ~~R-010~~ | ~~去 Python~~（**已取消**） | — |
-| ~~R-011~~ | ~~原生 probe/deps~~（**已取消**） | — |
+| R-011 | 原生 probe/deps（**恢复执行**，仅非 ML 部分；模型推理仍走 Python） | 资源中心 <100 ms（不含 Python 模型探测） |
 | R-014 | **现有模型全部可用（硬约束）**：转录/分轨/OMR/调教/翻唱模型格式、路径、下载源不变 | 现有模型回归用例通过；无模型失效；不得改格式/路径 |
-| R-012 | 包体/启动/内存达标 | 见 human_doc §0.3 |
+| R-012 | 运行时体验不劣化（不再设包体硬指标；Python+模型随包） | 启动/内存不劣于 6.5.0-beta.1；首任务不劣化 |
 | R-013 | Tauri 壳可加载现有 renderer/dist 并渲染（POC 已验证；正式化） | 开窗后 #app 挂载、Vue Router #/home、window.fuBridge 为 object；无业务 command 时明确提示 |
+| R-015 | **Tauri/Rust host 替代 Electron 主进程**（窗口/系统/文件/任务/下载/更新） | Tauri 默认包可用；Electron 仅回退 |
+| R-016 | **Python 只做模型推理**：sidecar 协议稳定、健康检查/重启/退出回收 | 模型推理全部经 sidecar；无业务逻辑留在 Python |
 
 ### 5.3 共享（S-xxx）
 
@@ -246,6 +249,9 @@ non_goals:
 | T-114 | 品牌一致性迁移校验：Tauri 图标/安装器/splash 复用同一套品牌图 | T-107、T-025 | build/、poc/tauri-poc 或 crates/shell/ | check:brand 绿 + 截图对比 | 1–2 |
 | T-115 | IPC 代码生成纵切：从 ipc.schema.json 生成 10 条真实 command + 桥映射（含事件退订） | T-003、T-107 | crates/shell/ipc/、frontend/src/bridge/ | 10 通道端到端通过；手写映射减少 | 5–8 |
 | T-116 | Tauri 壳渲染冒烟：加载 renderer/dist，验证 #app/Router/fuBridge/标题 | T-107 | crates/shell/、scripts/ | 与 POC §3.4 同等断言；失败即红 | 1–2 |
+| T-117 | Rust host 业务骨架：文件/设置/曲库/任务队列（替换 main/*.js） | T-107,T-115 | crates/shell/host/ | 关键路径冒烟；IPC 差集下降 | 8–12 |
+| T-118 | Python sidecar supervisor：spawn/健康检查/协议转发/退出回收 | T-107 | crates/shell/python/ | 转录/分轨真实跑通；崩溃自动重启 | 5–8 |
+| T-119 | Tauri 默认分发 + Electron 回退双构建 | T-112,T-117 | scripts/、.github/、build/ | 两壳可切换；灰度回退演练 | 3–5 |
 
 ### M2（第 4–7 月）
 
@@ -261,7 +267,8 @@ non_goals:
 | T-208 | 更新链生产化 R-003 | T-019 | crates/shell/updater/ | 三源灰度 | 8–12 |
 | T-209 | rusqlite 迁移 | T-015 | crates/shell/db/、scripts/migrate/ | 迁移 + 回滚演练 | 3–5 |
 | T-210 | Rust 音频链 R-008 | T-023 | crates/audio/ | 解码矩阵 + null test | 8–12 |
-| T-211 | ONNX 推理（Basic/audio-tagger） | T-023 | crates/ml/ | 质量对拍 | 5–8 |
+| ~~T-211~~ | ~~ONNX 推理（Basic/audio-tagger）~~（**已取消** 2026-11-04；模型推理保留 Python） | — | — | — | — |
+| T-214 | UTAU/OpenUTAU 渲染 Rust 化（纯 DSP） | T-109 | crates/utau/ | 听感 + 数值对拍 | 15–25 |
 | T-212 | 迁移桥 R-004 | T-208 | 最后 Electron 版本 | 演练通过 | 3–5 |
 
 ### M3（第 7–11 月）
@@ -281,8 +288,8 @@ non_goals:
 
 | ID | 目标 | 依赖 | in_scope | verify | 人日 |
 |---|---|---|---|---|---|
-| T-401 | GA 发布 + 迁移 | T-308 | release/、更新配置 | 灰度 + 回退演练 | 5–8 |
-| T-402 | 删除 Electron/Python | T-401 | main/、preload.js、engine/、package.json | 仓库无引用 + 冒烟 | 5–8 |
+| T-401 | GA 发布 + 迁移 | T-305,T-207 | release/、更新配置 | 灰度 + 回退演练 | 5–8 |
+| T-402 | 删除 Electron 主进程（**保留 Python 推理 sidecar**） | T-401 | main/、preload.js、package.json | Electron 无引用；模型/推理回归通过 | 3–5 |
 | T-403 | 文档/许可/vendor 更新 | T-402 | docs/、licenses | 检查通过 | 2–3 |
 
 ## 7. 门禁命令
