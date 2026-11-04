@@ -621,6 +621,62 @@ fn check_midi(items: Vec<serde_json::Value>) -> serde_json::Value {
     check_midi_items(&items, &midi_root())
 }
 
+fn in_midi_root(p: &str) -> bool {
+    let root = midi_root();
+    let root_canon = root.canonicalize().unwrap_or(root);
+    match PathBuf::from(p).canonicalize() {
+        Ok(c) => c.starts_with(&root_canon),
+        Err(_) => false,
+    }
+}
+
+#[tauri::command]
+fn delete_midi(p: String) -> serde_json::Value {
+    if p.trim().is_empty() { return serde_json::json!({ "ok": true, "deleted": false }); }
+    if !in_midi_root(&p) { return serde_json::json!({ "ok": false, "error": "只能删除曲库目录内的文件" }); }
+    if !Path::new(&p).exists() { return serde_json::json!({ "ok": true, "deleted": false }); }
+    match std::fs::remove_file(&p) {
+        Ok(_) => serde_json::json!({ "ok": true, "deleted": true }),
+        Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
+    }
+}
+
+fn sanitize_rename(base: &str) -> String {
+    let mut s = base.to_string();
+    for ch in ['\\', '/', ':', '*', '?', '"', '<', '>', '|'] { s = s.replace(ch, " "); }
+    s = s.replace(['\r', '\n', '\t'], " ");
+    s = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    s = s.trim_end_matches(|c: char| c == '.' || c == ' ').trim().to_string();
+    if s.chars().count() > 120 { s = s.chars().take(120).collect(); }
+    s
+}
+
+#[tauri::command]
+fn rename_midi(p: String, new_name: String) -> serde_json::Value {
+    let src = PathBuf::from(&p);
+    if !src.is_file() { return serde_json::json!({ "ok": false, "error": "文件不存在" }); }
+    if !in_midi_root(&p) { return serde_json::json!({ "ok": false, "error": "只能重命名曲库目录内的文件" }); }
+    let dir = src.parent().map(|x| x.to_path_buf()).unwrap_or_else(midi_root);
+    let ext = src.extension().and_then(|x| x.to_str()).map(|x| format!(".{x}")).unwrap_or_else(|| ".mid".to_string());
+    let base = sanitize_rename(&new_name);
+    if base.is_empty() { return serde_json::json!({ "ok": false, "error": "名字不能为空" }); }
+    let src_canon = src.canonicalize().unwrap_or(src.clone());
+    let mut dst = dir.join(format!("{base}{ext}"));
+    let mut n = 2;
+    while dst.exists() {
+        let dst_canon = dst.canonicalize().unwrap_or(dst.clone());
+        if dst_canon == src_canon {
+            return serde_json::json!({ "ok": true, "path": src.display().to_string(), "renamed": false });
+        }
+        dst = dir.join(format!("{base} ({n}){ext}"));
+        n += 1;
+    }
+    match std::fs::rename(&src, &dst) {
+        Ok(_) => serde_json::json!({ "ok": true, "path": dst.display().to_string(), "renamed": true, "from": p }),
+        Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
+    }
+}
+
 #[tauri::command]
 fn db_status() -> serde_json::Value {
     let counts = open_db().ok().map(|conn| {
@@ -1053,7 +1109,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, db_kv_get, db_kv_set,
-            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, check_midi, wallpaper_defaults, model_list,
+            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, check_midi, delete_midi, rename_midi, wallpaper_defaults, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
@@ -1085,6 +1141,39 @@ mod check_midi_tests {
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    #[test]
+    fn delete_rename_roundtrip() {
+        let root = tmpdir("library-ops");
+        std::env::set_var("FUFUMIDI_DATA_ROOT", &root);
+        let midi = root.join("midi");
+        std::fs::create_dir_all(&midi).unwrap();
+        let a = midi.join("a.mid");
+        std::fs::write(&a, b"MThd").unwrap();
+        let renamed = super::rename_midi(a.display().to_string(), "新 名".to_string());
+        assert_eq!(renamed["ok"], true);
+        let rp = std::path::PathBuf::from(renamed["path"].as_str().unwrap());
+        assert!(rp.exists());
+        assert!(rp.file_name().unwrap().to_string_lossy().contains("新 名"));
+        let dup = super::rename_midi(rp.display().to_string(), "新 名".to_string());
+        assert_eq!(dup["renamed"], false, "同名不重复改名");
+        let outside = root.join("outside.mid");
+        std::fs::write(&outside, b"MThd").unwrap();
+        assert_eq!(super::delete_midi(outside.display().to_string())["ok"], false);
+        assert_eq!(super::delete_midi(rp.display().to_string())["deleted"], true);
+        assert!(!rp.exists());
+        std::env::remove_var("FUFUMIDI_DATA_ROOT");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sanitize_rename_names() {
+        assert_eq!(super::sanitize_rename("  a:b/c*?  "), "a b c");
+        assert_eq!(super::sanitize_rename("name."), "name");
+        assert_eq!(super::sanitize_rename("   "), "");
+        let long = "x".repeat(200);
+        assert_eq!(super::sanitize_rename(&long).chars().count(), 120);
     }
 
     #[test]
