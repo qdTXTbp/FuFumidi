@@ -1263,7 +1263,8 @@ fn copy_tree(src: &Path, dst: &Path) -> std::io::Result<u64> {
 fn model_import_local_at(archive: &Path, models_root: &Path) -> serde_json::Value {
     let ext = archive.extension().and_then(|x| x.to_str()).unwrap_or("").to_ascii_lowercase();
     if ext != "zip" { return serde_json::json!({ "ok": false, "error": "Tauri 目前只支持 .zip 模型压缩包（7z/tar 仍走 Electron）" }); }
-    let tmp = std::env::temp_dir().join(format!("fufumidi-model-import-{}", std::process::id()));
+    let uniq = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let tmp = std::env::temp_dir().join(format!("fufumidi-model-import-{}-{uniq}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
     let _ = std::fs::create_dir_all(&tmp);
     let result = (|| -> Result<serde_json::Value, String> {
@@ -2855,6 +2856,9 @@ fn set_transcribe_pause(on: bool) -> serde_json::Value {
 /// 取消当前转录：置标志 + taskkill 掉 worker；阻塞中的读会返回 EOF，convert 识别为 canceled。
 /// 下一次 convert 会重新拉起 worker（模型冷启动由用户可见日志承担）。
 #[tauri::command]
+fn probe() -> serde_json::Value { engine_probe() }
+
+#[tauri::command]
 fn cancel(state: State<'_, WorkerState>, id: Option<String>) -> serde_json::Value {
     state.1.store(true, Ordering::SeqCst);
     let pid = state.2.load(Ordering::SeqCst);
@@ -2907,7 +2911,7 @@ fn main() {
             presets_reorder, presets_reorder_to, presets_restore,
             pick_file, pick_directory, pick_audio, pick_audio_files, pick_image, pick_music_xml,
             list_midi_files, list_audio_files, library_stats, read_soundfont, read_binary, save_binary,
-            convert, cancel, set_transcribe_pause, engine_worker_status
+            convert, probe, cancel, set_transcribe_pause, engine_worker_status
         ])
         .setup(|_app| {
             println!("[fufumidi-shell] {}", serde_json::to_string(&host_info_json()).unwrap_or_default());
@@ -2952,6 +2956,31 @@ mod check_midi_tests {
         assert!(plan[0].join(" ").contains("Wallpaper"));
         assert!(plan[0].join(" ").contains("C:\\wall\\a.jpg"));
         assert_eq!(super::wallpaper_set_desktop("C:\\definitely-missing.jpg".into())["ok"], false);
+    }
+
+    #[test]
+    fn model_import_zip_traversal_and_stems_limit() {
+        let root = tmpdir("model-security");
+        let archive = root.join("muscriptor_small.zip");
+        {
+            let f = std::fs::File::create(&archive).unwrap();
+            let mut w = zip::ZipWriter::new(f);
+            let opts = zip::write::SimpleFileOptions::default();
+            w.start_file("../evil.onnx", opts).unwrap();
+            w.write_all(b"evil").unwrap();
+            w.start_file("muscriptor/small/w.onnx", opts).unwrap();
+            w.write_all(b"ok").unwrap();
+            w.finish().unwrap();
+        }
+        let models = root.join("models");
+        let r = super::model_import_local_at(&archive, &models);
+        assert_eq!(r["ok"], true);
+        assert!(!root.join("evil.onnx").exists());
+        assert!(models.join("muscriptor/small/w.onnx").exists());
+        let too_many: Vec<serde_json::Value> = (0..101).map(|_| serde_json::json!({ "name": "a", "ext": "wav", "bytes": [1] })).collect();
+        let z = root.join("many.zip");
+        assert_eq!(super::write_stems_zip_at(&z, &too_many, "many.zip")["ok"], false);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

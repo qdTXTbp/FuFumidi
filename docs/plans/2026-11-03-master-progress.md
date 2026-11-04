@@ -388,6 +388,7 @@
 - **Tauri 插件中心本地列表/启停**：plugins_list/rescan（调 engine/plugin_render.py list，--dir 来自 settings/env，按 settings.plugins_enabled 标 enabled）、plugins_set_enabled（写 settings）、plugins_open_dir；桥已有映射；Rust 测试解析/启停；真实 Python 列表手工无窗口跑过返回空列表；命令总数 **104**，arg 审计不一致 36→**32**，cargo test **33/33 + 1 ignored**。
 - **Release 构建门禁**：cargo build --release --offline 无窗口通过（optimized 2m10s），fufumidi-shell.exe 约 15 MiB；清理未使用的 autosave_root 警告；cargo test 33/33 + 1 ignored 保持通过。
 - **Tauri 音色工坊本地能力**：从 main/soundfonts.js 生成 20 条静态注册表（scripts/tauri/gen-soundfont-registry.mjs）；sf_workshop_list（bundled/downloaded 体积核对 + 自定义 SF2/SF3 扫描）、import/delete/open_dir；桥已有映射；Rust 测试 20 条/GeneralUser builtin/自定义/导入删除；命令总数 **108**，arg 审计不一致 32→**28**，cargo test **34/34 + 1 ignored**；下载/取消仍未实现。
+- **Tauri probe 别名 + 安全边界测试**：补 `probe` 命令（前端 bridge.probe 之前无 Rust 实现，复用 engine_probe）；模型 ZIP 增加 `../evil.onnx` 穿越测试，确认不会写出 models 目录；stems ZIP 增加 >100 文件拒绝测试；同时修复模型导入临时目录并发同名问题（进程 id + 纳秒）。命令总数 **109**，arg 审计 28→**27**，cargo test **35/35 + 1 ignored**。
 - **T-117 曲库/设置共享 Electron 数据（重要）**：Rust 用 rusqlite 直读/写
   `%APPDATA%/FuFumidi/fufumidi/fufumidi.sqlite`（songs/playlists/kv），设置优先读 legacy
   settings.json；只读验收实测 **1972 首真实曲目**、57 个设置键、侧栏「全部曲目 1972」正常；
