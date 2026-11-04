@@ -109,6 +109,7 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 | rvc_list / rvc_remove | 扫描 dataRoot/models/rvc 下 model.json + index.json 引用式模型；算 size/missing/ready/external；删除仅物理目录+index 条目，外部引用只注销 | Rust 单测：物理删除/外部保留/missing 未就绪/未知 id |
 | utau_export_voicebank | 把 files[{name,data(base64)}] 写入用户选择的已有目录；文件名清洗、空名跳过、总量 512MB 上限 | Rust 单测：写入/空名/traversal 清洗/目录不存在 |
 | utau_import_voicebank_zip | 原生选 zip → 临时解压（拒绝 ../绝对路径/entries>20000/解压>4GB）→ 找声库根（character/oto）→ 移到 voicebanks/<zip名>，重名加 _2；裸 oto 包补 character 文件 | Rust 单测：嵌套/重名/traversal/裸 oto/无 bank；不测原生对话框 |
+| cover_singers / pick_audio / pick_dir / open / cancel / run | 歌手=本机 RVC 清单；选音频/目录；explorer 打开；取消 kill；run 组 engine_cover.py 参数（默认 no-separate、RVC 参数、vocals/instrumental），读 ###PROG/###RESULT 发 cover:progress；选分离模型明确报错未迁移 | Rust 单测：args 必填/off/分离拒绝；真实引擎未跑 |
 | utau_read_oto / utau_save_oto | 读/写 voicebanks/<声库>/oto.ini：原始字节 base64、size/mtime；写前复制到同一个 oto.ini.bak（只保留上一代）、8MB 上限、空内容拒绝；限制在 dataRoot/voicebanks 内 | Rust 单测：base64 宽容/往返、CJK、缺目录/缺 oto、.bak 依次更新、空/超大/根外拒绝 |
 | utau_delete_voicebank | 删除 dataRoot/voicebanks 下的声库目录：canonicalize 前缀校验；拒绝根目录本身/根外/不存在 | Rust 单测：子目录删除、根/根外/空参数拒绝 |
 | sf_workshop_list / import / delete / open_dir | 从 main/soundfonts.js 生成 20 条静态注册表；核对 bundled/downloaded 体积、扫描自定义 SF2/SF3；导入/删除/打开目录 | Rust 单测：20 条注册表、bundled GeneralUser builtin、自定义扫描、导入/删除；下载仍未实现 |
@@ -256,7 +257,7 @@ GPU 环境（未设 `FUFUMIDI_DISABLE_GPU=1`）自动 −1，`FUFUMIDI_MAX_WORKE
 ## 4. 当前命令清单（156 条）
 
 host_info, app_version, ping, python_selfcheck, engine_probe, convert, engine_worker_status,
-load_settings, save_settings, update_sources, update_set_preferred_source, utau_list_voicebanks, voicebank_unified, utau_read_oto, utau_save_oto, utau_delete_voicebank, utau_import_voicebank_zip, utau_export_voicebank, utau_export_voicebank_zip, rvc_list, rvc_remove, rvc_pick_folder, rvc_pick_files, rvc_import_folder, rvc_import_files, rvc_pick_zip, rvc_import_zip, rvc_catalog, rvc_open_catalog_page, rvc_probe, rvc_refresh_catalog, take_pending_open_file, db_kv_get, db_kv_set, db_status, db_songs_list, db_songs_put,
+load_settings, save_settings, update_sources, update_set_preferred_source, utau_list_voicebanks, voicebank_unified, utau_read_oto, utau_save_oto, utau_delete_voicebank, utau_import_voicebank_zip, utau_export_voicebank, utau_export_voicebank_zip, cover_singers, cover_pick_audio, cover_pick_dir, cover_open, cover_cancel, cover_run, rvc_list, rvc_remove, rvc_pick_folder, rvc_pick_files, rvc_import_folder, rvc_import_files, rvc_pick_zip, rvc_import_zip, rvc_catalog, rvc_open_catalog_page, rvc_probe, rvc_refresh_catalog, take_pending_open_file, db_kv_get, db_kv_set, db_status, db_songs_list, db_songs_put,
 db_songs_delete, db_playlists_list, db_playlists_put, model_list, list_midi_files, read_binary,
 save_binary, soundfont_list, dep_check, diag_export, notify, open_output, open_external, cancel,
 presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
