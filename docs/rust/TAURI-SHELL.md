@@ -94,6 +94,7 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 | plugins_list / rescan / set_enabled / open_dir | 调 engine/plugin_render.py list（--dir 来自 settings/env），按 settings.plugins_enabled 标 enabled；开关写 settings；打开插件目录 | Rust 单测：输出解析/启用映射、设置写入；真实 Python 插件列表未在测试中跑（手工无窗口跑过返回空列表） |
 | utau_list_voicebanks / voicebank_unified | 只读扫描 dataRoot/voicebanks（一层、三标记、character.yaml/txt 显示名）与 diffsinger-voicebanks（dsconfig 根/下一层、递归 size）；两侧独立容错 | Rust 单测：名称优先级/BOM/UTF-8 lossy/一层/缺根/dsconfig 根与一层/size/counts；dir_size 不再跟随 symlink（全仓生效） |
 | utau_export_voicebank_zip | 原生保存 zip → 写入 files[{name,data(base64)}]（Deflated）；文件名清洗、空名跳过、总量 512MB | Rust 单测：zip 条目/内容、traversal 清洗、空名跳过 |
+| rvc_probe | 等 id 找 model.json/index 条目；spawn_blocking 调 engine_rvc.py probe --model，解析 ###RESULT，回写 version/sr/f0/engine 并保存；无模型/脚本时明确错误 | Rust 单测：查找/字段 patch；真实 probe 需模型，未跑 |
 | rvc_catalog / rvc_open_catalog_page | 内置 main/rvc-catalog.json（include_str，443KB）直接返回；目录页用系统默认浏览器打开（仅 http/https） | Rust 单测：内置 catalog 可解析且 models 非空；外链校验复用 open_external |
 | rvc_pick_zip / rvc_import_zip | 原生选 zip → 安全解压到 models/rvc/<id>；多一层时找含权重的子目录，文件路径加前缀；写 model.json；识别 pth/pt/config | Rust 单测：flat/nested/无模型错误、列表 ready |
 | rvc_pick_folder / pick_files / import_folder / import_files | 原生选目录/文件；文件夹引用式登记（写 index.json）、根内写 model.json；文件复制到 models/rvc/<id>；检测 pth/pt+config/index/40k/48k | Rust 单测：外部引用/根内物理/文件复制/ready；对话框未单测 |
@@ -234,20 +235,20 @@ GPU 环境（未设 `FUFUMIDI_DISABLE_GPU=1`）自动 −1，`FUFUMIDI_MAX_WORKE
 
 - `npm run tauri:coverage` / `node scripts/tauri/ipc-coverage.mjs --write`：
   只解析 preload 与 Tauri 桥的方法名，不启动窗口；
-- 当前：preload 265 方法 / Tauri **155** 方法 / **111 未映射**；preload invoke 250 / tauri call **149**；
+- 当前：preload 265 方法 / Tauri **156** 方法 / **110 未映射**；preload invoke 250 / tauri call **150**；
 - 缺口分类：设置杂项 28、diffsinger 19、utau/voicebank 18、模型/安装 14、导出/渲染 14、
   资源/音频 13、rvc 12、曲库/数据 11、文件/诊断 11、事件/窗口 10、GPU 8、更新/测速 6、其他 4；
 - 明细见 [IPC-COVERAGE.md](IPC-COVERAGE.md)。
 - 前端实际调用审计：`npm run tauri:call-audit`（`docs/rust/BRIDGE-CALLS.md`），
   当前 212 个去重调用 / 104 未找到实现（启发式，含动态调用误报）。
-- 参数契约审计：`npm run tauri:arg-audit`（`docs/rust/ARG-AUDIT.md`），当前 133 命令 / 23 不一致
+- 参数契约审计：`npm run tauri:arg-audit`（`docs/rust/ARG-AUDIT.md`），当前 134 命令 / 23 不一致
   （主要来自尚未实现的 bridge 命令）；已修正 readSidecarLyrics/modelImportLocal/renameMidi/
   projectOpen/autosaveRead/autosaveClear 的 JS camelCase→Rust snake_case 参数错配。
 
-## 4. 当前命令清单（133 条）
+## 4. 当前命令清单（134 条）
 
 host_info, app_version, ping, python_selfcheck, engine_probe, convert, engine_worker_status,
-load_settings, save_settings, update_sources, update_set_preferred_source, utau_list_voicebanks, voicebank_unified, utau_read_oto, utau_save_oto, utau_delete_voicebank, utau_import_voicebank_zip, utau_export_voicebank, utau_export_voicebank_zip, rvc_list, rvc_remove, rvc_pick_folder, rvc_pick_files, rvc_import_folder, rvc_import_files, rvc_pick_zip, rvc_import_zip, rvc_catalog, rvc_open_catalog_page, db_kv_get, db_kv_set, db_status, db_songs_list, db_songs_put,
+load_settings, save_settings, update_sources, update_set_preferred_source, utau_list_voicebanks, voicebank_unified, utau_read_oto, utau_save_oto, utau_delete_voicebank, utau_import_voicebank_zip, utau_export_voicebank, utau_export_voicebank_zip, rvc_list, rvc_remove, rvc_pick_folder, rvc_pick_files, rvc_import_folder, rvc_import_files, rvc_pick_zip, rvc_import_zip, rvc_catalog, rvc_open_catalog_page, rvc_probe, db_kv_get, db_kv_set, db_status, db_songs_list, db_songs_put,
 db_songs_delete, db_playlists_list, db_playlists_put, model_list, list_midi_files, read_binary,
 save_binary, soundfont_list, dep_check, diag_export, notify, open_output, open_external, cancel,
 presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,

@@ -433,6 +433,7 @@
 - **Tauri 壁纸文件夹扫描**：wallpaper_scan_folder（图片/视频，深度 3、≤600、跳过点文件/空文件）；桥 wallpaper.scanFolder（合并重复 wallpaper 对象）；Rust 测试过滤与排序；命令总数 **96**，覆盖 133 方法/132 未映射（128 call），bridge 未实现 **104**，cargo test **29/29 + 1 ignored**。
 - **Tauri MIDI 文件关联**：file_assoc（HKCU .mid/.midi→FuFumidi.MIDI；开发用 build/icon.ico，打包用 exe；隐藏 reg.exe；失败计数回报）；桥补 fileAssoc；Rust 测试开/关命令计划，**测试不写注册表**；命令总数 **97**，arg 审计不一致 39→**38**，cargo test **30/30 + 1 ignored**。
 - **T-118 P3 UI 消费**：ViewTranscribe 订阅 `onEngineProgress`，按 `id`（batchN）更新队列 realPct；与日志 ###PROG 路径互补，卸载退订；type 补 onEngineProgress；build/test:ui 589/smoke 通过。
+- **Tauri RVC probe**：`rvc_probe` 等 id 找清单，spawn_blocking 调 `engine_rvc.py probe --model`，解析 ###RESULT 并回写 version/sr/f0/engine；无模型/脚本明确错误；桥补 rvcProbe；Rust 查找/patch 测试；命令 **134**，cargo test **107/107 + 1 ignored**。
 - **Tauri RVC 内置目录**：`rvc_catalog` 编译期 include_str main/rvc-catalog.json（443KB，models 非空）、`rvc_open_catalog_page` 复用 open_external 仅 http/https；桥补；命令 **133**，cargo test **106/106 + 1 ignored**。
 - **Tauri RVC zip 导入**：`rvc_pick_zip/rvc_import_zip` 安全解压到 models/rvc/<id>，多一层时定位含权重子目录并给文件加前缀，写 model.json；Rust 测试 flat/nested/无效包；命令 **131**，cargo test **105/105 + 1 ignored**。
 - **Tauri RVC 导入**：`rvc_pick_folder/rvc_pick_files/rvc_import_folder/rvc_import_files`；文件夹引用式（index.json）或根内 model.json；文件复制到 models/rvc/<id>；检测 pth/pt+config/index/采样率提示；桥补；Rust 测试外部引用/根内物理/文件复制；命令 **129**，cargo test **104/104 + 1 ignored**。

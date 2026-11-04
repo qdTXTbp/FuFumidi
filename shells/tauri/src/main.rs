@@ -895,6 +895,56 @@ fn rvc_catalog() -> serde_json::Value {
 #[tauri::command]
 fn rvc_open_catalog_page(url: String) -> serde_json::Value { open_external(url) }
 
+fn rvc_find_model(root: &Path, id: &str) -> Option<(serde_json::Value, bool)> {
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for e in entries.flatten() {
+            let d = e.path();
+            let m = std::fs::read_to_string(d.join("model.json")).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
+            if let Some(m) = m { if m.get("id").and_then(|v| v.as_str()) == Some(id) { return Some((m, true)); } }
+        }
+    }
+    let idx = std::fs::read_to_string(root.join("index.json")).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())?;
+    let m = idx.get("models")?.get(id)?.clone();
+    Some((m, false))
+}
+
+fn rvc_patch_model(mut m: serde_json::Value, raw: &serde_json::Value) -> (serde_json::Value, serde_json::Value) {
+    let mut patched = serde_json::Map::new();
+    if let Some(o) = m.as_object_mut() {
+        for k in ["version", "sr", "f0", "engine"] {
+            if let Some(v) = raw.get(k) {
+                let changed = o.get(k).map(|old| old != v).unwrap_or(true);
+                if changed { o.insert(k.to_string(), v.clone()); patched.insert(k.to_string(), v.clone()); }
+            }
+        }
+    }
+    (m, serde_json::Value::Object(patched))
+}
+
+#[tauri::command]
+async fn rvc_probe(id: String) -> serde_json::Value {
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = rvc_root();
+        let Some((mut model, _physical)) = rvc_find_model(&root, &id) else { return oto_err("模型不存在") };
+        let dir = model.get("dir").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if !Path::new(&dir).is_dir() { return oto_err("模型目录不存在"); }
+        let (Some(py), Some(engine)) = (python_path(), engine_dir()) else { return oto_err("Python/引擎目录不存在") };
+        let script = engine.join("engine_rvc.py");
+        if !script.is_file() { return oto_err("engine_rvc.py 不存在"); }
+        let out = match Command::new(&py).arg(&script).arg("probe").arg("--model").arg(&dir).env("PYTHONIOENCODING", "utf-8").output() {
+            Ok(o) => o, Err(e) => return oto_err(&e.to_string()),
+        };
+        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+        let Some(raw) = parse_health_json(&stdout) else { return serde_json::json!({ "ok": false, "error": format!("引擎无 JSON 结果: {}", stderr.chars().rev().take(400).collect::<String>().chars().rev().collect::<String>()) }) };
+        if raw.get("ok").and_then(|v| v.as_bool()) != Some(true) { return serde_json::json!({ "ok": false, "error": raw.get("error").cloned().unwrap_or_else(|| serde_json::json!("probe failed")), "raw": raw }) };
+        let (patched_model, patch) = rvc_patch_model(model, &raw);
+        if let Err(e) = rvc_save_model(&root, &patched_model) { return oto_err(&e); }
+        model = patched_model;
+        serde_json::json!({ "ok": true, "model": model, "patched": patch, "raw": raw })
+    }).await.unwrap_or_else(|e| oto_err(&e.to_string()))
+}
+
 fn data_root_overridden() -> bool {
     std::env::var("FUFUMIDI_DATA_ROOT").map(|p| !p.trim().is_empty()).unwrap_or(false)
 }
@@ -4234,7 +4284,7 @@ fn main() {
             pick_file, pick_directory, pick_audio, pick_audio_files, pick_image, pick_music_xml,
             list_midi_files, list_audio_files, library_stats, read_soundfont, read_binary, save_binary,
             convert, probe, refine, cancel, set_transcribe_pause, engine_worker_status,
-            utau_list_voicebanks, voicebank_unified, utau_read_oto, utau_save_oto, utau_delete_voicebank, utau_import_voicebank_zip, utau_export_voicebank, utau_export_voicebank_zip, rvc_list, rvc_remove, rvc_pick_folder, rvc_pick_files, rvc_pick_zip, rvc_import_folder, rvc_import_files, rvc_import_zip
+            utau_list_voicebanks, voicebank_unified, utau_read_oto, utau_save_oto, utau_delete_voicebank, utau_import_voicebank_zip, utau_export_voicebank, utau_export_voicebank_zip, rvc_list, rvc_remove, rvc_pick_folder, rvc_pick_files, rvc_pick_zip, rvc_import_folder, rvc_import_files, rvc_import_zip, rvc_probe
         ])
         .setup(|_app| {
             println!("[fufumidi-shell] {}", serde_json::to_string(&host_info_json()).unwrap_or_default());
@@ -5947,5 +5997,27 @@ mod rvc_catalog_tests {
         let r = super::rvc_catalog();
         assert_eq!(r["ok"], true);
         assert!(r["catalog"]["models"].as_array().unwrap().len() > 0);
+    }
+}
+
+#[cfg(test)]
+mod rvc_probe_tests {
+    use super::{rvc_find_model, rvc_patch_model};
+    #[test]
+    fn find_and_patch_model() {
+        let root = std::env::temp_dir().join(format!("fufumidi-probe-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let d = root.join("m1");
+        std::fs::create_dir_all(&d).unwrap();
+        let m = serde_json::json!({ "id": "m1", "engine": "rvc", "version": "", "sr": 0, "dir": d.display().to_string() });
+        std::fs::write(d.join("model.json"), serde_json::to_string(&m).unwrap()).unwrap();
+        let (found, physical) = rvc_find_model(&root, "m1").unwrap();
+        assert!(physical);
+        assert_eq!(found["id"], "m1");
+        let (patched, patch) = rvc_patch_model(found, &serde_json::json!({ "version": "v2", "sr": 40000, "f0": false }));
+        assert_eq!(patched["version"], "v2");
+        assert_eq!(patched["sr"], 40000);
+        assert_eq!(patch["f0"], false);
+        assert!(rvc_find_model(&root, "nope").is_none());
+        let _ = std::fs::remove_dir_all(root);
     }
 }
