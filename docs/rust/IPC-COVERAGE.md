@@ -5,10 +5,10 @@
 | 指标 | 数值 |
 |---|---:|
 | preload 暴露方法 | 265 |
-| Tauri 桥已映射方法 | 132 |
-| 尚未映射 | **133** |
+| Tauri 桥已映射方法 | 133 |
+| 尚未映射 | **132** |
 | preload IPC invoke 通道 | 250 |
-| Tauri call 通道 | 127 |
+| Tauri call 通道 | 128 |
 
 ## 缺口分类
 
@@ -26,7 +26,7 @@
 | 更新/测速 | 6 |
 | 文件/诊断 | 4 |
 | 其他 | 3 |
-| 曲库/数据 | 3 |
+| 曲库/数据 | 2 |
 
 ## 尚未映射的方法
 
@@ -124,7 +124,6 @@ rvcRefreshCatalog
 rvcRemove
 saveLocal
 savePath
-scanFolder
 scoreCancel
 scoreToMidi
 searchWallhaven

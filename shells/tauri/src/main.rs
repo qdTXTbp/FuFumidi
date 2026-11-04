@@ -562,6 +562,36 @@ fn presets_restore() -> serde_json::Value {
 
 fn midi_root() -> PathBuf { data_dir().join("midi") }
 
+fn wallpaper_scan_folder_at(dir: &Path) -> serde_json::Value {
+    if !dir.is_dir() { return serde_json::json!({ "ok": false, "error": "文件夹不存在" }); }
+    let mut out: Vec<serde_json::Value> = Vec::new();
+    fn walk(d: &Path, out: &mut Vec<serde_json::Value>, depth: usize) {
+        if out.len() >= 600 || depth > 3 { return; }
+        let Ok(rd) = std::fs::read_dir(d) else { return };
+        for e in rd.flatten() {
+            if out.len() >= 600 { return; }
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') { continue; }
+            let p = e.path();
+            if p.is_dir() { walk(&p, out, depth + 1); continue; }
+            if !p.is_file() { continue; }
+            let ext = p.extension().and_then(|x| x.to_str()).unwrap_or("").to_ascii_lowercase();
+            let kind = if matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "webp" | "avif" | "gif" | "bmp") { "image" } else if matches!(ext.as_str(), "mp4" | "webm" | "mov" | "mkv") { "video" } else { "" };
+            if kind.is_empty() { continue; }
+            let size = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+            if size == 0 { continue; }
+            out.push(serde_json::json!({ "path": p.display().to_string(), "name": name, "kind": kind, "size": size }));
+        }
+    }
+    walk(dir, &mut out, 0);
+    out.sort_by(|a, b| a["name"].as_str().unwrap_or("").cmp(b["name"].as_str().unwrap_or("")));
+    serde_json::json!({ "ok": true, "list": out })
+}
+
+#[tauri::command]
+fn wallpaper_scan_folder(dir: String) -> serde_json::Value { wallpaper_scan_folder_at(Path::new(&dir)) }
+
+
 fn wallpaper_dir() -> PathBuf { legacy_dir().unwrap_or_else(data_dir).join("wallpapers") }
 
 fn wallpaper_list_at(dir: &Path) -> Vec<serde_json::Value> {
@@ -2561,7 +2591,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, db_kv_get, db_kv_set,
-            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, model_list,
+            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
@@ -2602,6 +2632,25 @@ mod check_midi_tests {
         assert_eq!(super::save_binary_bytes(&serde_json::json!({ "data": [1,2] })), vec![1,2]);
         assert_eq!(super::save_binary_bytes(&serde_json::json!({ "bytes": "ab" })), b"ab".to_vec());
         assert!(super::save_binary_bytes(&serde_json::json!({})).is_empty());
+    }
+
+    #[test]
+    fn wallpaper_scan_folder() {
+        let root = tmpdir("wallpaper-scan");
+        let sub = root.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(root.join("a.jpg"), b"img").unwrap();
+        std::fs::write(sub.join("b.mp4"), b"vid").unwrap();
+        std::fs::write(root.join("c.txt"), b"x").unwrap();
+        std::fs::write(root.join("zero.mp4"), b"").unwrap();
+        let r = super::wallpaper_scan_folder_at(&root);
+        assert_eq!(r["ok"], true);
+        let list = r["list"].as_array().unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0]["name"], "a.jpg");
+        assert_eq!(list[1]["kind"], "video");
+        assert_eq!(super::wallpaper_scan_folder_at(&root.join("none"))["ok"], false);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

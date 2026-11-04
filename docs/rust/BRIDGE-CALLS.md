@@ -7,8 +7,8 @@
 |---|---:|
 | 前端调用的 bridge 方法（去重） | 212 |
 | Tauri 顶层方法 | 95 |
-| Tauri 嵌套方法 | 48 |
-| **未找到实现** | **105** |
+| Tauri 嵌套方法 | 49 |
+| **未找到实现** | **104** |
 
 ## 未找到实现的方法
 
@@ -110,7 +110,6 @@
 - `voicebankUnified` — frontend/src/components/utau/VoicebankPicker.vue
 - `wallpaper` — frontend/src/components/WallpaperGallery.vue, frontend/src/components/WallpaperLibrary.vue
 - `wallpaper.downloadUrl` — frontend/src/components/WallpaperLibrary.vue
-- `wallpaper.scanFolder` — frontend/src/components/WallpaperLibrary.vue
 - `wallpaper.searchWallhaven` — frontend/src/components/WallpaperLibrary.vue
 - `wallpaperEngine` — frontend/src/App.vue, frontend/src/components/WallpaperEnginePanel.vue
 - `wallpaperEngine.detect` — frontend/src/components/WallpaperEnginePanel.vue
