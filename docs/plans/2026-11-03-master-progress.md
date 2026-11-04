@@ -519,3 +519,5 @@
 - **当前源码复验（插件安装后）**：隐藏全量 E2E **40/40**、test:ui **589/589**、typecheck/audit 0、cargo **113/113 + 1 ignored**；命令 143，覆盖 165/101，call 159，arg 23。
 
 - **143 命令 release 复验**：release 2m21s、0 warning；host/engine self-check 通过；无窗口/残留；E2E 40/40、test:ui 589、cargo 113。
+
+- **插件解压/回滚测试**：抽出 `plugins_confirm_install_at`，用临时 plugins 目录验证解压、非覆盖拒绝、覆盖升级、坏包失败保留旧插件；cargo **114/114 + 1 ignored**。

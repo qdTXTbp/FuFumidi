@@ -1241,22 +1241,38 @@ fn plugins_confirm_install(token: String, overwrite: Option<bool>) -> serde_json
     let zip_path = dir.join("package.zip");
     if !zip_path.is_file() { return oto_err("下载记录已失效，请重新下载"); }
     let plugins_dir = data_dir().join("plugins");
-    let _ = std::fs::create_dir_all(&plugins_dir);
-    let info = match plugin_inspect_zip(&zip_path, &plugins_dir) { Ok(i) => i, Err(e) => return oto_err(&e) };
+    let result = plugins_confirm_install_at(&zip_path, &plugins_dir, &token, overwrite.unwrap_or(false));
+    let _ = std::fs::remove_dir_all(&dir);
+    match result {
+        Ok(mut v) => {
+            let list = plugins_list();
+            let id = v.get("id").and_then(|x| x.as_str()).unwrap_or("").to_string();
+            if let Some(o) = v.as_object_mut() {
+                o.insert("activated".into(), list.iter().find(|p| p.get("id").and_then(|x| x.as_str()) == Some(id.as_str())).cloned().unwrap_or(serde_json::Value::Null));
+                o.insert("total".into(), serde_json::json!(list.len()));
+            }
+            v
+        }
+        Err(e) => oto_err(&e),
+    }
+}
+
+fn plugins_confirm_install_at(zip_path: &Path, plugins_dir: &Path, token: &str, overwrite: bool) -> Result<serde_json::Value, String> {
+    let _ = std::fs::create_dir_all(plugins_dir);
+    let info = plugin_inspect_zip(zip_path, plugins_dir)?;
     let id = info.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let target = info.get("existing").and_then(|v| v.as_str()).map(PathBuf::from).unwrap_or_else(|| plugins_dir.join(info.get("targetDirName").and_then(|v| v.as_str()).unwrap_or(&id)));
-    if target.exists() && !overwrite.unwrap_or(false) { return oto_err("插件已存在，需确认覆盖"); }
-    // 覆盖升级先在旁边留一份；解压失败时恢复，避免把已安装插件删丢。
+    if target.exists() && !overwrite { return Err("插件已存在，需确认覆盖".to_string()); }
     let backup = if target.exists() {
         let b = target.with_file_name(format!(".install-backup-{token}"));
         let _ = std::fs::remove_dir_all(&b);
-        if let Err(e) = std::fs::rename(&target, &b) { return oto_err(&e.to_string()); }
+        std::fs::rename(&target, &b).map_err(|e| e.to_string())?;
         Some(b)
     } else { None };
     let result = (|| -> Result<serde_json::Value, String> {
         std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
         let prefix = info.get("prefix").and_then(|v| v.as_str()).unwrap_or("");
-        let file = std::fs::File::open(&zip_path).map_err(|e| e.to_string())?;
+        let file = std::fs::File::open(zip_path).map_err(|e| e.to_string())?;
         let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
         for i in 0..zip.len() {
             let mut e = zip.by_index(i).map_err(|x| x.to_string())?;
@@ -1269,20 +1285,14 @@ fn plugins_confirm_install(token: String, overwrite: Option<bool>) -> serde_json
             let mut out = std::fs::File::create(&dest).map_err(|x| x.to_string())?;
             std::io::copy(&mut e, &mut out).map_err(|x| x.to_string())?;
         }
-        let list = plugins_list();
-        let activated = list.iter().find(|p| p.get("id").and_then(|v| v.as_str()) == Some(&id)).cloned();
-        Ok(serde_json::json!({ "ok": true, "id": id, "dir": oto_path_text(&target), "activated": activated, "total": list.len() }))
+        Ok(serde_json::json!({ "ok": true, "id": id, "dir": oto_path_text(&target) }))
     })();
-    let _ = std::fs::remove_dir_all(&dir);
     match result {
-        Ok(v) => {
-            if let Some(b) = backup { let _ = std::fs::remove_dir_all(&b); }
-            v
-        }
+        Ok(v) => { if let Some(b) = backup { let _ = std::fs::remove_dir_all(&b); } Ok(v) }
         Err(e) => {
             let _ = std::fs::remove_dir_all(&target);
             if let Some(b) = backup { let _ = std::fs::rename(&b, &target); }
-            oto_err(&e)
+            Err(e)
         }
     }
 }
@@ -6516,6 +6526,60 @@ mod plugin_install_tests {
         assert!(super::plugin_zip_entry_unsafe("//server/share/x"));
         assert!(super::plugin_zip_entry_unsafe("../x"));
         assert!(!super::plugin_zip_entry_unsafe("pkg/index.js"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+
+#[cfg(test)]
+mod plugin_confirm_tests {
+    use std::io::Write as _;
+
+    fn tmpdir(tag: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!("fufumidi-plugin-confirm-{tag}-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    fn mkzip(path: &std::path::Path, entries: &[(&str, &[u8])]) {
+        let f = std::fs::File::create(path).unwrap();
+        let mut z = zip::ZipWriter::new(f);
+        let opt = zip::write::SimpleFileOptions::default();
+        for (n, b) in entries { z.start_file(*n, opt).unwrap(); z.write_all(b).unwrap(); }
+        z.finish().unwrap();
+    }
+
+    #[test]
+    fn extracts_and_restores_on_failure() {
+        let root = tmpdir("confirm");
+        let plugins = root.join("plugins");
+        let z = root.join("v1.zip");
+        mkzip(&z, &[
+            ("pkg/plugin.json", br#"{"id":"demo-plugin","name":"Demo","version":"1.0.0"}"#),
+            ("pkg/index.js", b"old"),
+            ("pkg/sub/a.txt", b"a"),
+        ]);
+        let r = super::plugins_confirm_install_at(&z, &plugins, "test-token", false).unwrap();
+        assert_eq!(r["id"], "demo-plugin");
+        let dir = plugins.join("pkg");
+        assert_eq!(std::fs::read(dir.join("index.js")).unwrap(), b"old");
+        assert!(dir.join("sub/a.txt").is_file());
+
+        let z2 = root.join("v2.zip");
+        mkzip(&z2, &[
+            ("pkg/plugin.json", br#"{"id":"demo-plugin","name":"Demo","version":"2.0.0"}"#),
+            ("pkg/index.js", b"new"),
+        ]);
+        assert!(super::plugins_confirm_install_at(&z2, &plugins, "test-token", false).is_err());
+        assert_eq!(std::fs::read(dir.join("index.js")).unwrap(), b"old");
+        super::plugins_confirm_install_at(&z2, &plugins, "test-token", true).unwrap();
+        assert_eq!(std::fs::read(dir.join("index.js")).unwrap(), b"new");
+
+        let bad = root.join("bad.zip");
+        mkzip(&bad, &[("readme.txt", b"no manifest")]);
+        assert!(super::plugins_confirm_install_at(&bad, &plugins, "test-token", true).is_err());
+        assert_eq!(std::fs::read(dir.join("index.js")).unwrap(), b"new");
         let _ = std::fs::remove_dir_all(root);
     }
 }
