@@ -254,6 +254,11 @@
   `###LOG/###PROG/###RESULT` 按 `_id` 解析并转发 Tauri 事件；退出时 kill；
   实测 1 s WAV → Basic Pitch **1 音符**，冷 14.3 s / 暖 **5.5 s**，13 条日志，输出 MIDI 头 MThd；
   smoke 扩到 **12 项**断言全绿（新增 convert/worker）。
+- **T-118 P0（只落调度模块，未接生产）**：新增 `shells/tauri/src/worker_pool.rs`（`WorkerProc` trait +
+  `WorkerPool` + `Lease` + `MockWorker`），cap 1–4、等待者上限、每 job 独立取消、`cancel_all`、
+  `shutdown`、`status`，锁内只做 O(1) 元数据；14 项 mock 单测（并发上限、按 id 取消、取消全部、
+  shutdown、等待者溢出、lease/panic 不泄漏槽、spawn 失败/取消回收、status）。生产 `run_convert` 仍走
+  单 worker，未改任何 IPC/桥/前端。cargo test **56/56 + 1 ignored**；无窗口/无真实进程测试。
 - **T-117 第一步 + UI 路由冒烟**：新增 `db_status/db_songs_list/db_songs_put/db_songs_delete/
   db_playlists_list/db_playlists_put`（JSON store，原子 rename，dataDir 可覆盖）；命令总数 **20**。
   smoke 增加 **uiRoutes**：`#/transcribe → #/resources → #/piano3d → #/music → #/home` 逐页渲染，
