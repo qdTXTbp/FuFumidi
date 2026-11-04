@@ -333,9 +333,12 @@
   用 `makeReplaceCcStateCommand` 整体替换（undo/redo 副本隔离）；`edit-pb-lane` E2E 增加撤销清零/重做恢复。
   **第九批（存储层）**：`session.js` 每 doc 持有 `createEditorHistory` 引擎（80/32MB/超大 8MB 留 2）；
   `pushUndo/undo/redo/canUndo/canRedo` 转发；新增 `history/depth/clearUndo`；`markDirty` 不再清 redo
-  （保存后撤销不会被 4s 自动保存轮询清空）；4 项 session-history 测试。**EditorCanvas 尚未用该引擎**，
-  仍是内部数组 + fallback；下一步加 `history` prop、删本地数组并接 ViewEdit。
-  尚未完成：EditorCanvas/ViewEdit 接 session 引擎；编排页跨页统一未做。**仍不能宣称 P-011 整体完成。**
+  （保存后撤销不会被 4s 自动保存轮询清空）；4 项 session-history 测试。
+  **第十批（接入）**：`EditorCanvas` 新增 `history` prop，删除内部 undo/redo 数组与裁剪逻辑，
+  快照/命令全部走 session 引擎（fallback 本地引擎）；undo/redo 收敛为一次 engine 调用 + selection.clear+afterEdit；
+  `pushMark`/长按取消用 `seq()/dropLast()`；`ViewEdit` 在 doc 切换时先同步 `histRef` 再 await 关旧 doc；
+  新增隐藏 E2E `edit-undo-session`（单栈 bytes、跨页保留、切歌隔离）。
+  **编辑页 P-011 已完成**：隐藏全量 **39/39** 通过；**跨页统一（编辑↔编排）仍未做**，编排页仍用 tabbed registry。
 - **Tauri check_midi 已补**：Rust 实现与 Electron 同语义（只认数据根 midi/ 内非空文件），
   桥补 `checkMidi`；Tauri 曲库自愈不再因缺命令而跳过。Rust 单测覆盖根内保留/缺失/根外路径。
   命令总数 **44**；本轮全部无头验证（cargo test / typecheck / build / audit）。

@@ -26,6 +26,7 @@ import { claimPointer, isPrimaryPointer, releasePointer, penPressure, makeLongPr
 // P-011 第一批：单音符 add/delete/update 走增量命令，其余操作仍走整轨快照
 import { makeAddNotesCommand, makeDeleteNotesCommand, makeUpdateNotesCommand } from '../core/note_commands.js';
 import { makeAddCcsCommand, makeDeleteCcsCommand, makeReplaceCcStateCommand, snapshotCcState } from '../core/cc_commands.js';
+import { createEditorHistory } from '../core/editor_history.js';
 
 const props = defineProps({
   tool: { type: String, default: 'select' },      // select | pencil | erase
@@ -40,7 +41,8 @@ const props = defineProps({
   stepTicks: { type: Number, default: 120 },   // 每步长度（tick）
   editTracks: { type: Array, default: () => [] },  // 跨轨编辑：额外的轨道下标（当前轨始终参与）
   scaleSpec: { type: Object, default: null },     // { root, type, custom } 调内编辑用的音阶；空则按曲目自动判断
-  scaleMode: { type: String, default: 'off' },    // off | highlight（高亮调内音） | constrain（约束到调内音）
+  scaleMode: { type: String, default: 'off' },
+  history: { type: Object, default: null }, // P-011：session 按 doc 持有的撤销引擎；空则用组件本地 fallback    // off | highlight（高亮调内音） | constrain（约束到调内音）
   chordTrack: { type: Array, default: () => [] }, // P1-2 和弦轨 [{ tick, endTick, pcs }]；约束时并入当前小节的调内音
   ksMap: { type: Object, default: () => ({}) },   // Key Switch 映射 { midi: 技法名 }
   audio: { type: Object, default: null },         // 音频波形 { data: Float32Array, rate: number }
@@ -248,22 +250,10 @@ function scaleSnapPitch(midi, tick) {
 }
 
 /* ---------------- 撤销 / 重做 ---------------- */
-const undoStack = [];
-const redoStack = [];
-/* 撤销栈的两道闸：条数上限 + 内存预算。
-   整轨深拷贝（大曲目一份就可能是十几 MB）的旧上限是「80 份」，等于把内存交给曲目大小决定。
-   · bytes 按快照载荷的 JSON 长度估算（cloneMeasured 顺手量出来，不额外遍历）；
-   · 总预算 32MB，超了从最老的一份开始丢；
-   · 单条超过 8MB 的「超大快照」最多留最近 2 条；
-   · 最新一条即使自己就超预算也要留下（否则刚做完的编辑立刻不可撤销）。
-   undo / redo 两个栈受同一套规则约束。 */
-const HISTORY_LIMIT = 80;
-const HISTORY_BUDGET_BYTES = 32 * 1024 * 1024;
-const HISTORY_HUGE_BYTES = 8 * 1024 * 1024;
-const HISTORY_HUGE_KEEP = 2;
-const HISTORY_MIN_KEEP = 1;
-/* 入栈序号：条数会被预算裁剪，长按取消不能再用 undoStack.length 判断「这次交互有没有入栈」 */
-let historySeq = 0;
+/* P-011：生产由 session 按 doc 传入引擎（80 条 / 32MB / 超大 8MB 留 2）；
+   prop 为空时用组件本地 fallback，保持单测/独立使用行为。 */
+const localHistory = createEditorHistory();
+const history = computed(() => props.history || localHistory);
 /* 速度轨（M5）：tempoMap 不在 notes/ccs 快照里，所以快照要单独带一份 —— 否则改速度不可撤销。
    注意 secToTick/baseSec 是**闭包捕获了 tempoMap 那个数组对象**的，恢复时必须原地改数组
    （tm.length = 0 + push），换数组引用等于没改。 */
@@ -365,46 +355,44 @@ function restoreAllSnapshot(st) {
   s.tracks.push(...tracks);
   tempoRestore(s, st.tempo);
   sigRestore(s, st.sig);
-  selection.clear();
-  afterEdit();
 }
-/** 栈裁剪：条数上限 → 超大单条 → 总内存预算（都从最老开始丢） */
-function trimHistoryStack(stack) {
-  while (stack.length > HISTORY_LIMIT) stack.shift();
-  let huge = 0;
-  for (let i = stack.length - 1; i >= 0; i--) {
-    if ((stack[i].bytes || 0) > HISTORY_HUGE_BYTES) {
-      huge++;
-      if (huge > HISTORY_HUGE_KEEP) stack.splice(i, 1);
-    }
-  }
-  let total = 0;
-  for (const s of stack) total += s.bytes || 0;
-  while (total > HISTORY_BUDGET_BYTES && stack.length > HISTORY_MIN_KEEP) {
-    total -= (stack.shift().bytes || 0);
-  }
+/** 单轨快照恢复（不刷新；undo/redo 外层统一 selection.clear+afterEdit）。 */
+function restoreTrackSnapshot(st) {
+  const tr = song()?.tracks?.[st.ti]; if (!tr) return;
+  tr.notes = st.notes;
+  tr.ccs = st.ccs || [];
+  tempoRestore(song(), st.tempo);
+  sigRestore(song(), st.sig);
 }
-function pushSnapshot(stack, snap) {
-  if (!snap) return false;
-  stack.push(snap);
-  historySeq++;
-  trimHistoryStack(stack);
-  return true;
+/** 记录「修改前」快照并交给引擎；ti=-1 表示全量。 */
+function pushSnapshotBefore(ti, label) {
+  const s = song();
+  if (!s) return false;
+  if (ti >= 0 && !s.tracks?.[ti]) return false;
+  try {
+    history.value.pushSnapshot({
+      label, ti,
+      capture: () => (ti < 0 ? makeAllSnapshot(label) : makeTrackSnapshot(ti, label)),
+      restore: (st) => (ti < 0 ? restoreAllSnapshot(st) : restoreTrackSnapshot(st)),
+    });
+    return true;
+  } catch (e) { return false; }
 }
 /** 记录「修改前」的轨道快照；label 只用于历史面板展示，不影响撤销语义 */
 /** P-011：命令 entry 与快照 entry 共用同一条 undoStack；push 时清 redo。
     命令必须在该次 afterEdit() 之后构造，索引/对象引用才是最终顺序。 */
 function pushCommandEntry(cmd, ti, noteCount) {
   if (!cmd) return false;
-  cmd.kind = 'command';
-  cmd.ti = Number.isFinite(ti) ? ti : props.trackIndex;
-  cmd.noteCount = Number.isFinite(noteCount) ? noteCount : null;
-  cmd.at = Date.now();
-  cmd.seq = ++historySeq;
-  undoStack.push(cmd);
-  redoStack.length = 0;
-  trimHistoryStack(undoStack);
-  return true;
+  try {
+    history.value.push({
+      ...cmd,
+      kind: 'command',
+      ti: Number.isFinite(ti) ? ti : props.trackIndex,
+      noteCount: Number.isFinite(noteCount) ? noteCount : null,
+      at: Date.now(),
+    });
+    return true;
+  } catch (e) { return false; }
 }
 /** 供 addNote/editNote/deleteNoteExternal/insertKeySwitch 使用；命令工厂需在 afterEdit 后调用 */
 function pushNoteCommand(build, ti, noteCount) {
@@ -443,8 +431,7 @@ function editNotesWithCommand(arr, fields, label, mutate) {
 function pushState(label) {
   const tr = curTrack(); if (!tr) return;
   if (isMultiEdit()) { pushStateForTrack(-1, label); return; }   // 跨轨：存全量，撤销才盖得住
-  pushSnapshot(undoStack, makeTrackSnapshot(props.trackIndex, label));
-  redoStack.length = 0;
+  pushSnapshotBefore(props.trackIndex, label);
 }
 function afterEdit() {
   const s = song(), item = currentSong.value;
@@ -499,51 +486,16 @@ function clearGhostSelection() {
   }
 }
 function undo() {
-  const st = undoStack.pop(); if (!st) return;
-  if (st.kind === 'command') {
-    // P-011：增量命令 entry 与快照 entry 共用一条栈；redo 直接复用同一条目
-    redoStack.push(st);
-    st.undo();
-    selection.clear();
-    afterEdit();
-    return;
-  }
-  if (st.ti < 0) {
-    // 全量快照：当前状态进 redo（label 沿用操作名），再重建整个 tracks（增删轨也盖得住）
-    pushSnapshot(redoStack, makeAllSnapshot(st.label));
-    restoreAllSnapshot(st);
-    return;
-  }
-  const tr = song()?.tracks[st.ti]; if (!tr) return;
-  pushSnapshot(redoStack, makeTrackSnapshot(st.ti, st.label));
-  tr.notes = st.notes;
-  tr.ccs = st.ccs || [];
-  tempoRestore(song(), st.tempo);
-  sigRestore(song(), st.sig);
+  let label = null;
+  try { label = history.value.undo(); } catch (e) { return; }
+  if (label == null) return;
   selection.clear();
   afterEdit();
 }
 function redo() {
-  const st = redoStack.pop(); if (!st) return;
-  if (st.kind === 'command') {
-    undoStack.push(st);
-    st.redo();
-    selection.clear();
-    afterEdit();
-    trimHistoryStack(undoStack);
-    return;
-  }
-  if (st.ti < 0) {
-    pushSnapshot(undoStack, makeAllSnapshot(st.label));
-    restoreAllSnapshot(st);
-    return;
-  }
-  const tr = song()?.tracks[st.ti]; if (!tr) return;
-  pushSnapshot(undoStack, makeTrackSnapshot(st.ti, st.label));
-  tr.notes = st.notes;
-  tr.ccs = st.ccs || [];
-  tempoRestore(song(), st.tempo);
-  sigRestore(song(), st.sig);
+  let label = null;
+  try { label = history.value.redo(); } catch (e) { return; }
+  if (label == null) return;
   selection.clear();
   afterEdit();
 }
@@ -1612,7 +1564,7 @@ function onDown(e) {
   /* 手写笔/触控第一道闸：笔在附近时挡掉手指（掌侧误触），已经在拖拽时挡掉第二根手指。
      必须放在最前面 —— 后面的分支会重接拖拽状态，接上了就是"两指一碰音符跳走"。 */
   if (!claimPointer(e)) return;
-  pushMark = historySeq;
+  pushMark = history.value.seq();
   longPress.cancel(); longPressCancelled = false;
   longPress.down(e);
   const s = song(), tr = curTrack();
@@ -1863,7 +1815,7 @@ let longPressCancelled = false;
 const longPress = makeLongPress((e) => {
   /* 长按只在「还没移动」时成立：把这次交互整个撤掉再弹菜单 ——
      否则松手时 onUp 会把零长度的拖拽当成一次点击提交（画笔工具就会插一个音符）。 */
-  if (pushMark >= 0 && historySeq > pushMark) { undoStack.pop(); pushMark = historySeq; }
+  if (pushMark >= 0 && history.value.seq() > pushMark) { history.value.dropLast(); pushMark = history.value.seq(); }
   longPressCancelled = true;
   dragState.value = null;
   draw();
@@ -2214,20 +2166,11 @@ function delPedal() {
   pushCommandEntry(makeDeleteCcsCommand(tr, removed, '延音踏板'), props.trackIndex, tr.notes.length);
   return removed.length;
 }
-function canUndo() { return undoStack.length > 0; }
-function canRedo() { return redoStack.length > 0; }
-function clearHistory() { undoStack.length = 0; redoStack.length = 0; }
-/** 历史面板数据：label / 音符数 / 估算体积 / 入栈时间（都是入栈时算好的，这里只做投影） */
-function historySnapshots() {
-  return undoStack.map((s) => ({
-    ti: s.ti,
-    kind: s.kind || 'snapshot',
-    label: s.label || '编辑',
-    notes: s.noteCount != null ? s.noteCount : (s.notes ? s.notes.length : 0),
-    bytes: s.bytes || 0,
-    at: s.at || 0,
-  }));
-}
+function canUndo() { return history.value.canUndo(); }
+function canRedo() { return history.value.canRedo(); }
+function clearHistory() { history.value.clear(); }
+/** 历史面板数据：引擎 entries() 已是旧→新，字段与旧投影一致。 */
+function historySnapshots() { return history.value.entries(); }
 /* 音频起音检测（短时 RMS 能量突增） */
 let _onsetsCache = null;
 function audioOnsets() {
@@ -2281,15 +2224,7 @@ function snapSelToAudio() {
 /* 外部编辑（鼓组编辑器等）：按指定轨道做快照并同步刷新；ti < 0 时做全量快照（智能伴奏等）。
    label 可选，只影响历史面板的展示文案。 */
 function pushStateForTrack(ti, label) {
-  const s = song(); if (!s) return;
-  if (ti < 0) {
-    pushSnapshot(undoStack, makeAllSnapshot(label));
-    redoStack.length = 0;
-    return;
-  }
-  if (!s.tracks[ti]) return;
-  pushSnapshot(undoStack, makeTrackSnapshot(ti, label));
-  redoStack.length = 0;
+  pushSnapshotBefore(ti, label);
 }
 function notifyExternalEdit() { afterEdit(); }
 /** 播放头所在 tick（拍号编辑等需要"当前小节"的调用方用） */

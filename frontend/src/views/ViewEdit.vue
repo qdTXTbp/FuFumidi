@@ -2105,6 +2105,8 @@ async function exportMidi() {
 const AUTOSAVE_SEC = 30;
 const AUTOSAVE_TICK_MS = 4000;
 const docId = computed(() => (song.value ? 'edit:' + (app.currentId || song.value.name || 'untitled') : ''));
+/** P-011：当前 doc 的撤销引擎（由 session 持有；画布通过 :history 使用同一实例）。 */
+const histRef = ref(null);
 const recoverInfo = ref(null);
 const recoverClock = computed(() => {
   const ts = recoverInfo.value && recoverInfo.value.ts;
@@ -2157,14 +2159,17 @@ async function flushAutosave(reason) {
 }
 async function bindSessionDoc() {
   const d = docId.value;
-  if (!d) return;
-  if (lastDocId && lastDocId !== d) {
-    await flushAutosave('switch');
-    appSession.close(lastDocId);
-  }
-  lastDocId = d;
+  if (!d) { histRef.value = null; return; }
+  const old = lastDocId;
   if (!appSession.get(d)) {
     appSession.open({ docId: d, kind: 'edit', title: (song.value && song.value.name) || '' });
+  }
+  // 先同步切到新 doc 的引擎，再跨 await 关旧 doc —— 避免 await 窗口里编辑落到旧栈
+  histRef.value = appSession.history(d);
+  lastDocId = d;
+  if (old && old !== d) {
+    await flushAutosave('switch');
+    appSession.close(old);
   }
   const bytes = encodeForAutosave();
   lastHash = bytes ? fnv1a(bytes) : '';
@@ -2400,6 +2405,8 @@ onMounted(async () => {
     if (localStorage.getItem('fufumidi_debug') === '1' || /[?&]debug=1/.test(location.hash)) {
       window.__fufumidiDebug = {
         editor: () => editor.value, app, ws, hoverInfo, midiToolOpen, palOpen, drumNames,
+        session: () => appSession, docId: () => docId.value,
+        historyDepth: () => (histRef.value ? histRef.value.depth() : null),
         stepOn, stepCursorTick, listOpen, listDraft, viewMode, sel,
         // 表达映射（§3.7）验收用：动作表 / 展开结果 / 导出字节（不落盘）
         song: () => song.value, ksMap, exprMap, exprDraft, artPlan, tracksForExport, articulationPlan,
@@ -2950,7 +2957,7 @@ onBeforeUnmount(() => {
                       :default-velocity="defaultVelocity" :color-mode="colorMode"
                       @select="refreshSel" @modify="onModified" @zoom="onZoom" @ctxmenu="openCtxMenu" @hover="onHover" @step="onStep"
                       :step-on="stepOn" :step-ticks="stepTicks" :edit-tracks="editTracks"
-                      :underlay="underlayProp" />
+                      :underlay="underlayProp" :history="histRef" />
         <div v-if="sel.count" class="sel-bar" role="toolbar" aria-label="选区操作">
           <span class="sel-bar-n">{{ sel.count }}{{ t(' 个') }}</span>
           <button class="sel-bar-btn" :title="t('移调 -1')" @click="trDown">−1</button>
