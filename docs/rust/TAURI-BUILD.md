@@ -75,3 +75,10 @@ Tauri 默认从 GitHub 下载 `nsis-3.13.zip`，本机直连超时。已把工�
 - `fufumidi-shell.exe --engine-self-check` 在 Tauri Builder 之前早退，不创建 WebView 窗口；
 - 真实走生产 `spawn_worker`/WorkerPool，发缺文件请求并读取 `###RESULT`，打印 pid/result/warm 后 `pool.shutdown()`；
 - 实测 `ok:true, warm:1`，无 Python/壳残留；用于 P1/P2 安装产物验收。
+
+## 8. 2026-11-04 终验（当前源码）
+
+- `cargo build --release --offline` 通过（optimized 2m19s）；
+- release `--self-check` 通过：host ok、pythonExists、renderer=`<embedded>`；
+- release `--engine-self-check` 通过：真实 spawn_worker / `###RESULT`，warm=1，无窗口/无残留；
+- 隐藏全量 E2E **40/40**；`test:ui` **589/589**；typecheck/audit 0；cargo test **102/102 + 1 ignored**。
