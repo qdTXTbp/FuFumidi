@@ -1852,7 +1852,7 @@ fn update_check_remote(channel: &str) -> serde_json::Value {
         return serde_json::json!({ "ok": false, "error": "没有匹配通道的版本" });
     };
     let tag = rel.get("tag_name").and_then(|v| v.as_str()).unwrap_or("");
-    let latest = tag.trim_start_matches(|c| c == 'v' || c == 'V').to_string();
+    let latest = tag.trim_start_matches(['v', 'V']).to_string();
     let asset = release_asset(rel);
     serde_json::json!({
         "ok": true, "current": env!("CARGO_PKG_VERSION"), "latest": latest, "tag": tag,

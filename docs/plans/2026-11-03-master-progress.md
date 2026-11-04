@@ -600,3 +600,5 @@
 - **原版 splash 复刻**：真实入口是 main.ts，旧隐藏代码写在 main.js 从未生效；改为 index.html 内联 __fufumidiSplashDone + 原 logo/三点/扫光；修回误删的 #app；smoke 增加关闭断言；release 6215c1e0/17,033,216。
 
 - **GitHub 更新检查**：update_check/list/notes/launch_updater；CLI 实测 latest=6.5.0-beta.1；launch 只打开发布页；未签名/不自动装；安装版 05b19f82/17,064,448。
+
+- **update 代码 clippy**：trim_start_matches(['v','V'])；clippy -D warnings 通过；cargo121。

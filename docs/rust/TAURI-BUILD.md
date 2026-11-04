@@ -266,3 +266,7 @@ Tauri 默认从 GitHub 下载 `nsis-3.13.zip`，本机直连超时。已把工�
 - CLI `--update-check` 实测 ok，current/latest=6.5.0-beta.1，asset FuFumidi.Install.exe；
 - release 2m24s、0 warning；安装版 17,064,448 bytes，SHA-256 `05b19f821b8cf6050ce9bcae53e4176bbe3ab7dcd511d72057506cda31752a06`；
 - 自动更新/签名/安装仍未完成。
+
+### update 代码 clippy 修复
+
+- tag 去前缀改为 trim_start_matches(['v','V'])，clippy -D warnings 通过。
