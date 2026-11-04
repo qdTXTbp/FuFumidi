@@ -566,3 +566,5 @@
 - **GPU 统一内存实验**：`gpu_unified_memory_experiment` 跑 cuda_um_experiment.py，解析 JSON；本机无 cudart 返回 backend-missing；桥补；命令 **158**，覆盖 **182/84**，call 174；cargo **118/118 + 1 ignored**。
 
 - **158 命令 release（UM）**：2m24s、0 warning；host/engine self-check 通过；无窗口/残留。
+
+- **separate/UM 后全量 E2E**：隐藏全量 **41/41**（158 命令源码）；新增 host 命令不影响现有页面流程。
