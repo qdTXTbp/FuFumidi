@@ -250,3 +250,12 @@ Tauri 默认从 GitHub 下载 `nsis-3.13.zip`，本机直连超时。已把工�
 - 桥补 omrEngine；资源中心现在能显示本机已安装的 OMR 组件；安装/识别仍未接；
 - release 3m00s、0 warning；安装版 16,998,400 bytes，SHA-256 `26ca78ab27105f0b7b63a32d61b21df6738c06a82b29c1b90b0e4d688d77e9ed`；
 - typecheck/build/smoke/audit 通过；commands 168 / coverage 191/75 / call 184。
+
+## 35. 2026-11-04 原版 splash 复刻 + 根节点修复
+
+- 根因：splash 隐藏逻辑写在 frontend/src/main.js，但真实入口是 main.ts；App 调用的 __fufumidiSplashDone 从未定义，所以一直停在加载层；
+- 复刻 Electron main/splash.html：原品牌 logo（frontend/public/splash-logo.png）+ OFFLINE MIDI WORKSTATION + 三点状态 + 扫光进度 + LOCAL-FIRST 提示，动画名与原版一致；
+- 隐藏改为 index.html 内联函数（不依赖入口文件），App 恢复曲库后调用；15s 兜底；
+- 同时修复替换 splash 时误删 #app 根节点（E2E smoke 首屏超时暴露）；
+- smoke 新增“splash 必须在首屏后关闭”断言；E2E smoke 通过；
+- release 2m24s、0 warning；安装版 17,033,216 bytes，SHA-256 `6215c1e0d9286ac597de0877b70660232e7a77d833d9fa082934bf829721eb23`。

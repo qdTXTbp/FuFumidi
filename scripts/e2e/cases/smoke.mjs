@@ -4,6 +4,9 @@ export default async function (app) {
   await app.waitFor("document.body && document.body.innerText.length > 300", {
     timeout: 45000, message: "首屏渲染内容 >300 字符",
   });
+  await app.waitFor("!document.getElementById('boot-splash') || document.getElementById('boot-splash').classList.contains('done')", {
+    timeout: 20000, message: "加载动画在首屏渲染后关闭",
+  });
   const title = await app.eval("document.title");
   app.assert(title && title.includes("FuFumidi"), "窗口标题包含 FuFumidi（实际：" + title + "）");
 

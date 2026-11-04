@@ -123,8 +123,8 @@ cargo build --release --offline
 ## 9. Release 产物指纹
 
 - 文件：`poc/tauri-poc/target/release/fufumidi-shell.exe`
-- 大小：**16,998,400 bytes**
-- SHA-256：`26ca78ab27105f0b7b63a32d61b21df6738c06a82b29c1b90b0e4d688d77e9ed`
+- 大小：**17,033,216 bytes**
+- SHA-256：`6215c1e0d9286ac597de0877b70660232e7a77d833d9fa082934bf829721eb23`
 - Authenticode：**NotSigned**（未签名；符合当前外部前置未采购的状态）
 
 ## 10. 转录/分轨恢复（2026-11-04 夜间）
@@ -144,7 +144,7 @@ cargo build --release --offline
 
 ## 12. 冷启动与加载动画（2026-11-04）
 
-- 静态 splash 在 Vue 之前显示，曲库/会话恢复后隐藏；
+- 静态 splash 在 Vue 之前显示，曲库/会话恢复后隐藏；**2026-11-04 复刻本机 Electron 原版动画；旧隐藏代码误写 main.js，已改内联函数并修回 #app 根节点；smoke 断言已加**；
 - model_list 不再递归统计 33GB 目录；窗口底色 #0b0e14；
 - startup log：数据根 logs/tauri-start.log；
 - settings 部分保存不再清掉 data_root_last（本轮曾发生一次，已从备份恢复并修复合并逻辑）；

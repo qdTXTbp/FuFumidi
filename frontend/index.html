@@ -11,29 +11,61 @@
 </head>
 <body>
 <style>
-  #boot-splash{position:fixed;inset:0;z-index:99999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;background:radial-gradient(60% 70% at 50% 42%,#141b28 0%,#0b0e14 62%,#07090d 100%);color:#e8f1ff;font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;transition:opacity .38s ease,visibility .38s ease}
+  #boot-splash{position:fixed;inset:0;z-index:99999;display:grid;place-items:center;background:#080d18;transition:opacity .38s ease,visibility .38s ease;overflow:hidden}
   #boot-splash.done{opacity:0;visibility:hidden;pointer-events:none}
-  .bs-orbit{position:relative;width:86px;height:86px;display:grid;place-items:center}
-  .bs-orbit::before{content:"";position:absolute;inset:0;border-radius:50%;border:1px solid rgba(120,200,255,.16);box-shadow:0 0 48px rgba(60,170,255,.16),inset 0 0 30px rgba(60,170,255,.08)}
-  .bs-orbit::after{content:"";position:absolute;inset:5px;border-radius:50%;border:2px solid transparent;border-top-color:#7fd4ff;border-right-color:rgba(127,212,255,.35);animation:bs-spin 1.05s linear infinite;filter:drop-shadow(0 0 7px rgba(80,190,255,.55))}
-  .bs-core{width:17px;height:17px;border-radius:5px;background:linear-gradient(145deg,#eaf7ff,#62c8ff);box-shadow:0 0 24px rgba(90,195,255,.75);animation:bs-pulse 1.8s ease-in-out infinite}
-  .bs-name{font-size:21px;letter-spacing:.34em;text-indent:.34em;font-weight:600;color:#eaf7ff;text-shadow:0 0 28px rgba(90,190,255,.28)}
-  .bs-sub{font-size:12px;letter-spacing:.14em;color:#7f96b3}
-  .bs-bar{width:168px;height:2px;border-radius:2px;background:rgba(127,212,255,.12);overflow:hidden}
-  .bs-bar i{display:block;width:40%;height:100%;border-radius:2px;background:linear-gradient(90deg,transparent,#7fd4ff,transparent);animation:bs-sweep 1.5s ease-in-out infinite}
-  @keyframes bs-spin{to{transform:rotate(360deg)}}
-  @keyframes bs-pulse{0%,100%{transform:scale(.86);opacity:.8}50%{transform:scale(1.06);opacity:1}}
-  @keyframes bs-sweep{0%{transform:translateX(-120%)}100%{transform:translateX(360%)}}
-  @media (prefers-reduced-motion:reduce){.bs-orbit::after,.bs-core,.bs-bar i{animation:none}}
+  #boot-splash .bs-stage{position:relative;width:min(760px,calc(100vw - 56px));min-height:252px;display:flex;align-items:center;gap:26px;padding:0 34px;border-radius:26px;overflow:hidden;border:1px solid rgba(140,185,255,.13);box-shadow:0 24px 80px rgba(0,0,0,.48),inset 0 1px 0 rgba(255,255,255,.04);background:
+    radial-gradient(100% 150% at 8% 0%,rgba(44,94,180,.52),transparent 58%),
+    radial-gradient(90% 120% at 100% 100%,rgba(112,74,200,.26),transparent 60%),
+    linear-gradient(135deg,#101c33,#070b14 62%,#0b1020)}
+  #boot-splash .bs-stage:before{content:"";position:absolute;inset:0;background-image:linear-gradient(rgba(120,170,255,.055) 1px,transparent 1px),linear-gradient(90deg,rgba(120,170,255,.055) 1px,transparent 1px);background-size:34px 34px;mask-image:radial-gradient(90% 130% at 30% 40%,#000 20%,transparent 75%)}
+  #boot-splash .bs-glow{position:absolute;width:260px;height:260px;left:-70px;top:-90px;border-radius:50%;background:radial-gradient(circle,rgba(70,155,255,.28),transparent 65%);filter:blur(14px);animation:bs-drift 5s ease-in-out infinite}
+  #boot-splash .bs-mark{position:relative;width:112px;height:112px;flex:none;display:grid;place-items:center}
+  #boot-splash .bs-ring{position:absolute;inset:0;border-radius:34px;border:1px solid rgba(140,205,255,.42);box-shadow:0 0 34px rgba(65,150,255,.25),inset 0 0 26px rgba(80,160,255,.12);animation:bs-breathe 2.8s ease-in-out infinite}
+  #boot-splash .bs-ring:before{content:"";position:absolute;inset:7px;border-radius:28px;border:1px solid rgba(130,195,255,.20)}
+  #boot-splash .bs-mark img{width:86px;height:86px;object-fit:contain;filter:drop-shadow(0 8px 22px rgba(20,60,150,.5));animation:bs-float 3s ease-in-out infinite}
+  #boot-splash .bs-copy{position:relative;min-width:0}
+  #boot-splash .bs-title{font-size:25px;font-weight:750;letter-spacing:-.5px;color:#eaf3ff}
+  #boot-splash .bs-title b{color:#8fd6ff;font-weight:750}
+  #boot-splash .bs-sub{margin-top:5px;font-size:10.5px;letter-spacing:.22em;color:#8ba8cc;text-transform:uppercase}
+  #boot-splash .bs-status{margin-top:18px;display:flex;align-items:center;gap:8px;font-size:12px;color:#a8c1e0}
+  #boot-splash .bs-dots{display:inline-flex;gap:3px}
+  #boot-splash .bs-dots i{width:4px;height:4px;border-radius:50%;background:#6fc7ff;animation:bs-blink 1.2s infinite}
+  #boot-splash .bs-dots i:nth-child(2){animation-delay:.18s}
+  #boot-splash .bs-dots i:nth-child(3){animation-delay:.36s}
+  #boot-splash .bs-bar{margin-top:15px;width:278px;max-width:100%;height:3px;border-radius:99px;background:rgba(130,180,255,.14);overflow:hidden;position:relative}
+  #boot-splash .bs-bar:after{content:"";position:absolute;inset:0;width:40%;border-radius:99px;background:linear-gradient(90deg,transparent,#6fc7ff,#b89cff,transparent);animation:bs-slide 1.7s cubic-bezier(.4,0,.2,1) infinite}
+  #boot-splash .bs-hint{margin-top:10px;font-size:10.5px;color:#5d7899}
+  @keyframes bs-breathe{0%,100%{transform:scale(.95);opacity:.6}50%{transform:scale(1);opacity:1}}
+  @keyframes bs-float{0%,100%{transform:translateY(1px)}50%{transform:translateY(-3px)}}
+  @keyframes bs-drift{0%,100%{transform:translate(0,0)}50%{transform:translate(24px,16px)}}
+  @keyframes bs-slide{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
+  @keyframes bs-blink{0%,80%,100%{opacity:.25}40%{opacity:1}}
+  @media (max-width:620px){#boot-splash .bs-stage{flex-direction:column;justify-content:center;text-align:center;gap:18px;padding:26px;min-height:0}#boot-splash .bs-status{justify-content:center}}
+  @media (prefers-reduced-motion:reduce){#boot-splash .bs-glow,#boot-splash .bs-ring,#boot-splash .bs-mark img,#boot-splash .bs-dots i,#boot-splash .bs-bar:after{animation:none}}
   </style>
   <div id="boot-splash" role="status" aria-live="polite">
-    <div class="bs-orbit"><div class="bs-core"></div></div>
-    <div class="bs-name">FuFumidi</div>
-    <div class="bs-sub">正在载入曲库 · 音频引擎 · 界面</div>
-    <div class="bs-bar"><i></i></div>
+    <div class="bs-stage">
+      <div class="bs-glow"></div>
+      <div class="bs-mark"><div class="bs-ring"></div><img src="/splash-logo.png" alt=""></div>
+      <div class="bs-copy">
+        <div class="bs-title">FuFumidi</div>
+        <div class="bs-sub">OFFLINE MIDI WORKSTATION</div>
+        <div class="bs-status"><span class="bs-dots"><i></i><i></i><i></i></span><span>正在恢复曲库、设置与本地引擎…</span></div>
+        <div class="bs-bar"></div>
+        <div class="bs-hint">LOCAL-FIRST · 数据不离开本机</div>
+      </div>
+    </div>
   </div>
-
-<div id="app"></div>
+  <div id="app"></div>
+  <script>
+  window.__fufumidiSplashDone = function () {
+    var el = document.getElementById('boot-splash');
+    if (!el || el.classList.contains('done')) return;
+    el.classList.add('done');
+    setTimeout(function () { try { el.remove(); } catch (e) {} }, 500);
+  };
+  setTimeout(function () { try { window.__fufumidiSplashDone(); } catch (e) {} }, 15000);
+  </script>
 <!-- js-synth（libfluidsynth ~2.4MB）改为按需懒加载：仅启用 SF2 音色库时由 core/synth.js
      动态注入。同步加载会阻塞 Vue 首帧渲染（module 脚本必须等同步脚本执行完），拖慢启动。 -->
 <script type="module" src="/src/main.ts"></script>
