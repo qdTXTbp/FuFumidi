@@ -1,9 +1,10 @@
-//! T-118 P0：worker 调度池（本轮只新增模块与单测，不接生产单 worker）。
+//! T-118 worker 调度池：P0 落调度模块，P1 接生产单 worker。
 //!
-//! 只做纯调度：
-//! - [WorkerProc] 抽象“一个可长驻的推理进程”，真实 Python 实现下一轮再接；
+//! - [WorkerProc] 抽象“一个可长驻的推理进程”；[ChildWorker] 是真实实现
+//!   （std::process::Child 的 stdin/stdout，Windows 上 CREATE_NO_WINDOW，stderr 丢弃防阻塞）；
 //! - [WorkerPool] 用 Mutex<PoolInner> + Condvar 管上限、排队、取消与退出；
-//! - [Lease] 是占槽凭据，Drop 一定归还槽位（panic 展开也走 Drop）。
+//! - [Lease] 是占槽凭据，Drop 一定归还槽位（panic 展开也走 Drop）；
+//! - 生产路径用 cap=1 + reuse：请求之间保留一个暖 worker，取消/崩溃后才重新 spawn。
 //!
 //! 纪律（对应设计报告）：
 //! - 池锁内只碰 O(1) 元数据（计数、HashMap）；spawn / kill / read_line 一律在锁外；
@@ -11,14 +12,19 @@
 //! - 每个 job 一个独立的 Arc<AtomicBool> 取消位；
 //! - cancel_all 只清空当次等待者与在途 job，池本身仍可用；shutdown 之后拒绝新工作。
 //!
-//! 测试全部用 [MockWorker]，不启动真实进程、不开窗口。
+//! P0 的单测仍全部用 [MockWorker]，不启动真实进程、不开窗口；P1 另加 4 个真实
+//! Python 子进程测试（echo / 阻塞读取消 / EOF 重启 / 暖 worker 复用），
+//! 环境里没有 Python 时直接跳过。
 
-#![allow(dead_code)] // 生产路径下一轮才接入；本轮只落模块 + 单测
+#![allow(dead_code)] // cancel_all / 部分 status 字段当前只给下一轮并发用
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
-use std::io;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::io::{self, BufRead, BufReader, Write};
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
 /// 并发上限下限（设计约束：1..=4）。
@@ -27,6 +33,8 @@ pub const MIN_CAP: usize = 1;
 pub const MAX_CAP: usize = 4;
 /// 默认等待者上限。
 pub const DEFAULT_MAX_WAITERS: usize = 64;
+/// Windows 进程创建标志：不弹控制台窗口（等价 Electron spawn 的 windowsHide）。
+pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// 一个可被池调度的推理进程。
 ///
@@ -43,6 +51,13 @@ pub trait WorkerProc: Send {
     fn try_wait(&mut self) -> io::Result<Option<i32>>;
     /// 终止进程。允许重复调用（第二次应为无害 no-op）。
     fn kill(&mut self) -> io::Result<()>;
+    /// 取消时允许池在 worker 锁被“阻塞中的 read_line”占用时按 pid 直接终止。
+    ///
+    /// 默认 None：MockWorker 与未知实现不暴露 pid，池因此**绝不会**对测试里的假 pid
+    /// 执行 taskkill / kill。真实 [ChildWorker] 返回自己的 pid。
+    fn emergency_pid(&self) -> Option<u32> {
+        None
+    }
 }
 
 /// 调度错误。所有等待/释放失败都给明确原因，不返回裸 String。
@@ -91,6 +106,12 @@ type WorkerSlot = Arc<Mutex<Option<Box<dyn WorkerProc>>>>;
 #[derive(Clone)]
 struct JobHandle {
     cancel: Arc<AtomicBool>,
+    /// lease 判定 worker 已不可复用（EOF / 读失败）：release 时直接丢弃，不进暖池。
+    broken: Arc<AtomicBool>,
+    /// worker 安装后的真实 pid（0 = spawn 尚未完成）。status / 取消诊断只读它，避免抢 worker 锁。
+    pid: Arc<AtomicU32>,
+    /// 锁外紧急终止用的 pid（仅真实子进程非 0；mock 永远为 0，测试不会误杀真进程）。
+    kill_pid: Arc<AtomicU32>,
     worker: WorkerSlot,
 }
 
@@ -110,6 +131,11 @@ struct PoolInner {
     /// 旧 worker 彻底释放前不归还，避免 cleanup 期间再 spawn 造成瞬时超限。
     in_flight: usize,
     jobs: HashMap<JobId, JobHandle>,
+    /// 生产 P1 开启：job 正常结束后保留健康 worker，下一次 acquire 直接复用。
+    /// 默认 false，P0 单测的“每个 job 一个 MockWorker”语义完全不变。
+    reuse: bool,
+    /// 空闲暖 worker（不超过 cap）。kill / drop 一律在池锁外做。
+    warm: Vec<Box<dyn WorkerProc>>,
     next_id: JobId,
     /// cancel_all / shutdown 每次递增；等待者靠它区分“正常唤醒”与“被清空”。
     epoch: u64,
@@ -145,6 +171,12 @@ pub struct PoolStatus {
     pub killed: usize,
     pub shutdown: bool,
     pub workers: Vec<WorkerInfo>,
+    /// 暖池里的空闲 worker 数（reuse=true 时通常为 1）。
+    pub warm: usize,
+    /// 至少有一个暖 worker 仍存活（status 时 try_wait 探测）。
+    pub warm_alive: bool,
+    /// 第一个暖 worker 的 pid（engine_worker_status 用）。
+    pub warm_pid: Option<u32>,
 }
 
 /// 多 worker 调度池。
@@ -167,7 +199,19 @@ impl WorkerPool {
     }
 
     /// cap 必须在 1..=4；max_waiters 必须 >= 1。
+    /// 默认不复用 worker（P0 语义），生产路径用 [Self::with_reuse]。
     pub fn with_limits(cap: usize, max_waiters: usize) -> Result<Self, PoolError> {
+        Self::with_limits_reuse(cap, max_waiters, false)
+    }
+
+    /// 生产路径入口：cap=1 + 默认等待者上限 + 暖 worker 复用。
+    /// 语义等价于旧实现里那个常驻的 Option<Worker>：请求之间不重启 Python。
+    pub fn with_reuse(cap: usize) -> Result<Self, PoolError> {
+        Self::with_limits_reuse(cap, DEFAULT_MAX_WAITERS, true)
+    }
+
+    /// 与 [Self::with_limits] 相同，但可显式开启暖 worker 复用。
+    pub fn with_limits_reuse(cap: usize, max_waiters: usize, reuse: bool) -> Result<Self, PoolError> {
         if !(MIN_CAP..=MAX_CAP).contains(&cap) {
             return Err(PoolError::InvalidCap(cap));
         }
@@ -181,6 +225,8 @@ impl WorkerPool {
                 waiters: 0,
                 in_flight: 0,
                 jobs: HashMap::new(),
+                reuse,
+                warm: Vec::new(),
                 next_id: 1,
                 epoch: 0,
                 shutdown: false,
@@ -205,7 +251,7 @@ impl WorkerPool {
     where
         F: FnOnce(JobId, Arc<AtomicBool>) -> Result<Box<dyn WorkerProc>, String>,
     {
-        let (id, cancel, slot) = {
+        let (id, cancel, broken, pid, kill_pid, slot, warm) = {
             let mut inner = self.lock();
             loop {
                 if inner.shutdown {
@@ -236,41 +282,63 @@ impl WorkerPool {
             inner.next_id = inner.next_id.wrapping_add(1);
             inner.in_flight += 1;
             let cancel = Arc::new(AtomicBool::new(false));
+            let broken = Arc::new(AtomicBool::new(false));
+            let pid = Arc::new(AtomicU32::new(0));
+            let kill_pid = Arc::new(AtomicU32::new(0));
             let slot: WorkerSlot = Arc::new(Mutex::new(None));
             inner.jobs.insert(
                 id,
                 JobHandle {
                     cancel: Arc::clone(&cancel),
+                    broken: Arc::clone(&broken),
+                    pid: Arc::clone(&pid),
+                    kill_pid: Arc::clone(&kill_pid),
                     worker: Arc::clone(&slot),
                 },
             );
+            // 有暖 worker 就直接复用（P1 常驻单 worker 的关键）；没有才走 spawn 工厂。
+            // 取出的暖 worker 不再计入 in_flight，由本 job 这次占用接管。
+            let warm = if inner.reuse { inner.warm.pop() } else { None };
             if inner.in_flight > inner.peak_busy {
                 inner.peak_busy = inner.in_flight;
             }
-            (id, cancel, slot)
+            (id, cancel, broken, pid, kill_pid, slot, warm)
         };
 
-        // spawn 在池锁外；工厂即使 panic 也必须归还预留槽，不能让容量泄漏。
-        let spawned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            spawn(id, Arc::clone(&cancel))
-        }));
-        let worker = match spawned {
-            Ok(Ok(worker)) => worker,
-            Ok(Err(err)) => {
-                self.abort_reservation(id);
-                return Err(PoolError::Spawn(err));
-            }
-            Err(payload) => {
-                self.abort_reservation(id);
-                std::panic::resume_unwind(payload);
+        let reused_warm = warm.is_some();
+        let from_factory;
+        let worker = if let Some(worker) = warm {
+            from_factory = false;
+            worker
+        } else {
+            from_factory = true;
+            // spawn 在池锁外；工厂即使 panic 也必须归还预留槽，不能让容量泄漏。
+            let spawned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                spawn(id, Arc::clone(&cancel))
+            }));
+            match spawned {
+                Ok(Ok(worker)) => worker,
+                Ok(Err(err)) => {
+                    self.abort_reservation(id);
+                    return Err(PoolError::Spawn(err));
+                }
+                Err(payload) => {
+                    self.abort_reservation(id);
+                    std::panic::resume_unwind(payload);
+                }
             }
         };
 
-        // 安装 worker 只锁该 job 自己的槽，不持池锁。
+        // pid 必须在安装前取；安装后立刻公布到 job 元数据。
+        // cancel 的锁外终止路径只读这两个 atomic，不必抢 worker 锁。
+        let worker_pid = worker.pid();
+        let emergency_pid = worker.emergency_pid().unwrap_or(0);
         {
             let mut guard = slot.lock().unwrap_or_else(PoisonError::into_inner);
             *guard = Some(worker);
         }
+        pid.store(worker_pid, Ordering::SeqCst);
+        kill_pid.store(emergency_pid, Ordering::SeqCst);
 
         // 回到池锁确认 job 是否已被 cancel/cancel_all/shutdown 摘走。
         let (keep, failure) = {
@@ -278,7 +346,9 @@ impl WorkerPool {
             if inner.shutdown {
                 (false, Some(PoolError::Shutdown))
             } else if inner.jobs.contains_key(&id) {
-                inner.counters.spawned += 1;
+                if from_factory {
+                    inner.counters.spawned += 1;
+                }
                 (true, None)
             } else {
                 (false, Some(PoolError::Canceled))
@@ -289,11 +359,14 @@ impl WorkerPool {
                 pool: self,
                 id,
                 cancel,
+                broken,
+                reused: reused_warm,
                 slot,
             });
         }
 
         // 迟到的 worker：在锁外 kill，避免“取消瞬间已 spawn 完成”泄漏进程。
+        // 若 cancel 已经抢到并 kill 了它（slot 为空），容量由 cancel 归还。
         let late = slot.lock().unwrap_or_else(PoisonError::into_inner).take();
         if let Some(mut worker) = late {
             let _ = worker.kill();
@@ -319,12 +392,48 @@ impl WorkerPool {
         let Some(handle) = removed else {
             return false;
         };
-        handle.cancel.store(true, Ordering::SeqCst);
+        self.signal_stop(&handle);
         if self.dispose_worker(&handle) {
             self.finish_capacity();
             self.cv.notify_all();
         }
         true
+    }
+
+    /// 取消/关闭时先置位、再在锁外按 pid 发终止信号。
+    ///
+    /// 关键：worker 线程可能正卡在 read_line（持有该 job 的 worker 槽锁）。
+    /// 若先 dispose_worker 抢锁，就会被“等进程输出”拖住；这里绝不碰 worker 锁。
+    /// MockWorker 的 kill_pid 恒为 0，所以单测不会对假 pid 执行 taskkill。
+    fn signal_stop(&self, handle: &JobHandle) {
+        handle.cancel.store(true, Ordering::SeqCst);
+        let pid = handle.kill_pid.load(Ordering::SeqCst);
+        if pid == 0 {
+            return;
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let _ = Command::new("taskkill")
+                .args(["/PID", &pid.to_string(), "/T", "/F"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .creation_flags(CREATE_NO_WINDOW)
+                .status();
+        }
+        #[cfg(unix)]
+        {
+            let _ = Command::new("kill")
+                .args(["-KILL", &pid.to_string()])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+        #[cfg(not(any(target_os = "windows", unix)))]
+        {
+            let _ = pid;
+        }
     }
 
     /// 清空当次全部等待者与在途 job；池本身仍可继续 acquire。返回被取消的在途 job 数。
@@ -337,7 +446,7 @@ impl WorkerPool {
             drained
         };
         for handle in &removed {
-            handle.cancel.store(true, Ordering::SeqCst);
+            self.signal_stop(handle);
             if self.dispose_worker(handle) {
                 self.finish_capacity();
             }
@@ -349,7 +458,7 @@ impl WorkerPool {
     /// 关闭池：取消全部等待者与在途 job，之后 acquire 一律返回 [PoolError::Shutdown]。
     /// 可重复调用。
     pub fn shutdown(&self) {
-        let removed: Vec<JobHandle> = {
+        let (removed, warm): (Vec<JobHandle>, Vec<Box<dyn WorkerProc>>) = {
             let mut inner = self.lock();
             let drained = if inner.shutdown {
                 Vec::new()
@@ -360,27 +469,46 @@ impl WorkerPool {
                 inner.counters.canceled += drained.len();
                 drained
             };
+            let warm = std::mem::take(&mut inner.warm);
             inner.epoch = inner.epoch.wrapping_add(1);
-            drained
+            (drained, warm)
         };
         for handle in &removed {
-            handle.cancel.store(true, Ordering::SeqCst);
+            self.signal_stop(handle);
             if self.dispose_worker(handle) {
                 self.finish_capacity();
             }
         }
+        // 暖 worker 也要 kill，退出后不留 Python 进程；Drop 在锁外执行。
+        for mut worker in warm {
+            let _ = worker.kill();
+            drop(worker);
+            self.lock().counters.killed += 1;
+        }
         self.cv.notify_all();
     }
 
-    /// 只读快照。池锁内只做元数据拷贝；pid 读取在逐个 job 自己的锁上完成。
+    /// 只读快照。**不抢在途 worker 的锁**（否则 convert 阻塞读时会卡住 status），
+    /// pid 来自 job 自己的 atomic；只有空闲暖 worker 才做一次非阻塞 try_wait。
     pub fn status(&self) -> PoolStatus {
-        let (cap, max_waiters, busy, waiting, peak_busy, peak_waiters, counters, shutdown, handles) = {
-            let inner = self.lock();
+        let (cap, max_waiters, busy, waiting, peak_busy, peak_waiters, counters, shutdown, handles, warm, warm_alive, warm_pid) = {
+            let mut inner = self.lock();
             let handles: Vec<(JobId, JobHandle)> = inner
                 .jobs
                 .iter()
                 .map(|(&id, handle)| (id, handle.clone()))
                 .collect();
+            let warm = inner.warm.len();
+            let mut warm_alive = false;
+            let mut first_warm_pid = None;
+            for worker in inner.warm.iter_mut() {
+                if first_warm_pid.is_none() {
+                    first_warm_pid = Some(worker.pid());
+                }
+                if worker.try_wait().map(|status| status.is_none()).unwrap_or(true) {
+                    warm_alive = true;
+                }
+            }
             (
                 inner.cap,
                 inner.max_waiters,
@@ -391,16 +519,19 @@ impl WorkerPool {
                 inner.counters.clone(),
                 inner.shutdown,
                 handles,
+                warm,
+                warm_alive,
+                first_warm_pid,
             )
         };
         let workers = handles
             .iter()
             .map(|(id, handle)| {
-                let guard = handle.worker.lock().unwrap_or_else(PoisonError::into_inner);
+                let pid = handle.pid.load(Ordering::SeqCst);
                 WorkerInfo {
                     id: *id,
-                    pid: guard.as_ref().map(|worker| worker.pid()),
-                    ready: guard.is_some(),
+                    pid: if pid == 0 { None } else { Some(pid) },
+                    ready: pid != 0,
                     canceled: handle.cancel.load(Ordering::SeqCst),
                 }
             })
@@ -418,6 +549,9 @@ impl WorkerPool {
             killed: counters.killed,
             shutdown,
             workers,
+            warm,
+            warm_alive,
+            warm_pid,
         }
     }
 
@@ -444,10 +578,27 @@ impl WorkerPool {
             removed
         };
         if let Some(handle) = removed {
-            let worker = {
+            let mut worker = {
                 let mut guard = handle.worker.lock().unwrap_or_else(PoisonError::into_inner);
                 guard.take()
             };
+            // 只复用“健康且未被标记 broken”的 worker；EOF/读失败/已退出一律丢弃。
+            let healthy = match worker.as_mut() {
+                Some(worker) => {
+                    !handle.broken.load(Ordering::SeqCst)
+                        && worker.try_wait().map(|status| status.is_none()).unwrap_or(false)
+                }
+                None => false,
+            };
+            if healthy {
+                let mut inner = self.lock();
+                if inner.reuse && !inner.shutdown && inner.warm.len() < inner.cap {
+                    if let Some(worker) = worker.take() {
+                        inner.warm.push(worker);
+                    }
+                }
+            }
+            // drop 只能在池锁外：ChildWorker::drop 会 kill + wait。
             drop(worker);
             self.finish_capacity();
             self.cv.notify_all();
@@ -485,6 +636,10 @@ pub struct Lease<'a> {
     pool: &'a WorkerPool,
     id: JobId,
     cancel: Arc<AtomicBool>,
+    broken: Arc<AtomicBool>,
+    /// 本 job 是否复用了暖 worker（false = 本次是新 spawn）。
+    /// 生产用它决定是否把请求号 seq 归零，保持旧实现“每个 worker 一个 seq”的行为。
+    reused: bool,
     slot: WorkerSlot,
 }
 
@@ -500,6 +655,16 @@ impl Lease<'_> {
 
     pub fn is_canceled(&self) -> bool {
         self.cancel.load(Ordering::SeqCst)
+    }
+
+    /// 本 job 是否复用了暖 worker（false = 本次新 spawn 的进程）。
+    pub fn reused(&self) -> bool {
+        self.reused
+    }
+
+    /// 标记 worker 已不可复用（EOF / 读写失败）：Drop 时直接丢弃，不进入暖池。
+    pub fn mark_broken(&self) {
+        self.broken.store(true, Ordering::SeqCst);
     }
 
     /// worker 已安装时返回进程 id。
@@ -533,6 +698,149 @@ impl Lease<'_> {
 impl Drop for Lease<'_> {
     fn drop(&mut self) {
         self.pool.release(self.id);
+    }
+}
+
+impl Drop for WorkerPool {
+    fn drop(&mut self) {
+        // 进程退出兜底：暖 worker 不归任何 Lease 所有，池被 drop 时必须 kill，不能留 Python。
+        // 在途 worker 由 Lease 持有（Lease 借用池，池不可能先于它 drop）。
+        let warm = {
+            let mut inner = self.lock();
+            std::mem::take(&mut inner.warm)
+        };
+        for mut worker in warm {
+            let _ = worker.kill();
+        }
+    }
+}
+
+/* ---------------- ChildWorker：真实 Python 子进程（P1 生产实现） ---------------- */
+
+/// 用 std::process::Child 的 stdin/stdout 包装一个常驻推理 worker。
+///
+/// 约定（与旧生产路径等价）：
+/// - stdin/stdout 走管道；WorkerProc::send 自动补换行并 flush，read_line 去掉行尾；
+/// - stderr 固定丢弃（Stdio::null），防止无控制台时管道写满把 Python 卡死；
+/// - Windows 上 spawn 带 CREATE_NO_WINDOW (0x08000000)，绝不弹控制台窗口；
+/// - WorkerProc::emergency_pid 返回真实 pid，池取消时可绕过阻塞读直接 taskkill /T /F；
+/// - Drop 一定 kill + wait，异常路径也不留进程。
+pub struct ChildWorker {
+    child: Child,
+    stdin: ChildStdin,
+    reader: BufReader<ChildStdout>,
+    pid: u32,
+    exit_code: Option<i32>,
+}
+
+impl ChildWorker {
+    /// 用给定 Command 启动 worker。调用方只负责程序、参数、cwd 与环境变量；
+    /// stdin/stdout/stderr 与 Windows 窗口标志由这里统一设置（调用方设置会被覆盖）。
+    pub fn spawn(mut cmd: Command) -> io::Result<Self> {
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        #[cfg(target_os = "windows")]
+        {
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        let mut child = cmd.spawn()?;
+        let pid = child.id();
+        let Some(stdin) = child.stdin.take() else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(io::Error::new(io::ErrorKind::BrokenPipe, "worker stdin unavailable"));
+        };
+        let Some(stdout) = child.stdout.take() else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(io::Error::new(io::ErrorKind::BrokenPipe, "worker stdout unavailable"));
+        };
+        Ok(Self {
+            child,
+            stdin,
+            reader: BufReader::new(stdout),
+            pid,
+            exit_code: None,
+        })
+    }
+}
+
+impl WorkerProc for ChildWorker {
+    fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    fn send(&mut self, line: &str) -> io::Result<()> {
+        if self.exit_code.is_some() {
+            return Err(io::Error::new(io::ErrorKind::BrokenPipe, "worker already exited"));
+        }
+        self.stdin.write_all(line.as_bytes())?;
+        self.stdin.write_all(b"\n")?;
+        self.stdin.flush()
+    }
+
+    fn read_line(&mut self) -> io::Result<Option<String>> {
+        if self.exit_code.is_some() {
+            return Ok(None);
+        }
+        let mut buf = String::new();
+        let read = self.reader.read_line(&mut buf)?;
+        if read == 0 {
+            // 顺手收尸，避免 child 变成 zombie / handle 泄漏。
+            let _ = self.try_wait();
+            return Ok(None);
+        }
+        while buf.ends_with('\n') || buf.ends_with('\r') {
+            buf.pop();
+        }
+        Ok(Some(buf))
+    }
+
+    fn try_wait(&mut self) -> io::Result<Option<i32>> {
+        if let Some(code) = self.exit_code {
+            return Ok(Some(code));
+        }
+        match self.child.try_wait()? {
+            Some(status) => {
+                let code = status.code().unwrap_or(-1);
+                self.exit_code = Some(code);
+                Ok(Some(code))
+            }
+            None => Ok(None),
+        }
+    }
+
+    fn kill(&mut self) -> io::Result<()> {
+        if self.exit_code.is_some() {
+            return Ok(());
+        }
+        match self.child.try_wait() {
+            Ok(Some(status)) => {
+                self.exit_code = Some(status.code().unwrap_or(-1));
+                return Ok(());
+            }
+            Ok(None) => {}
+            Err(err) => return Err(err),
+        }
+        let kill_result = self.child.kill();
+        match self.child.wait() {
+            Ok(status) => {
+                self.exit_code = Some(status.code().unwrap_or(-1));
+                Ok(())
+            }
+            Err(wait_err) => kill_result.map_err(|_| wait_err),
+        }
+    }
+
+    fn emergency_pid(&self) -> Option<u32> {
+        Some(self.pid)
+    }
+}
+
+impl Drop for ChildWorker {
+    fn drop(&mut self) {
+        let _ = self.kill();
     }
 }
 
@@ -661,6 +969,8 @@ impl Drop for MockWorker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::{Path, PathBuf};
+    use std::process::{Command, Stdio};
     use std::sync::atomic::AtomicBool;
     use std::sync::{mpsc, Arc};
     use std::thread;
@@ -1170,5 +1480,328 @@ mod tests {
         assert_eq!(state.killed, 1);
         assert_eq!(state.canceled, 1);
         assert_eq!(state.completed, 0);
+    }
+
+    /* ---------------- P1：暖 worker 复用（MockWorker） ---------------- */
+
+    #[test]
+    fn warm_reuse_keeps_one_idle_worker_between_jobs() {
+        let stats = shared();
+        let pool = WorkerPool::with_limits_reuse(1, 4, true).unwrap();
+        let pid = {
+            let lease = pool.acquire(mock_factory(Arc::clone(&stats), 3_000)).unwrap();
+            assert!(!lease.reused(), "first job must spawn a fresh worker");
+            let pid = lease.pid().unwrap();
+            drop(lease);
+            pid
+        };
+        let status = pool.status();
+        assert_eq!(status.busy, 0);
+        assert_eq!(status.warm, 1);
+        assert!(status.warm_alive);
+        assert_eq!(status.warm_pid, Some(pid));
+        assert_eq!(status.spawned, 1);
+        assert_eq!(status.completed, 1);
+        {
+            let state = stats.lock().unwrap();
+            assert_eq!(state.active, 1, "warm worker must stay alive between jobs");
+            assert_eq!(state.completed, 0);
+        }
+        {
+            let lease = pool.acquire(mock_factory(Arc::clone(&stats), 3_100)).unwrap();
+            assert_eq!(lease.pid(), Some(pid), "warm worker should be reused");
+            assert!(lease.reused(), "second job must report warm reuse");
+            assert_eq!(pool.status().spawned, 1, "second job must not spawn a new worker");
+        }
+        assert_eq!(pool.status().warm, 1);
+
+        pool.shutdown();
+        let status = pool.status();
+        assert!(status.shutdown);
+        assert_eq!(status.warm, 0);
+        assert_eq!(status.busy, 0);
+        let state = stats.lock().unwrap();
+        assert_eq!(state.spawned, 1);
+        assert_eq!(state.active, 0, "shutdown must kill the warm worker");
+        assert_eq!(state.killed, 1);
+    }
+
+    #[test]
+    fn exited_worker_is_not_kept_warm() {
+        let stats = shared();
+        let pool = WorkerPool::with_limits_reuse(1, 4, true).unwrap();
+        let factory_stats = Arc::clone(&stats);
+        let lease = pool
+            .acquire(move |_id, _cancel| {
+                let mut worker = MockWorker::new(factory_stats, 3_200);
+                worker.script_exit(9);
+                Ok(Box::new(worker) as Box<dyn WorkerProc>)
+            })
+            .unwrap();
+        drop(lease);
+
+        let status = pool.status();
+        assert_eq!(status.warm, 0, "exited worker must not be recycled");
+        assert!(!status.warm_alive);
+        assert_eq!(status.completed, 1);
+        assert_eq!(stats.lock().unwrap().active, 0);
+
+        // 下一次 acquire 必须重新 spawn（mock pid = base + 已 spawn 数）。
+        let lease = pool.acquire(mock_factory(Arc::clone(&stats), 3_300)).unwrap();
+        assert_eq!(lease.pid(), Some(3_301));
+        assert_eq!(pool.status().spawned, 2);
+    }
+
+    #[test]
+    fn broken_worker_is_dropped_instead_of_warmed() {
+        let stats = shared();
+        let pool = WorkerPool::with_limits_reuse(1, 4, true).unwrap();
+        {
+            let lease = pool.acquire(mock_factory(Arc::clone(&stats), 3_400)).unwrap();
+            lease.mark_broken();
+        }
+        let status = pool.status();
+        assert_eq!(status.warm, 0);
+        assert_eq!(status.completed, 1);
+        assert_eq!(stats.lock().unwrap().active, 0);
+        assert_eq!(stats.lock().unwrap().killed, 0, "release only drops, it does not force-kill");
+    }
+
+    /* ---------------- P1：真实 Python 子进程（无窗口、不加载模型） ---------------- */
+
+    const REAL_ECHO_CODE: &str = r#"
+import json, sys
+sys.stderr.write('x' * 1048576)
+sys.stderr.flush()
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    sys.stdout.write('###RESULT ' + json.dumps({'echo': line}) + '\n')
+    sys.stdout.flush()
+"#;
+
+    fn python_exe() -> Option<PathBuf> {
+        if let Ok(path) = std::env::var("FUFUMIDI_PYTHON") {
+            let path = PathBuf::from(path);
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+        let bundled = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources/python/python.exe");
+        if bundled.is_file() {
+            return Some(bundled);
+        }
+        for candidate in ["python", "python3"] {
+            let ok = Command::new(candidate)
+                .arg("--version")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map(|status| status.success())
+                .unwrap_or(false);
+            if ok {
+                return Some(PathBuf::from(candidate));
+            }
+        }
+        None
+    }
+
+    fn missing_python(test: &str) -> bool {
+        if python_exe().is_some() {
+            false
+        } else {
+            eprintln!("{test}: skipped (python runtime not found)");
+            true
+        }
+    }
+
+    fn real_echo_factory() -> impl FnOnce(JobId, Arc<AtomicBool>) -> Result<Box<dyn WorkerProc>, String> {
+        |_id, _cancel| {
+            let python = python_exe().ok_or_else(|| "python runtime not found".to_string())?;
+            let mut cmd = Command::new(python);
+            cmd.args(["-u", "-c", REAL_ECHO_CODE])
+                .env("PYTHONIOENCODING", "utf-8")
+                .env("PYTHONUTF8", "1");
+            ChildWorker::spawn(cmd)
+                .map(|worker| Box::new(worker) as Box<dyn WorkerProc>)
+                .map_err(|err| err.to_string())
+        }
+    }
+
+    fn real_silent_factory() -> impl FnOnce(JobId, Arc<AtomicBool>) -> Result<Box<dyn WorkerProc>, String> {
+        |_id, _cancel| {
+            let python = python_exe().ok_or_else(|| "python runtime not found".to_string())?;
+            let mut cmd = Command::new(python);
+            cmd.args(["-u", "-c", "import time\ntime.sleep(8)\n"]);
+            ChildWorker::spawn(cmd)
+                .map(|worker| Box::new(worker) as Box<dyn WorkerProc>)
+                .map_err(|err| err.to_string())
+        }
+    }
+
+    #[test]
+    fn real_child_worker_echoes_without_stderr_blocking() {
+        if missing_python("real_child_worker_echoes_without_stderr_blocking") {
+            return;
+        }
+        let mut cmd = Command::new(python_exe().unwrap());
+        cmd.args(["-u", "-c", REAL_ECHO_CODE])
+            .env("PYTHONIOENCODING", "utf-8")
+            .env("PYTHONUTF8", "1");
+        let mut worker = ChildWorker::spawn(cmd).expect("spawn python echo worker");
+        assert!(worker.pid() > 0);
+        assert_eq!(worker.emergency_pid(), Some(worker.pid()));
+        assert_eq!(worker.try_wait().unwrap(), None, "fresh worker must be alive");
+
+        worker.send("hello").unwrap();
+        let line = worker.read_line().unwrap().expect("echo response");
+        let payload = line.strip_prefix("###RESULT ").expect("protocol prefix");
+        let value: serde_json::Value = serde_json::from_str(payload).unwrap();
+        assert_eq!(value["echo"], "hello");
+
+        worker.send("世界").unwrap();
+        let line = worker.read_line().unwrap().expect("unicode echo response");
+        let value: serde_json::Value =
+            serde_json::from_str(line.strip_prefix("###RESULT ").unwrap()).unwrap();
+        assert_eq!(value["echo"], "世界");
+
+        worker.kill().unwrap();
+        assert!(worker.try_wait().unwrap().is_some());
+        worker.kill().unwrap(); // 幂等
+    }
+
+    #[test]
+    fn real_pool_cancel_unblocks_reading_worker_and_reaps_it() {
+        if missing_python("real_pool_cancel_unblocks_reading_worker_and_reaps_it") {
+            return;
+        }
+        let pool = Arc::new(WorkerPool::with_reuse(1).unwrap());
+        let lease = pool.acquire(real_silent_factory()).expect("acquire real worker");
+        let id = lease.id();
+        assert!(lease.pid().is_some());
+        let cancel_pool = Arc::clone(&pool);
+        let cancel = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(120));
+            cancel_pool.cancel(id)
+        });
+
+        let started = Instant::now();
+        let outcome = lease.read_line();
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "read stayed blocked after cancel: {elapsed:?}"
+        );
+        match &outcome {
+            Ok(None) | Err(PoolError::WorkerGone) | Err(PoolError::Io(_)) => {}
+            other => panic!("unexpected read result after cancel: {other:?}"),
+        }
+        assert!(lease.is_canceled());
+        assert!(cancel.join().unwrap(), "cancel should hit the live job");
+        drop(lease);
+
+        let status = pool.status();
+        assert_eq!(status.busy, 0);
+        assert_eq!(status.canceled, 1);
+        assert_eq!(status.warm, 0, "canceled worker must not be recycled");
+        assert!(status.workers.is_empty());
+
+        // 取消杀掉 worker 之后，下一次请求必须能重新拉起。
+        let lease = pool.acquire(real_echo_factory()).expect("pool must restart after cancel");
+        lease.send("after-cancel").unwrap();
+        let line = lease.read_line().unwrap().expect("response after restart");
+        assert!(line.contains("after-cancel"));
+        drop(lease);
+        assert_eq!(pool.status().spawned, 2, "restart must spawn a fresh child");
+        pool.shutdown();
+    }
+
+
+    const REAL_ONCE_CODE: &str = r#"
+import json, sys
+line = sys.stdin.readline()
+if line:
+    sys.stdout.write('###RESULT ' + json.dumps({'echo': line.strip()}) + '\n')
+    sys.stdout.flush()
+"#;
+
+    fn real_once_factory() -> impl FnOnce(JobId, Arc<AtomicBool>) -> Result<Box<dyn WorkerProc>, String> {
+        |_id, _cancel| {
+            let python = python_exe().ok_or_else(|| "python runtime not found".to_string())?;
+            let mut cmd = Command::new(python);
+            cmd.args(["-u", "-c", REAL_ONCE_CODE])
+                .env("PYTHONIOENCODING", "utf-8")
+                .env("PYTHONUTF8", "1");
+            ChildWorker::spawn(cmd)
+                .map(|worker| Box::new(worker) as Box<dyn WorkerProc>)
+                .map_err(|err| err.to_string())
+        }
+    }
+
+    #[test]
+    fn real_pool_restarts_after_child_eof() {
+        if missing_python("real_pool_restarts_after_child_eof") {
+            return;
+        }
+        let pool = Arc::new(WorkerPool::with_reuse(1).unwrap());
+        let first_pid = {
+            let lease = pool.acquire(real_once_factory()).expect("first acquire");
+            let pid = lease.pid().expect("worker pid");
+            lease.send("one").unwrap();
+            let line = lease.read_line().unwrap().expect("one-shot response");
+            assert!(line.contains("one"));
+            assert_eq!(lease.read_line().unwrap(), None, "one-shot worker must EOF");
+            // 生产 run_convert 在 EOF 时会 mark_broken；这里照做，确保不会把 EOF 的 worker 暖起来。
+            lease.mark_broken();
+            pid
+        };
+        assert_eq!(pool.status().warm, 0, "EOF worker must not be warmed");
+
+        // EOF 之后下一次请求必须能重新拉起一个新 worker。
+        let lease = pool.acquire(real_echo_factory()).expect("restart after EOF");
+        assert_ne!(lease.pid().unwrap(), first_pid);
+        lease.send("two").unwrap();
+        let line = lease.read_line().unwrap().expect("restarted worker response");
+        assert!(line.contains("two"));
+        drop(lease);
+        assert_eq!(pool.status().spawned, 2);
+        pool.shutdown();
+    }
+
+    #[test]
+    fn real_pool_reuses_warm_worker_between_jobs() {
+        if missing_python("real_pool_reuses_warm_worker_between_jobs") {
+            return;
+        }
+        let pool = Arc::new(WorkerPool::with_reuse(1).unwrap());
+        let first_pid = {
+            let lease = pool.acquire(real_echo_factory()).expect("first acquire");
+            assert!(!lease.reused(), "first real job must spawn a fresh worker");
+            lease.send("first").unwrap();
+            let line = lease.read_line().unwrap().expect("first response");
+            assert!(line.contains("\"first\""));
+            lease.pid().unwrap()
+        };
+        let status = pool.status();
+        assert_eq!(status.warm, 1);
+        assert!(status.warm_alive);
+        assert_eq!(status.warm_pid, Some(first_pid));
+        assert_eq!(status.spawned, 1);
+
+        let lease = pool.acquire(real_echo_factory()).expect("second acquire");
+        assert_eq!(lease.pid(), Some(first_pid), "warm child must be reused");
+        assert!(lease.reused(), "second real job must report warm reuse");
+        lease.send("second").unwrap();
+        let line = lease.read_line().unwrap().expect("second response");
+        assert!(line.contains("\"second\""));
+        drop(lease);
+        assert_eq!(pool.status().spawned, 1, "second job must not spawn a new child");
+
+        pool.shutdown();
+        let status = pool.status();
+        assert_eq!(status.warm, 0);
+        assert_eq!(status.busy, 0);
     }
 }

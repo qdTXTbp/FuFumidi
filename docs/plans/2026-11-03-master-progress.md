@@ -261,6 +261,12 @@
   容量计数，保证旧 worker 的 kill/drop 与新 spawn 不重叠（cap=1 实测曾出现瞬态 2，已修）；spawn 工厂 panic
   用 catch_unwind 归还容量。并发测试连跑 20 遍全绿。生产 `run_convert` 仍走单 worker，未改任何 IPC/桥/前端。
   cargo test **56/56 + 1 ignored**；无窗口/无真实进程测试。
+- **T-118 P1（生产等价池化）**：`WorkerState` 改为 `WorkerPool::with_reuse(1)` + 全局 seq；新增真实
+  `ChildWorker`（stdin/stdout、stderr null、CREATE_NO_WINDOW、kill 幂等、Drop 兜底、暖复用）；
+  `run_convert/spawn_worker/cancel/engine_worker_status` 全走池；取消先置 per-job 标志再锁外 taskkill，
+  cap=1 未知 id 回退唯一在途；退出 `pool.shutdown()` 杀暖 worker。新增 10 测试（4 个真实 Python 子进程），
+  cargo test **78/78 + 1 ignored**，release 构建 + `--self-check` 通过；**事件 id 仍为内部数字（P3 再改）**，
+  未接 `__slots` 并发（P2）。
 - **T-117 第一步 + UI 路由冒烟**：新增 `db_status/db_songs_list/db_songs_put/db_songs_delete/
   db_playlists_list/db_playlists_put`（JSON store，原子 rename，dataDir 可覆盖）；命令总数 **20**。
   smoke 增加 **uiRoutes**：`#/transcribe → #/resources → #/piano3d → #/music → #/home` 逐页渲染，

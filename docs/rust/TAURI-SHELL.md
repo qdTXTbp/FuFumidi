@@ -107,19 +107,24 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 
 ### 3.2 T-118 Python 常驻 supervisor（2026-11-04）
 
-- Rust 维护 `Worker { child, stdin, reader, seq }`（`Arc<Mutex<Option<Worker>>>`）：
-  首次 `convert` 时拉起 `python music2midi.py worker`，之后请求写 stdin（`_id` 自增）；
+- **P1（2026-11-04）生产路径已切到 `worker_pool::WorkerPool::with_reuse(1)`**：`WorkerState { pool, seq }`，
+  `run_convert` 用池 `Lease` 取/还 worker；cap 固定 1（不接 `__slots` 并发）；
+- 真实 `ChildWorker`：stdin/stdout piped、stderr=null、Windows `CREATE_NO_WINDOW`、kill 幂等收尸、Drop 兜底；
+  暖 worker 跨请求复用，EOF/读写失败 `mark_broken` 不进暖池；
 - stdout 按行解析：`###LOG` → 转发 Tauri 事件 `engine:log`；`###PROG` → `engine:progress`；
   `###RESULT` 按 `_id` 匹配后返回，附带 `elapsedMs/workerSeq/logLines`；
-- **取消**：`cancel` 置 `AtomicBool` 并 taskkill 当前 pid；阻塞中的 `read_line` 返回 EOF，
-  `convert` 据此返回 `{ok:false,canceled:true}` 并清空 worker；下一次 `convert` 重新拉起（冷启动）；
-- 进程退出/读写失败 → 清空 worker 并返回错误，**下一次请求自动重新拉起**（首请求报错，不静默重跑）；
-- 退出（`RunEvent::Exit`）时写 `{"cmd":"exit"}` 并 kill，避免残留 Python；
+- **取消**：`cancel(id)` 数字 id 命中池内 job 时精确取消，其余（batchN/sepN/smoke-cancel/过期数字）
+  在 cap=1 下回退取消唯一在途；先置 per-job 标志再锁外 `taskkill /T /F`，阻塞读立即返回 EOF；
+  没有在途任务时返回 `no running worker`，不再误杀空闲暖 worker；
+- 进程退出/读写失败 → 丢弃 worker 并返回错误，**下一次请求自动重新拉起**（首请求报错，不静默重跑）；
+- 退出（`RunEvent::Exit`）调 `pool.shutdown()`，取消在途并 kill 暖 worker，避免残留 Python；
 - **模型/参数契约未改**：req 原样透传，模型路径/格式仍由 Python 侧决定。
 
 实测（smoke）：1 s 440 Hz WAV → Basic Pitch 1 个音符；冷启动 14.3 s、暖 5.5 s；13 条日志；
-worker running=true seq=1；输出 MIDI 头 `MThd`。剩余：cancel/pause、UI 队列侧进度绑定、
-批量并发、模型列表等 host 通道（T-115 扩面）。
+worker running=true seq=1；输出 MIDI 头 `MThd`。**P1 实测**：cargo test **78/78 + 1 ignored**（含真实
+Python 子进程 echo/取消/EOF/暖复用测试）、cargo build release 通过、`--self-check` 通过；未开窗。
+剩余：T-118 P2（cap=1..4、`__slots`、GPU−1）、P3（事件/结果 id 改前端 `cfg.id`、进度绑定）、
+批量队列 UI；模型列表等 host 通道（T-115 扩面）。
 
 ### 3.1.1 Release 构建（T-119 第一步，2026-11-04）
 

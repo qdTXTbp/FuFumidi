@@ -16,8 +16,8 @@ use std::io::{BufRead, BufReader, Read, Write};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
@@ -3172,14 +3172,12 @@ fn save_binary(app: AppHandle, opts: serde_json::Value) -> serde_json::Value {
 
 /* ---------------- T-118：常驻 Python 推理 worker（stdin JSON / stdout ###LOG|###PROG|###RESULT） ---------------- */
 
-struct Worker {
-    child: Child,
-    stdin: ChildStdin,
-    reader: BufReader<ChildStdout>,
-    seq: u64,
+/// P1：生产路径不再自己持有 Option<Worker>，改用 worker_pool::WorkerPool（cap 固定 1）。
+/// pool 负责串行、取消、退出回收；seq 是跨 job 单调递增的请求号（结果/事件的 id 仍走它）。
+struct WorkerState {
+    pool: Arc<worker_pool::WorkerPool>,
+    seq: Arc<AtomicU64>,
 }
-
-struct WorkerState(Arc<Mutex<Option<Worker>>>, Arc<AtomicBool>, Arc<AtomicU32>);
 struct ZoomState(Arc<Mutex<f64>>);
 
 fn pause_file() -> PathBuf { data_dir().join("engine.pause") }
@@ -3233,97 +3231,115 @@ fn pick_music_xml(app: AppHandle) -> Option<String> {
     app.dialog().file().add_filter("MusicXML", &["xml", "mxl", "musicxml"]).blocking_pick_file().and_then(file_path_string)
 }
 
-fn spawn_worker() -> Result<Worker, String> {
+/// 启动一个真实 Python worker 子进程（stdin JSON / stdout ### 协议）。
+/// P1：stdin/stdout 管道、stderr=null、Windows CREATE_NO_WINDOW 由 ChildWorker::spawn 统一设置；
+/// 旧的 Worker{child,stdin,reader} 由池的暖 worker 复用取代。
+fn spawn_worker() -> Result<Box<dyn worker_pool::WorkerProc>, String> {
     let py = python_path().ok_or("python runtime not found")?;
     let eng = engine_dir().ok_or("engine/music2midi.py not found")?;
-    let mut child = Command::new(&py)
-        .current_dir(&eng)
+    let mut cmd = Command::new(&py);
+    cmd.current_dir(&eng)
         .args(["music2midi.py", "worker"])
         .env("PYTHONIOENCODING", "utf-8")
         .env("PYTHONUTF8", "1")
         .env("FUFUMIDI_PAUSE_FILE", pause_file())
         .env("FUFUMIDI_DATA_DIR", data_dir())
         .env("FUFUMIDI_MODELS_DIR", models_dir())
-        .env("TORCH_HOME", models_dir())
-        .envs(bundled_models_dir().map(|p| ("FUFUMIDI_MODELS_BUNDLED_DIR", p)).into_iter().collect::<std::collections::HashMap<_, _>>())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    let stdin = child.stdin.take().ok_or("worker stdin unavailable")?;
-    let stdout = child.stdout.take().ok_or("worker stdout unavailable")?;
-    Ok(Worker { child, stdin, reader: BufReader::new(stdout), seq: 0 })
+        .env("TORCH_HOME", models_dir());
+    if let Some(bundled) = bundled_models_dir() {
+        cmd.env("FUFUMIDI_MODELS_BUNDLED_DIR", bundled);
+    }
+    worker_pool::ChildWorker::spawn(cmd)
+        .map(|worker| Box::new(worker) as Box<dyn worker_pool::WorkerProc>)
+        .map_err(|e| e.to_string())
 }
 
-fn stop_worker(state: &Arc<Mutex<Option<Worker>>>) {
-    if let Ok(mut g) = state.lock() {
-        if let Some(mut w) = g.take() {
-            let _ = w.stdin.write_all(b"{\"cmd\":\"exit\"}\n");
-            let _ = w.stdin.flush();
-            let _ = w.child.kill();
-        }
+fn canceled_convert() -> serde_json::Value {
+    serde_json::json!({ "ok": false, "canceled": true, "error": "canceled" })
+}
+
+/// 请求号规则（保持旧实现行为）：每个新 spawn 的 worker 从 1 开始，暖 worker 接着自增。
+fn next_worker_seq(reused: bool, seq: &AtomicU64) -> u64 {
+    if !reused {
+        seq.store(0, Ordering::SeqCst);
+    }
+    seq.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+/// 只取 PoolError::Io 里的原始 io 文本，保持旧错误串形态（worker write failed: ...）。
+fn pool_io_text(err: worker_pool::PoolError) -> String {
+    match err {
+        worker_pool::PoolError::Io(text) => text,
+        other => other.to_string(),
     }
 }
 
-/// 把一次转录请求交给常驻 worker。模型/参数契约与 Electron 路径一致（req 原样转发）。
-/// 进度/日志通过 Tauri 事件 engine:log / engine:progress 推给前端。
-fn run_convert(state: Arc<Mutex<Option<Worker>>>, cancel: Arc<AtomicBool>, pid_slot: Arc<AtomicU32>, app: AppHandle, req: serde_json::Value) -> serde_json::Value {
+/// 把一次转录请求交给池里的常驻 worker（cap=1，跨请求复用暖 worker）。
+/// 模型/参数契约与 Electron 路径一致（req 原样转发）；
+/// 进度/日志仍通过 Tauri 事件 engine:log / engine:progress 推给前端。
+fn run_convert(pool: Arc<worker_pool::WorkerPool>, seq: Arc<AtomicU64>, app: AppHandle, req: serde_json::Value) -> serde_json::Value {
     let started = std::time::Instant::now();
-    cancel.store(false, Ordering::SeqCst);
-    let mut guard = match state.lock() {
-        Ok(g) => g,
-        Err(_) => return serde_json::json!({ "ok": false, "error": "worker state poisoned" }),
-    };
-    if guard.is_none() {
-        match spawn_worker() {
-            Ok(w) => *guard = Some(w),
-            Err(e) => return serde_json::json!({ "ok": false, "error": e }),
+    let lease = match pool.acquire(|_id, _cancel| spawn_worker()) {
+        Ok(lease) => lease,
+        Err(worker_pool::PoolError::Shutdown) => {
+            return serde_json::json!({ "ok": false, "error": "engine worker pool is shut down" });
         }
-    }
-    let w = guard.as_mut().unwrap();
-    pid_slot.store(w.child.id(), Ordering::SeqCst);
-    if let Ok(Some(_)) = w.child.try_wait() {
-        *guard = None;
+        // cancel 恰好落在 spawn 窗口：池已回收迟到 worker，这里按取消返回。
+        Err(worker_pool::PoolError::Canceled) => return canceled_convert(),
+        // 旧实现直接返回 spawn 错误串；这里拆掉 PoolError 的外层前缀保持一致。
+        Err(worker_pool::PoolError::Spawn(err)) => {
+            return serde_json::json!({ "ok": false, "error": err });
+        }
+        Err(err) => return serde_json::json!({ "ok": false, "error": err.to_string() }),
+    };
+    // 暖 worker 若在两次请求之间退出：与旧实现一致——本次请求报错，下一次请求重新拉起。
+    if let Ok(Some(_)) = lease.try_wait() {
         return serde_json::json!({ "ok": false, "error": "engine worker exited; retry restarts it" });
     }
-    w.seq += 1;
-    let id = w.seq;
+    if lease.is_canceled() {
+        return canceled_convert();
+    }
+    let id = next_worker_seq(lease.reused(), &seq);
     let mut payload = req;
     if let Some(o) = payload.as_object_mut() {
         o.insert("_id".to_string(), serde_json::json!(id));
     }
-    let line = format!("{}\n", payload);
-    if let Err(e) = w.stdin.write_all(line.as_bytes()).and_then(|_| w.stdin.flush()) {
-        *guard = None;
-        return serde_json::json!({ "ok": false, "error": format!("worker write failed: {e}") });
+    if let Err(err) = lease.send(&payload.to_string()) {
+        lease.mark_broken();
+        if lease.is_canceled() {
+            return canceled_convert();
+        }
+        return serde_json::json!({ "ok": false, "error": format!("worker write failed: {}", pool_io_text(err)) });
     }
     let mut logs: Vec<String> = Vec::new();
     loop {
-        let mut buf = String::new();
-        match w.reader.read_line(&mut buf) {
-            Ok(0) => {
-                let _ = w.child.kill();
-                *guard = None;
-                pid_slot.store(0, Ordering::SeqCst);
-                if cancel.load(Ordering::SeqCst) {
-                    return serde_json::json!({ "ok": false, "canceled": true, "error": "canceled" });
+        let line = match lease.read_line() {
+            Ok(Some(line)) => line,
+            Ok(None) => {
+                lease.mark_broken();
+                if lease.is_canceled() {
+                    return canceled_convert();
                 }
                 return serde_json::json!({ "ok": false, "error": "engine worker closed" });
             }
-            Ok(_) => {}
-            Err(e) => {
-                *guard = None;
-                return serde_json::json!({ "ok": false, "error": format!("worker read failed: {e}") });
+            Err(worker_pool::PoolError::WorkerGone) => {
+                if lease.is_canceled() {
+                    return canceled_convert();
+                }
+                return serde_json::json!({ "ok": false, "error": "engine worker closed" });
             }
-        }
-        let t = buf.trim();
+            Err(err) => {
+                lease.mark_broken();
+                if lease.is_canceled() {
+                    return canceled_convert();
+                }
+                return serde_json::json!({ "ok": false, "error": format!("worker read failed: {}", pool_io_text(err)) });
+            }
+        };
+        let t = line.trim();
         if t.is_empty() { continue; }
-        if cancel.load(Ordering::SeqCst) {
-            let _ = w.child.kill();
-            *guard = None;
-            pid_slot.store(0, Ordering::SeqCst);
-            return serde_json::json!({ "ok": false, "canceled": true, "error": "canceled" });
+        if lease.is_canceled() {
+            return canceled_convert();
         }
         if let Some(rest) = t.strip_prefix("###RESULT ") {
             if let Ok(mut r) = serde_json::from_str::<serde_json::Value>(rest) {
@@ -3360,13 +3376,13 @@ fn run_convert(state: Arc<Mutex<Option<Worker>>>, cancel: Arc<AtomicBool>, pid_s
 
 #[tauri::command]
 async fn convert(state: State<'_, WorkerState>, app: AppHandle, req: serde_json::Value) -> Result<serde_json::Value, String> {
-    let arc = state.0.clone();
-    let cancel = state.1.clone();
-    let pid = state.2.clone();
-    tauri::async_runtime::spawn_blocking(move || run_convert(arc, cancel, pid, app, req))
+    let pool = state.pool.clone();
+    let seq = state.seq.clone();
+    tauri::async_runtime::spawn_blocking(move || run_convert(pool, seq, app, req))
         .await
         .map_err(|e| e.to_string())
 }
+
 
 /// 暂停/继续：引擎 pause_gate 监听文件是否存在；继续后从原处接着跑（不改协议）。
 #[tauri::command]
@@ -3388,45 +3404,70 @@ fn set_transcribe_pause(on: bool) -> serde_json::Value {
 #[tauri::command]
 fn probe() -> serde_json::Value { engine_probe() }
 
+/// 取消当前转录。
+///
+/// - id 能解析成池内 job id 时只取消该 job；
+/// - 其余（旧前端传 batchN / 'sepN'、smoke 传 'smoke-cancel'、已过期的数字）按 cap=1
+///   的兼容行为取消当前唯一在途 job —— 与旧实现“忽略 id、砍当前 worker”一致；
+/// - 没有在途 job 时明确返回 no running worker。
 #[tauri::command]
 fn cancel(state: State<'_, WorkerState>, id: Option<String>) -> serde_json::Value {
-    state.1.store(true, Ordering::SeqCst);
-    let pid = state.2.load(Ordering::SeqCst);
-    if pid == 0 {
+    let status = state.pool.status();
+    let Some(job_id) = cancel_target(id.as_deref(), &status.workers) else {
         return serde_json::json!({ "ok": false, "canceled": false, "error": "no running worker", "id": id });
+    };
+    let pid = status.workers.iter().find(|worker| worker.id == job_id).and_then(|worker| worker.pid);
+    if state.pool.cancel(job_id) {
+        serde_json::json!({ "ok": true, "canceled": true, "pid": pid, "id": id })
+    } else {
+        serde_json::json!({ "ok": false, "canceled": false, "error": "no running worker", "id": id })
     }
-    #[cfg(target_os = "windows")]
-    {
-        match Command::new("taskkill").args(["/PID", &pid.to_string(), "/T", "/F"]).output() {
-            Ok(_) => serde_json::json!({ "ok": true, "canceled": true, "pid": pid, "id": id }),
-            Err(e) => serde_json::json!({ "ok": false, "canceled": false, "error": e.to_string(), "id": id }),
+}
+
+/// cancel(id) 的目标选择（纯函数，单测覆盖，不启动真实 worker）。
+///
+/// 数字 id 命中在途 job → 该 job；其余情况在 cap=1（唯一在途）下取消当前 job，
+/// 兼容 smoke 的 {"id":"smoke-cancel"}；没有在途 job → None。
+fn cancel_target(id: Option<&str>, workers: &[worker_pool::WorkerInfo]) -> Option<worker_pool::JobId> {
+    if workers.is_empty() {
+        return None;
+    }
+    if let Some(parsed) = id.and_then(|raw| raw.trim().parse::<u64>().ok()) {
+        if workers.iter().any(|worker| worker.id == parsed) {
+            return Some(parsed);
         }
     }
-    #[cfg(not(target_os = "windows"))]
-    { serde_json::json!({ "ok": false, "canceled": false, "error": "unsupported platform", "id": id }) }
+    if workers.len() == 1 {
+        Some(workers[0].id)
+    } else {
+        None
+    }
 }
 
 #[tauri::command]
 fn engine_worker_status(state: State<'_, WorkerState>) -> serde_json::Value {
-    let mut g = match state.0.lock() {
-        Ok(g) => g,
-        Err(_) => return serde_json::json!({ "ok": false, "error": "worker state poisoned" }),
-    };
-    match g.as_mut() {
-        Some(w) => {
-            let alive = w.child.try_wait().map(|s| s.is_none()).unwrap_or(false);
-            serde_json::json!({ "ok": true, "running": alive, "pid": w.child.id(), "seq": w.seq })
-        }
-        None => serde_json::json!({ "ok": true, "running": false, "seq": 0 }),
+    let status = state.pool.status();
+    let seq = state.seq.load(Ordering::SeqCst);
+    if let Some(worker) = status.workers.first() {
+        return serde_json::json!({ "ok": true, "running": true, "pid": worker.pid, "seq": seq });
     }
+    if status.warm_alive {
+        return serde_json::json!({ "ok": true, "running": true, "pid": status.warm_pid, "seq": seq });
+    }
+    // 无在途、无暖 worker：旧实现返回 seq 0（worker 已不在）。
+    serde_json::json!({ "ok": true, "running": false, "seq": 0 })
 }
+
 
 fn main() {
     if std::env::args().any(|a| a == "--self-check") {
         println!("{}", serde_json::to_string_pretty(&host_info_json()).unwrap_or_default());
         return;
     }
-    let state = WorkerState(Arc::new(Mutex::new(None)), Arc::new(AtomicBool::new(false)), Arc::new(AtomicU32::new(0)));
+    let state = WorkerState {
+        pool: Arc::new(worker_pool::WorkerPool::with_reuse(1).expect("worker pool cap=1")),
+        seq: Arc::new(AtomicU64::new(0)),
+    };
     let zoom_state = ZoomState(Arc::new(Mutex::new(1.0)));
     let update_preferred_state = UpdatePreferredState(Mutex::new(None));
     let app = tauri::Builder::default()
@@ -3455,7 +3496,8 @@ fn main() {
     app.run(|app_handle, event| {
         if let tauri::RunEvent::Exit = event {
             if let Some(st) = app_handle.try_state::<WorkerState>() {
-                stop_worker(&st.0);
+                // 取消在途 job 并 kill 暖 worker，退出后不留 Python 进程。
+                st.pool.shutdown();
             }
         }
     });
@@ -3479,6 +3521,88 @@ mod check_midi_tests {
         assert_eq!(super::save_binary_bytes(&serde_json::json!({ "data": [1,2] })), vec![1,2]);
         assert_eq!(super::save_binary_bytes(&serde_json::json!({ "bytes": "ab" })), b"ab".to_vec());
         assert!(super::save_binary_bytes(&serde_json::json!({})).is_empty());
+    }
+
+    #[test]
+    fn cancel_target_handles_smoke_and_numeric_ids() {
+        let info = |id: u64| super::worker_pool::WorkerInfo {
+            id,
+            pid: Some(100 + id as u32),
+            ready: true,
+            canceled: false,
+        };
+        assert_eq!(super::cancel_target(None, &[]), None);
+        assert_eq!(super::cancel_target(Some("smoke-cancel"), &[info(7)]), Some(7));
+        assert_eq!(super::cancel_target(Some("sep3"), &[info(7)]), Some(7));
+        assert_eq!(super::cancel_target(Some("7"), &[info(7)]), Some(7));
+        // 过期/未知数字：cap=1 下回退唯一在途，与旧实现忽略 id 等价。
+        assert_eq!(super::cancel_target(Some("9"), &[info(7)]), Some(7));
+        // cap>1 时不猜目标（生产 cap 固定 1，这里只保证函数不误杀）。
+        assert_eq!(super::cancel_target(Some("nope"), &[info(1), info(2)]), None);
+        assert_eq!(super::cancel_target(Some("1"), &[info(1), info(2)]), Some(1));
+    }
+
+
+    /// 生产路径集成测试：用真实 engine worker（不加载模型，仅校验缺文件请求）验证
+    /// spawn_worker → ###RESULT 协议 → 暖 worker 复用 → shutdown 杀进程；不开窗口。
+    #[test]
+    fn real_engine_worker_protocol_warm_and_shutdown() {
+        if super::python_path().is_none() || super::engine_dir().is_none() {
+            eprintln!("real_engine_worker_protocol_warm_and_shutdown: skipped (python/engine not found)");
+            return;
+        }
+        let pool = super::worker_pool::WorkerPool::with_reuse(1).expect("worker pool");
+        let first_pid = {
+            let lease = pool
+                .acquire(|_id, _cancel| super::spawn_worker())
+                .expect("spawn engine worker");
+            let pid = lease.pid().expect("worker pid");
+            // 缺文件请求在参数校验阶段就返回 ###RESULT，不会加载任何模型。
+            let req = serde_json::json!({
+                "audio": "__fufumidi_missing__.wav",
+                "out": "__fufumidi_missing__.mid",
+                "_id": 1,
+            });
+            lease.send(&req.to_string()).expect("send request");
+            let mut result = None;
+            for _ in 0..80 {
+                match lease.read_line().expect("read worker line") {
+                    Some(line) => {
+                        if let Some(rest) = line.trim().strip_prefix("###RESULT ") {
+                            result = serde_json::from_str::<serde_json::Value>(rest).ok();
+                            break;
+                        }
+                    }
+                    None => break,
+                }
+            }
+            let result = result.expect("engine worker must answer with ###RESULT");
+            assert_eq!(result["_id"], 1);
+            assert_eq!(result["ok"], false);
+            pid
+        };
+        let status = pool.status();
+        assert_eq!(status.warm, 1, "engine worker should stay warm");
+        assert_eq!(status.warm_pid, Some(first_pid));
+        {
+            let lease = pool
+                .acquire(|_id, _cancel| super::spawn_worker())
+                .expect("reuse engine worker");
+            assert_eq!(lease.pid(), Some(first_pid), "second request must reuse warm worker");
+        }
+        pool.shutdown();
+        let status = pool.status();
+        assert_eq!(status.warm, 0);
+        assert_eq!(status.busy, 0);
+    }
+
+    #[test]
+    fn worker_seq_restarts_per_worker_and_continues_when_warm() {
+        let seq = std::sync::atomic::AtomicU64::new(0);
+        assert_eq!(super::next_worker_seq(false, &seq), 1, "new worker starts at 1");
+        assert_eq!(super::next_worker_seq(true, &seq), 2, "warm worker continues");
+        assert_eq!(super::next_worker_seq(true, &seq), 3, "warm worker continues");
+        assert_eq!(super::next_worker_seq(false, &seq), 1, "new worker resets to 1");
     }
 
     #[test]
