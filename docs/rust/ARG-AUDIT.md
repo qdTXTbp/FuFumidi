@@ -5,9 +5,9 @@
 
 | 指标 | 数值 |
 |---|---:|
-| Rust command | 100 |
+| Rust command | 104 |
 | bridge call | 129 |
-| 参数不一致 | 36 |
+| 参数不一致 | 32 |
 
 ## 不一致列表
 
@@ -60,14 +60,9 @@
 - gpu_import_local（Rust 未找到命令）
   - bridge 多参数: req
 - gpu_install_auto（Rust 未找到命令）
-- plugins_list（Rust 未找到命令）
-- plugins_set_enabled（Rust 未找到命令）
-  - bridge 多参数: id, enabled
 - plugins_invoke（Rust 未找到命令）
   - bridge 多参数: id, cmd, payload
-- plugins_rescan（Rust 未找到命令）
 - plugins_open_docs（Rust 未找到命令）
-- plugins_open_dir（Rust 未找到命令）
 - wallpaper_download（Rust 未找到命令）
   - bridge 多参数: url, name
 

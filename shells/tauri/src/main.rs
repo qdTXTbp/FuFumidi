@@ -562,6 +562,76 @@ fn presets_restore() -> serde_json::Value {
 
 fn midi_root() -> PathBuf { data_dir().join("midi") }
 
+fn plugin_dirs(settings: &serde_json::Value) -> Vec<String> {
+    let mut dirs: Vec<String> = Vec::new();
+    if let Some(a) = settings.get("plugin.dirs").and_then(|v| v.as_array()) { for v in a { if let Some(s) = v.as_str() { if !s.trim().is_empty() { dirs.push(s.to_string()); } } } }
+    if let Ok(env) = std::env::var("FUFUMIDI_PLUGIN_DIRS") { for s in env.split(';') { if !s.trim().is_empty() { dirs.push(s.trim().to_string()); } } }
+    if dirs.is_empty() { let d = data_dir().join("plugins"); let _ = std::fs::create_dir_all(&d); dirs.push(d.display().to_string()); }
+    dirs
+}
+
+fn plugins_from_output(stdout: &str, enabled: &[String]) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    for line in stdout.lines().rev() {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(line.trim()) {
+            if let Some(arr) = v.get("plugins").and_then(|x| x.as_array()) {
+                for p in arr {
+                    let mut o = p.clone();
+                    let id = o.get("id").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                    if let Some(m) = o.as_object_mut() { m.insert("enabled".into(), serde_json::json!(enabled.iter().any(|e| e == &id))); }
+                    out.push(o);
+                }
+                break;
+            }
+        }
+    }
+    out
+}
+
+fn run_plugins_list() -> Vec<serde_json::Value> {
+    let settings = read_json(&settings_path());
+    let enabled: Vec<String> = settings.get("plugins_enabled").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect()).unwrap_or_default();
+    let Some(py) = python_path() else { return Vec::new(); };
+    let Some(engine) = engine_dir() else { return Vec::new(); };
+    let script = engine.join("plugin_render.py");
+    if !script.exists() { return Vec::new(); }
+    let mut cmd = Command::new(&py);
+    cmd.arg(&script).arg("list");
+    for d in plugin_dirs(&settings) { cmd.arg("--dir").arg(d); }
+    match cmd.creation_flags(0x08000000).output() {
+        Ok(o) => plugins_from_output(&String::from_utf8_lossy(&o.stdout), &enabled),
+        Err(_) => Vec::new(),
+    }
+}
+
+#[tauri::command]
+fn plugins_list() -> Vec<serde_json::Value> { run_plugins_list() }
+
+#[tauri::command]
+fn plugins_rescan() -> Vec<serde_json::Value> { run_plugins_list() }
+
+fn plugins_set_enabled_at(settings_path: &Path, id: &str, enabled: bool) -> serde_json::Value {
+    let mut s = read_json(settings_path);
+    let mut list: Vec<String> = s.get("plugins_enabled").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(|x| x.to_string())).collect()).unwrap_or_default();
+    list.retain(|x| x != id);
+    if enabled { list.push(id.to_string()); }
+    s["plugins_enabled"] = serde_json::json!(list);
+    match write_json(settings_path, &s) { Ok(_) => serde_json::json!({ "ok": true, "enabled": enabled }), Err(e) => serde_json::json!({ "ok": false, "error": e }) }
+}
+
+#[tauri::command]
+fn plugins_set_enabled(id: String, enabled: bool) -> serde_json::Value { plugins_set_enabled_at(&settings_path(), &id, enabled) }
+
+#[tauri::command]
+fn plugins_open_dir() -> serde_json::Value {
+    let d = data_dir().join("plugins");
+    let _ = std::fs::create_dir_all(&d);
+    #[cfg(target_os = "windows")]
+    { let _ = Command::new("explorer").arg(&d).creation_flags(0x08000000).spawn(); }
+    serde_json::json!({ "ok": true, "dir": d.display().to_string() })
+}
+
+
 fn wallpaper_set_desktop_plan(path: &str) -> Vec<Vec<String>> {
     let key = "HKCU\\Control Panel\\Desktop";
     vec![
@@ -2715,7 +2785,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, db_kv_get, db_kv_set,
-            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, wallpaper_set_desktop, gpu_status, gpu_uninstall, model_list,
+            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, wallpaper_set_desktop, gpu_status, gpu_uninstall, plugins_list, plugins_rescan, plugins_set_enabled, plugins_open_dir, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
@@ -2766,6 +2836,25 @@ mod check_midi_tests {
         assert!(plan[0].join(" ").contains("Wallpaper"));
         assert!(plan[0].join(" ").contains("C:\\wall\\a.jpg"));
         assert_eq!(super::wallpaper_set_desktop("C:\\definitely-missing.jpg".into())["ok"], false);
+    }
+
+    #[test]
+    fn plugins_parse_and_enable() {
+        let fixture = "{\"ok\": true, \"plugins\": [{\"id\": \"a\"}, {\"id\": \"b\"}]}";
+        let list = super::plugins_from_output(fixture, &["a".to_string()]);
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0]["enabled"], true);
+        assert_eq!(list[1]["enabled"], false);
+        let root = tmpdir("plugins-settings");
+        let sp = root.join("settings.json");
+        std::fs::write(&sp, "{}").unwrap();
+        assert_eq!(super::plugins_set_enabled_at(&sp, "a", true)["ok"], true);
+        let s: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&sp).unwrap()).unwrap();
+        assert_eq!(s["plugins_enabled"][0], "a");
+        assert_eq!(super::plugins_set_enabled_at(&sp, "a", false)["ok"], true);
+        let s2: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&sp).unwrap()).unwrap();
+        assert_eq!(s2["plugins_enabled"].as_array().unwrap().len(), 0);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
