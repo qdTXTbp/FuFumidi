@@ -580,3 +580,5 @@
 - **Clippy 清零**：-D warnings 通过；修 11 条（div_ceil/closure/borrow/flatten/char/if/cast/sort）；cargo 118；已进 acceptance。
 
 - **158 命令 release（Clippy 清零）**：2m29s、0 warning；self-check 通过；无窗口/残留。
+
+- **转录/分轨恢复**：data_dir 认领 data_root_last（E:/Midi/FuFumidi/FuFumidiData，models=13）；GPU 增强包 site-packages 注入 PYTHONPATH（release python import torch 2.9.1+cu128）；分离补 .th/_configs、CPU float32、chunk clamp；智能分轨 6 轨真实 smoke ok（release）；cargo **121/121 + 1 ignored**。

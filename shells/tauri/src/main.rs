@@ -26,6 +26,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 mod worker_pool;
+mod stem_workflow;
 
 fn exe_dir() -> Option<PathBuf> {
     std::env::current_exe().ok()?.parent().map(|p| p.to_path_buf())
@@ -42,6 +43,55 @@ fn dev_root() -> Option<PathBuf> {
     }
 }
 
+/// Electron 的旧 settings.json（数据根记录在 %APPDATA%/FuFumidi/fufumidi）。
+fn legacy_settings_path() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("FUFUMIDI_SETTINGS_FILE") {
+        if !p.trim().is_empty() { return Some(PathBuf::from(p)); }
+    }
+    std::env::var("APPDATA").ok().map(|a| PathBuf::from(a).join("FuFumidi").join("fufumidi").join("settings.json"))
+}
+
+/// 数据根子目录里任意一个有内容，才算「真有数据」。空目录不能认领。
+fn has_data_marker(dir: &Path) -> bool {
+    if !dir.is_dir() { return false; }
+    for sub in ["models", "gpu-enhancements", "soundfonts", "voicebanks", "diffsinger", "diffsinger-voicebanks", "midi", "cache", "temp", "logs"] {
+        if let Ok(rd) = std::fs::read_dir(dir.join(sub)) { if rd.flatten().next().is_some() { return true; } }
+    }
+    dir.join(".fufumidi-ready").is_file() && std::fs::read_dir(dir).map(|mut rd| rd.next().is_some()).unwrap_or(false)
+}
+
+/// 从 settings 里的绝对路径反推 FuFumidiData 候选（与 Electron data-root-pick 同思路）。
+fn data_root_hints(v: &serde_json::Value, out: &mut Vec<PathBuf>, depth: u32) {
+    if depth > 6 || out.len() > 200 { return; }
+    match v {
+        serde_json::Value::String(s) if Path::new(s).is_absolute() => {
+            let p = Path::new(s);
+            let mut cur = p.to_path_buf();
+            for _ in 0..12 {
+                if cur.file_name().and_then(|x| x.to_str()) == Some("FuFumidiData") { out.push(cur.clone()); }
+                out.push(cur.join("FuFumidiData"));
+                let Some(parent) = cur.parent() else { break; };
+                if parent == cur { break; }
+                cur = parent.to_path_buf();
+            }
+        }
+        serde_json::Value::Array(a) => for x in a { data_root_hints(x, out, depth + 1); },
+        serde_json::Value::Object(o) => for x in o.values() { data_root_hints(x, out, depth + 1); },
+        _ => {}
+    }
+}
+
+/// 数据根选择（纯函数，测试可注入事实）：显式 > 上次使用且有数据 > 安装旁有数据 > 历史提示 > AppData 有数据 > 安装旁新建 > AppData。
+fn pick_data_root(explicit: Option<PathBuf>, last: Option<PathBuf>, preferred: Option<PathBuf>, hints: &[PathBuf], user: PathBuf) -> PathBuf {
+    if let Some(p) = explicit.filter(|p| p.is_dir()) { return p; }
+    if let Some(p) = last.filter(|p| p.is_dir() && has_data_marker(p)) { return p; }
+    if let Some(p) = preferred.clone().filter(|p| p.is_dir() && has_data_marker(p)) { return p; }
+    for p in hints { if p.is_dir() && has_data_marker(p) { return p.clone(); } }
+    if user.is_dir() && has_data_marker(&user) { return user; }
+    if let Some(p) = preferred.filter(|p| p.parent().map(|x| x.is_dir()).unwrap_or(false)) { let _ = std::fs::create_dir_all(&p); return p; }
+    let _ = std::fs::create_dir_all(&user); user
+}
+
 fn data_dir() -> PathBuf {
     if let Ok(p) = std::env::var("FUFUMIDI_DATA_ROOT") {
         if !p.trim().is_empty() {
@@ -50,21 +100,14 @@ fn data_dir() -> PathBuf {
             return pb;
         }
     }
-    // 与 Electron 版数据根对齐：安装目录旁的 FuFumidiData（存在则用），否则 %APPDATA%/FuFumidi/FuFumidiData。
-    if let Some(d) = exe_dir() {
-        for c in [d.join("../FuFumidiData"), d.join("FuFumidiData")] {
-            if c.is_dir() {
-                let _ = std::fs::create_dir_all(&c);
-                return c;
-            }
-        }
-    }
-    let base = std::env::var("APPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| std::env::temp_dir());
-    let pb = base.join("FuFumidi").join("FuFumidiData");
-    let _ = std::fs::create_dir_all(&pb);
-    pb
+    let settings = legacy_settings_path().and_then(|p| std::fs::read_to_string(p).ok()).and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+    let configured = settings.as_ref().and_then(|s| s.get("data_root")).and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()).map(PathBuf::from);
+    let last = settings.as_ref().and_then(|s| s.get("data_root_last")).and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()).map(PathBuf::from);
+    let mut hints = Vec::new();
+    if let Some(s) = &settings { data_root_hints(s, &mut hints, 0); }
+    let preferred = exe_dir().map(|d| d.join("../FuFumidiData"));
+    let user = std::env::var("APPDATA").map(PathBuf::from).unwrap_or_else(|_| std::env::temp_dir()).join("FuFumidi").join("FuFumidiData");
+    pick_data_root(configured, last, preferred, &hints, user)
 }
 
 fn models_dir() -> PathBuf { data_dir().join("models") }
@@ -933,7 +976,8 @@ async fn rvc_probe(id: String) -> serde_json::Value {
         let (Some(py), Some(engine)) = (python_path(), engine_dir()) else { return oto_err("Python/引擎目录不存在") };
         let script = engine.join("engine_rvc.py");
         if !script.is_file() { return oto_err("engine_rvc.py 不存在"); }
-        let out = match Command::new(&py).arg(&script).arg("probe").arg("--model").arg(&dir).env("PYTHONIOENCODING", "utf-8").output() {
+        let mut cmd = Command::new(&py); cmd.arg(&script).arg("probe").arg("--model").arg(&dir); apply_engine_env(&mut cmd);
+        let out = match cmd.output() {
             Ok(o) => o, Err(e) => return oto_err(&e.to_string()),
         };
         let stdout = String::from_utf8_lossy(&out.stdout).to_string();
@@ -1403,8 +1447,33 @@ fn cover_sep_arch(name: &str) -> String {
     else if n.contains("roformer") { "Mel-Band Roformer".into() }
     else if n.contains("mdx") { "MDX23C".into() }
     else if n.contains("scnet") { "SCNet".into() }
-    else if n.ends_with(".pth") || n.ends_with(".pt") || n.contains("uvr") { "UVR-VR".into() }
+    else if n.ends_with(".pth") || n.ends_with(".pt") || n.ends_with(".th") || n.contains("uvr") { "UVR-VR".into() }
     else { String::new() }
+}
+
+fn sep_norm(s: &str) -> String {
+    s.to_ascii_lowercase().chars().filter(|c| c.is_ascii_alphanumeric()).collect()
+}
+
+/// 在 _configs / msst_autocfg 里挑一份与模型名最匹配的 yaml。Electron 的 resolveSeparateModel
+/// 也是先模型目录、再数据根共享配置；Tauri 以前只看模型目录，6stems 因而误报缺配置。
+fn pick_sep_yaml(dir: &Path, want: &str) -> Option<PathBuf> {
+    let w = sep_norm(want);
+    let mut best: Option<(i32, PathBuf)> = None;
+    for e in std::fs::read_dir(dir).ok().into_iter().flatten().flatten() {
+        let p = e.path();
+        let ext = p.extension().and_then(|x| x.to_str()).unwrap_or("").to_ascii_lowercase();
+        if ext != "yaml" && ext != "yml" { continue; }
+        let n = sep_norm(p.file_name().and_then(|x| x.to_str()).unwrap_or(""));
+        let mut score = 0;
+        if n == w { score += 100; }
+        if w.contains("6stems") && n.contains("6stems") { score += 50; }
+        if w.contains("4stems") && n.contains("4stems") { score += 50; }
+        if w.contains("htdemucs") && n.contains("htdemucs") { score += 20; }
+        if n.contains(&w) || w.contains(&n) { score += 10; }
+        if score > 0 && best.as_ref().map(|(b, _)| score > *b).unwrap_or(true) { best = Some((score, p)); }
+    }
+    best.map(|(_, p)| p)
 }
 
 fn cover_sep_resolve_at(root: &Path, id: &str) -> Result<(PathBuf, Option<PathBuf>, String), String> {
@@ -1434,7 +1503,7 @@ fn cover_sep_resolve_at(root: &Path, id: &str) -> Result<(PathBuf, Option<PathBu
                 let p = e.path();
                 if p.is_file() {
                     let ext = p.extension().and_then(|x| x.to_str()).unwrap_or("").to_ascii_lowercase();
-                    if matches!(ext.as_str(), "safetensors" | "pth" | "pt" | "ckpt") {
+                    if matches!(ext.as_str(), "safetensors" | "pth" | "pt" | "ckpt" | "th") {
                         let sz = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
                         if best.as_ref().map(|(b, _)| sz > *b).unwrap_or(true) { *best = Some((sz, p)); }
                     }
@@ -1445,7 +1514,12 @@ fn cover_sep_resolve_at(root: &Path, id: &str) -> Result<(PathBuf, Option<PathBu
         let Some((_, w)) = best else { return Err(format!("分离模型目录里没有权重：{name}")) };
         (w, base.clone())
     };
-    let config = std::fs::read_dir(&dir).ok().and_then(|rd| rd.flatten().map(|e| e.path()).find(|p| p.extension().and_then(|x| x.to_str()).map(|x| x.eq_ignore_ascii_case("yaml") || x.eq_ignore_ascii_case("yml")).unwrap_or(false)));
+    let mut config = std::fs::read_dir(&dir).ok().and_then(|rd| rd.flatten().map(|e| e.path()).find(|p| p.extension().and_then(|x| x.to_str()).map(|x| x.eq_ignore_ascii_case("yaml") || x.eq_ignore_ascii_case("yml")).unwrap_or(false)));
+    if config.is_none() {
+        let want = weight.file_name().and_then(|x| x.to_str()).unwrap_or(&name);
+        config = pick_sep_yaml(&root.join("_configs"), want)
+            .or_else(|| pick_sep_yaml(&root.join("cache").join("msst_autocfg"), want));
+    }
     let arch = cover_sep_arch(weight.to_string_lossy().as_ref());
     Ok((weight, config, arch))
 }
@@ -1559,7 +1633,10 @@ fn cover_run(state: State<'_, CoverState>, app: AppHandle, opts: serde_json::Val
     if !script.is_file() { return oto_err("engine_cover.py 不存在"); }
     let uniq = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     let id = format!("cover{}-{uniq}", std::process::id());
-    let mut child = match Command::new(&py).current_dir(&engine).arg(&script).args(&args).env("PYTHONIOENCODING", "utf-8").stdout(Stdio::piped()).stderr(Stdio::null()).creation_flags(0x08000000).spawn() {
+    let mut cmd = Command::new(&py);
+    cmd.current_dir(&engine).arg(&script).args(&args).stdout(Stdio::piped()).stderr(Stdio::null()).creation_flags(0x08000000);
+    apply_engine_env(&mut cmd);
+    let mut child = match cmd.spawn() {
         Ok(c) => c, Err(e) => return oto_err(&e.to_string()),
     };
     let stdout = child.stdout.take();
@@ -1634,7 +1711,10 @@ async fn separate_audio(state: State<'_, SeparationState>, app: AppHandle, opts:
     let (Some(py), Some(engine)) = (python_path(), engine_dir()) else { return Err("Python/引擎目录不存在".into()) };
     let script = engine.join("music2midi.py");
     if !script.is_file() { return Err("music2midi.py 不存在".into()); }
-    let mut child = match Command::new(&py).current_dir(&engine).arg(&script).args(&args).env("PYTHONIOENCODING", "utf-8").stdout(Stdio::piped()).stderr(Stdio::null()).creation_flags(0x08000000).spawn() { Ok(c) => c, Err(e) => return Err(e.to_string()) };
+    let mut cmd = Command::new(&py);
+    cmd.current_dir(&engine).arg(&script).args(&args).stdout(Stdio::piped()).stderr(Stdio::null()).creation_flags(0x08000000);
+    apply_engine_env(&mut cmd);
+    let mut child = match cmd.spawn() { Ok(c) => c, Err(e) => return Err(e.to_string()) };
     let stdout = child.stdout.take();
     *state.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(SeparateJob { child });
     let shared = state.0.clone(); let app2 = app.clone(); let id2 = id.clone();
@@ -1982,7 +2062,8 @@ fn soundfont_list() -> Vec<serde_json::Value> {
 fn dep_check() -> serde_json::Value {
     let Some(py) = python_path() else { return serde_json::json!({ "ok": false, "error": "python runtime not found" }); };
     let Some(eng) = engine_dir() else { return serde_json::json!({ "ok": false, "error": "engine directory not found" }); };
-    let out = match Command::new(&py).current_dir(&eng).args(["deps.py", "check"]).output() {
+    let mut cmd = Command::new(&py); cmd.current_dir(&eng).args(["deps.py", "check"]); apply_engine_env(&mut cmd);
+    let out = match cmd.output() {
         Ok(o) => o,
         Err(e) => return serde_json::json!({ "ok": false, "error": e.to_string() }),
     };
@@ -3103,7 +3184,8 @@ async fn gpu_unified_memory_experiment() -> serde_json::Value {
         let (Some(py), Some(engine)) = (python_path(), engine_dir()) else { return oto_err("Python/引擎目录不存在") };
         let script = engine.join("cuda_um_experiment.py");
         if !script.is_file() { return oto_err("cuda_um_experiment.py 不存在"); }
-        let out = match Command::new(&py).current_dir(&engine).arg(&script).args(["--mb", "256", "--json"]).env("PYTHONIOENCODING", "utf-8").creation_flags(0x08000000).output() {
+        let mut cmd = Command::new(&py); cmd.current_dir(&engine).arg(&script).args(["--mb", "256", "--json"]).creation_flags(0x08000000); apply_engine_env(&mut cmd);
+        let out = match cmd.output() {
             Ok(o) => o, Err(e) => return oto_err(&e.to_string()),
         };
         let stdout = String::from_utf8_lossy(&out.stdout).to_string();
@@ -4633,21 +4715,44 @@ fn pick_music_xml(app: AppHandle) -> Option<String> {
 /// 启动一个真实 Python worker 子进程（stdin JSON / stdout ### 协议）。
 /// P1：stdin/stdout 管道、stderr=null、Windows CREATE_NO_WINDOW 由 ChildWorker::spawn 统一设置；
 /// 旧的 Worker{child,stdin,reader} 由池的暖 worker 复用取代。
+/// 引擎子进程的统一环境：数据根/模型/缓存 + 已安装的 GPU 增强包 site-packages。
+///
+/// 发布版 python/ 故意不带 torch/demucs（体积），必须把数据根下的
+/// gpu-enhancements/<kind>/site-packages 挂到 PYTHONPATH；没有增强包时显式
+/// FUFUMIDI_DISABLE_GPU=1，避免继承宿主环境里的旧 torch 造成 ABI/版本错配。
+fn apply_engine_env(cmd: &mut Command) {
+    cmd.env("PYTHONIOENCODING", "utf-8")
+        .env("PYTHONUTF8", "1")
+        .env("FUFUMIDI_DATA_DIR", data_dir())
+        .env("FUFUMIDI_MODELS_DIR", models_dir())
+        .env("TORCH_HOME", models_dir())
+        .env("FUFUMIDI_PAUSE_FILE", pause_file());
+    if let Some(b) = bundled_models_dir() { cmd.env("FUFUMIDI_MODELS_BUNDLED_DIR", b); }
+    cmd.env_remove("PYTHONPATH");
+    let mut sites = Vec::new();
+    let mut kinds = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(data_dir().join("gpu-enhancements")) {
+        for e in rd.flatten() {
+            let kind = e.file_name().to_string_lossy().to_string();
+            let site = e.path().join("site-packages");
+            if site.join("torch").is_dir() { sites.push(site); kinds.push(kind); }
+        }
+    }
+    if sites.is_empty() {
+        cmd.env("FUFUMIDI_DISABLE_GPU", "1");
+    } else {
+        let joined = std::env::join_paths(&sites).map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+        if !joined.is_empty() { cmd.env("PYTHONPATH", joined); }
+        cmd.env("FUFUMIDI_GPU_KINDS", kinds.join(","));
+    }
+}
+
 fn spawn_worker() -> Result<Box<dyn worker_pool::WorkerProc>, String> {
     let py = python_path().ok_or("python runtime not found")?;
     let eng = engine_dir().ok_or("engine/music2midi.py not found")?;
     let mut cmd = Command::new(&py);
-    cmd.current_dir(&eng)
-        .args(["music2midi.py", "worker"])
-        .env("PYTHONIOENCODING", "utf-8")
-        .env("PYTHONUTF8", "1")
-        .env("FUFUMIDI_PAUSE_FILE", pause_file())
-        .env("FUFUMIDI_DATA_DIR", data_dir())
-        .env("FUFUMIDI_MODELS_DIR", models_dir())
-        .env("TORCH_HOME", models_dir());
-    if let Some(bundled) = bundled_models_dir() {
-        cmd.env("FUFUMIDI_MODELS_BUNDLED_DIR", bundled);
-    }
+    cmd.current_dir(&eng).args(["music2midi.py", "worker"]);
+    apply_engine_env(&mut cmd);
     worker_pool::ChildWorker::spawn(cmd)
         .map(|worker| Box::new(worker) as Box<dyn worker_pool::WorkerProc>)
         .map_err(|e| e.to_string())
@@ -4787,6 +4892,10 @@ fn run_convert(
     req: serde_json::Value,
 ) -> serde_json::Value {
     let started = std::time::Instant::now();
+    if req.get("stemEnhance").and_then(|v| v.as_bool()) == Some(true) {
+        if let Some(r) = stem_workflow::run(&req, Some(&app)) { return r; }
+        let _ = app.emit("engine:log", serde_json::json!({ "id": req.get("id").cloned().unwrap_or(serde_json::json!("stem")), "line": "[分轨] 分轨失败，回退整曲转录" }));
+    }
     // P2：先按本次请求的 __slots/GPU/MAX_WORKERS 调池上限；只影响排队与暖池，不杀在途 job。
     pool.set_cap(effective_cap(&req, |key| std::env::var(key).ok()));
     let lease = match pool.acquire(|_id, _cancel| spawn_worker()) {
@@ -5086,6 +5195,24 @@ fn main() {
     if std::env::args().any(|a| a == "--engine-self-check") {
         // 只跑 worker 协议，不创建 Tauri Builder/WebView 窗口。
         println!("{}", serde_json::to_string_pretty(&engine_self_check()).unwrap_or_default());
+        return;
+    }
+    if std::env::args().any(|a| a == "--model-check") {
+        let items = model_list();
+        let sep: Vec<&serde_json::Value> = items.iter().filter(|m| m.get("kind").and_then(|v| v.as_str()) == Some("separate")).collect();
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({ "ok": true, "dataDir": data_dir().display().to_string(), "models": items.len(), "separates": sep })).unwrap_or_default());
+        return;
+    }
+    let argv: Vec<String> = std::env::args().collect();
+    if let Some(i) = argv.iter().position(|a| a == "--stem-smoke") {
+        let audio = argv.get(i + 1).cloned().unwrap_or_default();
+        let out = argv.get(i + 2).cloned().unwrap_or_default();
+        if audio.is_empty() || out.is_empty() {
+            println!("{}", serde_json::json!({ "ok": false, "error": "usage: --stem-smoke <audio> <out.mid>" }));
+            return;
+        }
+        let req = serde_json::json!({ "id": "stem-smoke", "audio": audio, "out": out, "stemEnhance": true, "mode": "universal", "model": "basic", "perf": "quality", "trackBudget": "auto" });
+        println!("{}", serde_json::to_string_pretty(&stem_workflow::run(&req, None).unwrap_or_else(|| serde_json::json!({ "ok": false, "fallback": true }))).unwrap_or_default());
         return;
     }
     let state = WorkerState {
@@ -7136,5 +7263,44 @@ mod um_json_tests {
         assert_eq!(super::parse_um_json("{\"ok\":true}").unwrap()["ok"], true);
         assert_eq!(super::parse_um_json("log line\n{\"ok\":false,\"code\":\"no_gpu\"}").unwrap()["code"], "no_gpu");
         assert!(super::parse_um_json("no json").is_none());
+    }
+}
+
+
+#[cfg(test)]
+mod data_root_pick_tests {
+    fn mk(root: &std::path::Path, name: &str, with_data: bool) -> std::path::PathBuf {
+        let d = root.join(name);
+        std::fs::create_dir_all(d.join("models")).unwrap();
+        if with_data { std::fs::write(d.join("models/model.onnx"), b"x").unwrap(); }
+        d
+    }
+    #[test]
+    fn honors_last_with_data_over_empty_user_and_preferred() {
+        let root = std::env::temp_dir().join(format!("fufumidi-root-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&root).unwrap();
+        let user = mk(&root, "appdata", false);
+        let preferred = mk(&root, "portable", false);
+        let last = mk(&root, "last", true);
+        let picked = super::pick_data_root(None, Some(last.clone()), Some(preferred), &[], user);
+        assert_eq!(picked, last);
+        let explicit = mk(&root, "explicit", false);
+        let picked2 = super::pick_data_root(Some(explicit.clone()), Some(last), None, &[], root.join("appdata"));
+        assert_eq!(picked2, explicit);
+        let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+mod sep_yaml_tests {
+    #[test]
+    fn picks_config_by_model_stem() {
+        let root = std::env::temp_dir().join(format!("fufumidi-yaml-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let cfg = root.join("_configs"); std::fs::create_dir_all(&cfg).unwrap();
+        std::fs::write(cfg.join("config_htdemucs_6stems.yaml"), b"x").unwrap();
+        std::fs::write(cfg.join("config_musdb18_htdemucs.yaml"), b"y").unwrap();
+        let hit = super::pick_sep_yaml(&cfg, "HTDemucs4_6stems.th").unwrap();
+        assert!(hit.file_name().unwrap().to_string_lossy().contains("6stems"));
+        let _ = std::fs::remove_dir_all(root);
     }
 }

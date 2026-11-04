@@ -5,8 +5,8 @@
 | 指标 | 数值 |
 |---|---:|
 | preload 暴露方法 | 265 |
-| Tauri 桥已映射方法 | 182 |
-| 尚未映射 | **84** |
+| Tauri 桥已映射方法 | 183 |
+| 尚未映射 | **83** |
 | preload IPC invoke 通道 | 250 |
 | Tauri call 通道 | 174 |
 
@@ -25,7 +25,6 @@
 | 文件/诊断 | 3 |
 | 曲库/数据 | 2 |
 | 其他 | 2 |
-| 资源/音频/扩展 | 1 |
 
 ## 尚未映射的方法
 
@@ -79,7 +78,6 @@ onHotkeyAction
 onHotkeysState
 onScoreProgress
 onSpeedtest
-onStemProgress
 onTrayControl
 onUpdateSpeedtest
 onVoicebankProgress

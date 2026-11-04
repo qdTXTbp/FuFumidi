@@ -145,6 +145,7 @@ export function installTauriBridge() {
     refine: (cfg) => call('refine', { req: cfg }),
     onEngineLog: (cb) => listen('engine:log', cb),
     onEngineProgress: (cb) => listen('engine:progress', cb),
+    onStemProgress: (cb) => listen('engine:stem-progress', cb),
     onRefineLog: (cb) => listen('engine:refine:log', cb),
 
     // ---- 模型（资源中心）----

@@ -255,6 +255,19 @@ def separate(audio_path, out_dir, params=None, log_cb=None, progress_cb=None):
     chunk_size = int(params.get("chunk_size") or 0)
     if chunk_size <= 0:
         chunk_size = 926100  # 21s，BS-Roformer 常见默认
+    # pymss 用 config.audio.chunk_size 做 overlap 的校验上界；用户给的分块若比配置大，
+    # overlap_size（= chunk - chunk/N）就会越过它而报 invalid。先把 chunk 收敛到配置值。
+    _cfg_chunk = 0
+    try:
+        _cfg_path = params.get("config_path")
+        if _cfg_path and os.path.isfile(_cfg_path):
+            import yaml as _yaml
+            with open(_cfg_path, "r", encoding="utf-8") as _f: _cfg = _yaml.safe_load(_f) or {}
+            _cfg_chunk = int((_cfg.get("audio") or {}).get("chunk_size") or 0)
+    except Exception:
+        _cfg_chunk = 0
+    if _cfg_chunk > 0 and chunk_size > _cfg_chunk:
+        chunk_size = _cfg_chunk
     num_overlap = int(params.get("num_overlap") or 4)
     if num_overlap < 1:
         num_overlap = 1
@@ -329,6 +342,16 @@ def separate(audio_path, out_dir, params=None, log_cb=None, progress_cb=None):
                 "normalize": None if model_type == "vr" else normalize,
             },
         )
+        # CPU 上没有 autocast，半精度权重遇上 float32 输入会直接抛
+        # "Input type (float) and bias type (struct c10::Half) should be the same"。
+        # 权重是 half 但 pymss 只做了 .to(device)、没有按 use_amp 转回 float32；
+        # 在 CPU 上显式降回 float32，GPU 仍保留半精度/autocast。
+        if _sep_dev == "cpu":
+            try:
+                separator.model = separator.model.float()
+                _log(log_cb, "CPU 分离：权重已转为 float32")
+            except Exception as _e:
+                _log(log_cb, "CPU 权重转 float32 失败：" + str(_e))
         _log(log_cb, "模型加载完成，开始分离…")
 
         instruments = list(separator.config.training.instruments)

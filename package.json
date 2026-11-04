@@ -79,7 +79,7 @@
     "test:zip": "node --test scripts/test-zip-safe.mjs",
     "design:shoot": "node scripts/design/shoot.mjs",
     "tauri:smoke": "node scripts/tauri/smoke.mjs",
-    "tauri:build": "npm run build:ui && cargo build --manifest-path shells/tauri/Cargo.toml",
+    "tauri:build": "npm run build:ui && cargo build --manifest-path shells/tauri/Cargo.toml && node scripts/tauri/sync-release-engine.mjs",
     "tauri:release": "npm run build:ui && cd shells/tauri && tauri build --no-bundle",
     "tauri:bundle": "npm run build:ui && npm run tauri:stage && cd shells/tauri && tauri build",
     "tauri:stage": "node scripts/tauri/stage-bundle.mjs",

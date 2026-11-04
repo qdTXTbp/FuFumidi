@@ -126,3 +126,11 @@ cargo build --release --offline
 - 大小：**16,848,896 bytes**
 - SHA-256：`48f05c4d45f31db2e72130797d3d698735ba2e2cc624a9b46e0da105551c7b7b`
 - Authenticode：**NotSigned**（未签名；符合当前外部前置未采购的状态）
+
+## 10. 转录/分轨恢复（2026-11-04 夜间）
+
+- 根因 1：Tauri data_dir 忽略 Electron settings，落到空 AppData；已按 data_root_last/路径反推选择，release 实测 dataDir=E:/Midi/FuFumidi/FuFumidiData、models=13。
+- 根因 2：发布版 python 不含 torch，GPU 增强包未进 PYTHONPATH；apply_engine_env 已挂 data_root/gpu-enhancements/*/site-packages，release torch 2.9.1+cu128 可导入，basic-pitch 真实转录 ok（8.9s / 1 note）。
+- 根因 3：分离只认模型目录，漏 _configs；补 .th 与 yaml 匹配；CPU half→float32、chunk 收敛到 config；真实 6 轨分离 ok（4.2s）。
+- 智能分轨：stem_workflow.rs 真实分轨→逐 stem 转录→合并，release --stem-smoke ok、6 tracks；UI 已接 engine:stem-progress。
+- 无窗口验证：--stem-smoke 不创建窗口；仍不上传。

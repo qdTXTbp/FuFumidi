@@ -293,3 +293,11 @@ sf_workshop_list, sf_workshop_import, sf_workshop_delete, sf_workshop_open_dir, 
 - 更新链仍要自研（官方插件无增量、验签不兼容）。
 - Python 保留意味着包体不会降到 ≤250 MiB；本阶段只追求「Electron 被 Tauri 替代 + 非 ML Rust 化」。
 - **模型兼容是硬约束**：不得改模型格式/ID/路径/下载源；迁移只换宿主，不换推理。
+
+## 数据根 / GPU / 智能分轨（2026-11-04 修复）
+
+- data_dir 先读 Electron legacy settings：data_root → data_root_last（必须有数据）→ 安装旁 → settings 路径反推 → AppData，绝不认领空目录；实测 release dataDir=E:/Midi/FuFumidi/FuFumidiData、models=13。
+- apply_engine_env 把 data_root/gpu-enhancements/*/site-packages（含 torch）挂到 PYTHONPATH；无增强包显式 FUFUMIDI_DISABLE_GPU=1。
+- 分离解析补 .th 权重与 models/_configs 配置（6stems 自动匹配）；engine_msst CPU 把 half 权重转 float32，chunk 收敛到 config.audio.chunk_size。
+- 智能分轨：stem_workflow.rs 分轨→逐 stem worker 转录→stem_merge；失败回退整曲；engine:stem-progress 已接桥。
+- 无窗口 CLI：--model-check / --stem-smoke <audio> <out.mid>（真实 6 轨 smoke 通过）。
