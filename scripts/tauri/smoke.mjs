@@ -4,6 +4,7 @@ import { spawn, execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { encodeMidi } from "../../frontend/src/core/midi.js";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const ART = path.join(ROOT, "shells", "tauri", "artifacts");
 fs.mkdirSync(ART, { recursive: true });
@@ -17,7 +18,11 @@ const FIX = path.join(ART, "tmp-" + Date.now());
 fs.mkdirSync(DATA, { recursive: true });
 fs.mkdirSync(FIX, { recursive: true });
 const MIDI = path.join(FIX, "smoke.mid");
-fs.writeFileSync(MIDI, Buffer.from([0x4d, 0x54, 0x68, 0x64, 0, 0, 0, 6, 0, 0, 0, 1, 0x01, 0xe0]));
+const MIDI_BYTES = Array.from(encodeMidi([{ name: "Smoke Song", ch: 0, program: 0, notes: [
+  { start: 0, end: 480, midi: 60, vel: 100, ch: 0 },
+  { start: 480, end: 960, midi: 64, vel: 90, ch: 0 },
+], ccs: [], events: [] }], { division: 480 }));
+fs.writeFileSync(MIDI, Buffer.from(MIDI_BYTES));
 const OUT = path.join(FIX, "out.bin");
 const WAV = path.join(FIX, "tone.wav");
 const OUTMIDI = path.join(FIX, "tone.mid");
@@ -48,7 +53,7 @@ const send = (ws, id, method, params) => new Promise((resolve, reject) => {
 });
 const EXPR = [
   "(async () => {",
-  "  const P = " + JSON.stringify({ fix: FIX, midi: MIDI, out: OUT, wav: WAV, outmidi: OUTMIDI }) + ";",
+  "  const P = " + JSON.stringify({ fix: FIX, midi: MIDI, out: OUT, wav: WAV, outmidi: OUTMIDI, midiBytes: MIDI_BYTES }) + ";",
   "  const inv = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args || {});",
   "  const info = await inv('host_info');",
   "  const ver = await inv('app_version');",
@@ -71,6 +76,7 @@ const EXPR = [
   "  const plPut = await inv('db_playlists_put', { item: { id: 'smoke-pl', name: 'Smoke PL' } });",
   "  const pls = await inv('db_playlists_list');",
   "  const models = await inv('model_list');",
+  "  const uiSongPut = await inv('db_songs_put', { item: { id: 'smoke-ui', name: 'Smoke UI Song', kind: 'midi', size: P.midiBytes.length, time: Date.now(), dur: 1, fp: '', path: '', bytes: P.midiBytes } });",
   "  const files = await inv('list_midi_files', { dir: P.fix });",
   "  const toU8 = (b) => { if (b instanceof ArrayBuffer) return new Uint8Array(b); if (b && b.buffer) return new Uint8Array(b.buffer, b.byteOffset, b.byteLength); return new Uint8Array(b || []); };",
   "  const bin = await inv('read_binary', { p: P.midi });",
@@ -88,7 +94,7 @@ const EXPR = [
   "  return {",
   "    pages,",
   "    ui: { title: document.title, appChildren: (document.getElementById('app') || { childElementCount: -1 }).childElementCount, fuBridge: typeof window.fuBridge, tauri: typeof window.__TAURI__, hash: location.hash, textLen: (document.body.innerText || '').length },",
-  "    info, ver, py, eng, conv, worker, midiHeader, saved, loaded, set, got, songPut, songs, dbStat, songDel, songsAfter, plPut, pls, models, files, header, sb, backLen: back.length,",
+  "    info, ver, py, eng, conv, worker, midiHeader, saved, loaded, set, got, songPut, songs, dbStat, songDel, songsAfter, plPut, pls, models, uiSongPut, files, header, sb, backLen: back.length,",
   "  };",
   "})()",
 ].join("\n");
@@ -117,6 +123,30 @@ try {
   const ev = await send(ws, 3, "Runtime.evaluate", { expression: EXPR, awaitPromise: true, returnByValue: true });
   if (ev.exceptionDetails) throw new Error("JS exception: " + JSON.stringify(ev.exceptionDetails).slice(0, 500));
   const r = ev.result && ev.result.value;
+  // 迁移验收：写入曲库 → 真刷新 → 侧栏必须显示这首歌（证明 Tauri 版曲库持久化 + 显示都正常）
+  await send(ws, 500, "Page.reload", {});
+  let ready2 = false;
+  for (let i = 0; i < 100 && !ready2; i++) {
+    try {
+      const probe = await send(ws, 600 + i, "Runtime.evaluate", { expression: "typeof window.__TAURI_INTERNALS__ === 'object' && !!document.getElementById('app') && document.body.innerText.length > 50", returnByValue: true });
+      ready2 = !!(probe.result && probe.result.value);
+    } catch (e) {}
+    if (!ready2) await sleep(250);
+  }
+  if (!ready2) throw new Error("page not ready after reload");
+  // restoreSongs 是异步的：等曲库真正出现在界面上，别在加载中途采样
+  let libShown = false;
+  for (let i = 0; i < 60 && !libShown; i++) {
+    try {
+      const p = await send(ws, 800 + i, "Runtime.evaluate", { expression: "(document.body.innerText || '').indexOf('Smoke UI Song') >= 0", returnByValue: true });
+      libShown = !!(p.result && p.result.value);
+    } catch (e) {}
+    if (!libShown) await sleep(250);
+  }
+  const libEv = await send(ws, 700, "Runtime.evaluate", { expression: "(async () => { const inv = window.__TAURI_INTERNALS__.invoke; let songs = []; try { songs = await inv('db_songs_list'); } catch (e) {} let bridgeSongs = null; try { bridgeSongs = await window.fuBridge.dbSongsList(); } catch (e) { bridgeSongs = 'ERR:' + (e && e.message || e); } let storeSongs = -1, manual = -1; try { const va = document.querySelector('#app').__vue_app__; const pinia = va.config.globalProperties.$pinia; const store = pinia._s.get('app'); storeSongs = (store.songs || []).length; await store.restoreSongs(); manual = (store.songs || []).length; } catch (e) { manual = -2; } return { apiBridgeReady: window.__apiBridgeReady, apiBridgeKeys: window.__apiBridgeKeys, restoreBridgeKeys: window.__restoreBridgeKeys, hasName: (document.body.innerText || '').indexOf('Smoke UI Song') >= 0, appChildren: (document.getElementById('app') || { childElementCount: 0 }).childElementCount, textLen: (document.body.innerText || '').length, songIds: songs.map((s) => s.id), bridgeIds: Array.isArray(bridgeSongs) ? bridgeSongs.map((s) => s.id) : bridgeSongs, storeSongs, manual, checkMidi: typeof window.fuBridge.checkMidi, body: (document.body.innerText || '').slice(0, 300) }; })()", awaitPromise: true, returnByValue: true });
+  r.uiLibrary = libEv.result && libEv.result.value;
+  // 清理测试曲目，避免污染临时数据根
+  await send(ws, 701, "Runtime.evaluate", { expression: "(async () => { try { await window.__TAURI_INTERNALS__.invoke('db_songs_delete', { id: 'smoke-ui' }); } catch (e) {} return true; })()", awaitPromise: true, returnByValue: true });
   const shot = await send(ws, 4, "Page.captureScreenshot", { format: "png" });
   const shotPath = path.join(ART, "smoke.png");
   fs.writeFileSync(shotPath, Buffer.from(shot.data, "base64"));
@@ -137,6 +167,7 @@ try {
     saveBinary: !!r.sb && r.sb.ok === true && r.backLen === 4,
     ui: r.ui.fuBridge === "object" && r.ui.tauri === "object" && r.ui.appChildren > 0 && r.ui.textLen > 200,
     uiRoutes: Array.isArray(r.pages) && r.pages.length === 4 && r.pages.every((p) => p.textLen > 80 && p.appChildren > 0 && p.hash.indexOf(p.name) >= 0),
+    uiLibrary: !!r.uiLibrary && r.uiLibrary.hasName === true && r.uiLibrary.appChildren > 0 && r.uiSongPut === true,
   };
   const ok = Object.values(checks).every(Boolean);
   console.log(JSON.stringify({ ok, checks, result: r, screenshot: shotPath }, null, 2));

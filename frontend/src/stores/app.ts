@@ -512,6 +512,7 @@ export const useAppStore = defineStore('app', {
       this.importPick = null;
     },
     async restoreSongs() {
+      try { (window as any).__restoreBridgeKeys = bridge ? Object.keys(bridge).length : -1; } catch (e) {}
       // 取 SQLite 与 IndexedDB 的并集，而不是"有 SQLite 就只读 SQLite"。
       // 只读一边时，任一次写入没落库（历史上迁移就把 ArrayBuffer 写成了空字节数组），
       // 那部分曲目会从界面消失，但云同步是"IndexedDB 优先 + 补 SQLite"仍看得到它们，
@@ -521,8 +522,17 @@ export const useAppStore = defineStore('app', {
       for (const r of sqliteRecs) if (r && r.id) byId.set(String(r.id), r);
 
       const backfill: any[] = [];
-      // 只读主键做比对：直接 getAll() 会把整库 MIDI 字节都读进内存，几百首时开销很大
-      for (const k of await idbKeys(STORE_SONGS)) {
+      // 只读主键做比对：直接 getAll() 会把整库 MIDI 字节都读进内存，几百首时开销很大。
+      // Tauri/WebView2 下 IndexedDB 可能迟迟不返回（openDb 无超时）——不能让它挡住主库恢复；
+      // SQLite/Tauri DB 已是权威来源，IndexedDB 只是可选回填，1.5s 拿不到就跳过。
+      let idbKeyList: any[] = [];
+      try {
+        idbKeyList = await Promise.race([
+          idbKeys(STORE_SONGS),
+          new Promise<any[]>((resolve) => setTimeout(() => resolve([]), 1500)),
+        ]);
+      } catch (e) { idbKeyList = []; }
+      for (const k of idbKeyList) {
         if (k === undefined || k === null) continue;
         const id = String(k);
         const cur = byId.get(id);

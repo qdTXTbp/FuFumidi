@@ -78,7 +78,8 @@
     "push:api": "node scripts/api-push.mjs",
     "test:zip": "node --test scripts/test-zip-safe.mjs",
     "design:shoot": "node scripts/design/shoot.mjs",
-    "tauri:smoke": "node scripts/tauri/smoke.mjs"
+    "tauri:smoke": "node scripts/tauri/smoke.mjs",
+    "tauri:build": "npm run build:ui && cargo build --manifest-path shells/tauri/Cargo.toml"
   },
   "dependencies": {
     "adm-zip": "^0.6.0",

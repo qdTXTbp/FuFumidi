@@ -262,6 +262,11 @@
   命令总数 **21**；默认数据根优先安装目录旁 `FuFumidiData`，否则 `%APPDATA%/FuFumidi/FuFumidiData`
   （与 Electron 版布局一致，模型目录=数据根/models）。
 - smoke 增至 **16 项**全绿（新增 modelList：13 条、id 齐全、含 separate）；UI 路由 textLen 未回退。
+- **桥注入时序修复（重要）**：`api.bridge` 改为 live binding + `refreshBridge()`；
+  `bridge/install.ts` 作为 main.ts 第一个 import；新增 `npm run tauri:build`
+  （Tauri 把 renderer/dist 嵌进 exe，只 build:ui 不会更新壳）。
+- **uiLibrary 验收通过**：写入 `Smoke UI Song` → 真刷新 → storeSongs=1、曲库 1 首、
+  首页"继续上次的工作"出现该曲；smoke **17 项**全绿。
 - 页面数据仍缺 `presets_list/soundfont_list/dep_check` 等通道；
   下一步：T-115 继续补这些 UI 必需通道，T-117 继续 settings/song/task host 化，cancel/pause 与批量并发。
 

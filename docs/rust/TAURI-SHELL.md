@@ -68,6 +68,17 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 worker running=true seq=1；输出 MIDI 头 `MThd`。剩余：cancel/pause、UI 队列侧进度绑定、
 批量并发、模型列表等 host 通道（T-115 扩面）。
 
+### 3.2.1 关键修复：Tauri 桥注入时序 + 嵌入 renderer 的重建（2026-11-04）
+
+- **桥注入时序**：`api.ts` 原本用 `const bridge = window.fuBridge` 在模块求值时捕获；
+  Tauri 的 `__TAURI_INTERNALS__` 可能晚于 store 模块就绪，导致 `api.bridge` 永久 undefined
+  （曲库/设置读不到，界面显示 0 首）。修法：`api.bridge` 改为 **live binding** +
+  `refreshBridge()`；`bridge/install.ts` 作为 main.ts 第一个 import 先装桥，main.ts 再刷新一次。
+- **Tauri 会把 renderer/dist 嵌入 exe**：只跑 `npm run build:ui` 不会更新壳。
+  新增 `npm run tauri:build`（build:ui + cargo build），避免"前端改了、Tauri 里还是旧的"。
+- 修复后 smoke 实测：`apiBridgeReady=true / apiBridgeKeys=71`、`restoreBridgeKeys=71`、
+  `storeSongs=1`、页面出现 `Smoke UI Song`、曲库显示 **1 首**、首页"继续上次的工作"出现该曲。
+
 ### 3.3 曲库 JSON store + UI 路由冒烟（2026-11-04）
 
 - **数据根对齐**：默认先找安装目录旁的 `FuFumidiData`（存在即用），否则 `%APPDATA%/FuFumidi/FuFumidiData`；
@@ -84,8 +95,9 @@ worker running=true seq=1；输出 MIDI 头 `MThd`。剩余：cancel/pause、UI 
 **冒烟命令**：`npm run tauri:smoke`（`scripts/tauri/smoke.mjs`）：
 
 - 启动真实壳 + WebView2 CDP（`--remote-debugging-port`）；
-- 断言 **16 项全绿**：host / engineProbe / convert / worker / dbSongs / dbPlaylists / **modelList** /
-  version / python / settings / kv / listMidi / readBinary / saveBinary / ui / uiRoutes；
+- 断言 **17 项全绿**：host / engineProbe / convert / worker / dbSongs / dbPlaylists / **modelList** /
+  version / python / settings / kv / listMidi / readBinary / saveBinary / ui / uiRoutes / **uiLibrary**；
+  `uiLibrary` = 写入曲库 → 真刷新 → 侧栏/首页出现该曲（storeSongs=1，曲库 1 首）；
 - UI 断言：title、#app 已挂载、`window.fuBridge` 与 `window.__TAURI__` 均为 object、正文 >200 字；
 - 实测输出：version 6.5.0-beta.1、Python 3.12.10、settings 42 往返、MIDI 头 `MThd`、字节 4 往返；
 - 截图：`shells/tauri/artifacts/smoke.png`（真实 UI）。

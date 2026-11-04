@@ -5,9 +5,18 @@
 
 import type { FuBridge } from './types/ipc';
 
-export const bridge = (window as any).fuBridge as FuBridge | undefined;
+// ★ 必须是 live binding：Tauri 桥在页面初始化后段才注入，本模块可能先被求值。
+//   若用 const 捕获，api.bridge 会永久 undefined（曲库/设置全读不到），所以由 refreshBridge() 更新。
+export let bridge = (window as any).fuBridge as FuBridge | undefined;
 
-export const isDesktop = !!bridge?.convert;
+export let isDesktop = !!bridge?.convert;
+
+/** 桥注入/重建后调用，刷新所有 import { bridge } 模块看到的 live binding。 */
+export function refreshBridge() {
+  bridge = (window as any).fuBridge as FuBridge | undefined;
+  isDesktop = !!bridge?.convert;
+  try { (window as any).__apiBridgeReady = !!bridge; (window as any).__apiBridgeKeys = bridge ? Object.keys(bridge).length : 0; } catch (e) {}
+}
 
 export const fuApi = bridge || ({} as FuBridge);
 
