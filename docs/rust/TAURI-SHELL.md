@@ -96,7 +96,7 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 | probe | 复用 engine_probe 的 music2midi.py probe（桥此前调 probe 缺失命令） | 与 engine_probe 共用实现；无独立单测 |
 | model_delete | 按模型 id 删除 models/<dest>（目录/文件 + .oudep/.parts/.tmp/.part 残留）；RVC 删除暂未迁移 | Rust 单测：muscriptor/small 删除、未知 id/RVC 拒绝 |
 | open_edit_guide / plugins_open_docs | 把 plugins/plugin-dev.html、renderer/edit-guide.html 复制到 dataRoot/temp/FuFumidi-doc 并用默认浏览器打开；打包时 stage 到 resources/docs | Rust 单测：两个 dev 源存在；不在测试中打开浏览器 |
-| refine | 调 engine/smart_midi.py refine（audio/midi/out/mode/stemBalance/窗口参数），逐行 emit engine:refine:log，解析 ###RESULT | Rust 单测：参数拼装；真实智能修正未在无头测试中跑（需要音频+MIDI 输入） |
+| refine | 调 engine/smart_midi.py refine（audio/midi/out/mode/stemBalance/窗口参数），逐行 emit engine:refine:log，解析 ###RESULT，stderr 尾部并入错误 | Rust 单测：参数拼装；真机引擎冒烟：合成 2s WAV + 2 音符 MIDI，2.32s 输出 76 字节 ###RESULT ok |
 | open_folder | 打开目录（仅目录） | 实际打开资源管理器不在无头会话触发 |
 | soundfont_list | 扫描 renderer/vendor/soundfonts + dataDir/soundfonts（sf2/sf3） | 开发树返回 GeneralUser.sf2 |
 | dep_check | Rust 启动 Python `deps.py check`，解析 `###RESULT` 的 groups | 返回 universal/piano/aria/muscriptor/separate/transkun 6 组 |

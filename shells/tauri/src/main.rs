@@ -597,6 +597,8 @@ fn run_refine(app: AppHandle, req: serde_json::Value) -> serde_json::Value {
         Ok(c) => c, Err(e) => return serde_json::json!({ "ok": false, "error": e.to_string() }),
     };
     let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let err_thread = stderr.map(|s| std::thread::spawn(move || { let mut buf = String::new(); let _ = BufReader::new(s).read_to_string(&mut buf); buf }));
     let mut result: Option<serde_json::Value> = None;
     if let Some(stdout) = stdout {
         for line in BufReader::new(stdout).lines().flatten() {
@@ -606,9 +608,11 @@ fn run_refine(app: AppHandle, req: serde_json::Value) -> serde_json::Value {
     }
     let status = child.wait();
     let ok = status.map(|s| s.success()).unwrap_or(false);
+    let err_text = err_thread.and_then(|t| t.join().ok()).unwrap_or_default();
+    let err_tail: String = err_text.chars().rev().take(400).collect::<String>().chars().rev().collect();
     match result {
-        Some(mut v) => { v["ok"] = serde_json::json!(ok && v.get("ok").and_then(|x| x.as_bool()).unwrap_or(true)); v["out"] = serde_json::json!(out); v }
-        None => serde_json::json!({ "ok": ok, "out": out, "error": if ok { "" } else { "refine failed" } }),
+        Some(mut v) => { v["ok"] = serde_json::json!(ok && v.get("ok").and_then(|x| x.as_bool()).unwrap_or(true)); v["out"] = serde_json::json!(out); if !ok { v["error"] = serde_json::json!(err_tail); } v }
+        None => serde_json::json!({ "ok": ok, "out": out, "error": if ok { "" } else { err_tail.as_str() } }),
     }
 }
 
