@@ -498,3 +498,5 @@
 - **2026-11-04 终验（当前源码）**：release build 通过（2m19s）；release `--self-check` 与 `--engine-self-check` 通过（真实 worker、warm=1、无窗口/残留）；隐藏全量 E2E **40/40**、test:ui **589/589**、typecheck/audit 0、cargo **102/102 + 1 ignored**。
 
 - **Tauri 命令注册审计**：新增 `scripts/tauri/handler-audit.mjs` + `npm run tauri:handler-audit`；修掉 `model_delete` 漏挂（modelDelete 桥调用会失败）；当前 **136/136** 注册。
+
+- **modelDelete 委托 RVC**：`model_delete_at` 遇到 `rvc:` 前缀时转 `rvc_remove_at`，通用模型列表删除 RVC 不再报“尚未迁移”；测试覆盖物理目录删除。

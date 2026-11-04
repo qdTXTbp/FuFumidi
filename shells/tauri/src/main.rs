@@ -1714,7 +1714,7 @@ fn model_artifact_path(root: &Path, id: &str) -> Option<PathBuf> {
 }
 
 fn model_delete_at(root: &Path, id: &str) -> serde_json::Value {
-    if id.starts_with("rvc:") { return serde_json::json!({ "ok": false, "error": "RVC 模型删除尚未迁移" }); }
+    if let Some(rvc_id) = id.strip_prefix("rvc:") { return rvc_remove_at(&root.join("rvc"), rvc_id); }
     let Some(p) = model_artifact_path(root, id) else { return serde_json::json!({ "ok": false, "error": "not found" }); };
     if !p.exists() { return serde_json::json!({ "ok": false, "error": "not found" }); }
     let res = if p.is_dir() { std::fs::remove_dir_all(&p) } else { std::fs::remove_file(&p) };

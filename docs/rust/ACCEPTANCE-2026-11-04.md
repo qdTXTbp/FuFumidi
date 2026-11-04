@@ -28,7 +28,7 @@
 | 文件关联冷启动 | 已做 | argv → pending → importFiles |
 | 第二实例文件/聚焦 | 已做（协议级） | TCP 127.0.0.1:47823；Builder 前退出；Rust 单测路径/FOCUS |
 | UTAU 声库 | 列表/OTO 读写/删除/导入 zip/导出目录/导出 zip | Rust 单测 + bridge |
-| RVC 模型 | 列表/删除/文件夹/文件/zip 导入/内置目录/probe | Rust 单测；probe 真实模型未跑 |
+| RVC 模型 | 列表/删除/文件夹/文件/zip 导入/内置目录/probe；通用 modelDelete 的 rvc: 前缀委托 RVC 删除 | Rust 单测；probe 真实模型未跑 |
 
 ## 3. 门禁结果（当前源码）
 
