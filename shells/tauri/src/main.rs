@@ -11,6 +11,7 @@
 //! list_midi_files / read_binary / save_binary + host_info / python_selfcheck / ping。
 
 use rusqlite::{params, Connection, OptionalExtension};
+use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
@@ -557,6 +558,78 @@ fn presets_restore() -> serde_json::Value {
 }
 
 fn midi_root() -> PathBuf { data_dir().join("midi") }
+
+fn sanitize_export_name(name: &str, ext: &str) -> String {
+    let mut stem0 = name;
+    if let Some((s, e)) = name.rsplit_once('.') {
+        if !e.contains('/') && !e.contains('\\') { stem0 = s; }
+    }
+    let mut base: String = stem0.chars().map(|c| match c {
+        '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+        c if (c as u32) < 32 => '_',
+        c => c,
+    }).collect();
+    base = base.split_whitespace().collect::<Vec<_>>().join(" ");
+    base = base.trim_end_matches(|c: char| c == '.' || c == ' ').to_string();
+    if base.is_empty() { base = "export".to_string(); }
+    if base.chars().count() > 120 { base = base.chars().take(120).collect(); }
+    let e: String = ext.trim_start_matches('.').chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+    let e = if e.is_empty() { "wav".to_string() } else { e.to_ascii_lowercase() };
+    format!("{base}.{e}")
+}
+
+fn write_export_at(dir: &Path, name: &str, ext: &str, bytes: &[u8], meta: &serde_json::Value, app_version: &str) -> serde_json::Value {
+    if bytes.is_empty() { return serde_json::json!({ "ok": false, "error": "没有可导出的音频数据" }); }
+    let _ = std::fs::create_dir_all(dir);
+    let file_name = sanitize_export_name(name, ext);
+    let target = dir.join(&file_name);
+    let tmp = target.with_extension(format!("{}.tmp", target.extension().and_then(|x| x.to_str()).unwrap_or("tmp")));
+    if let Err(e) = std::fs::write(&tmp, bytes) { return serde_json::json!({ "ok": false, "error": e.to_string() }); }
+    if let Err(e) = std::fs::rename(&tmp, &target) { let _ = std::fs::remove_file(&tmp); return serde_json::json!({ "ok": false, "error": e.to_string() }); }
+    let mut hasher = Sha256::new(); hasher.update(bytes); let hash = format!("{:x}", hasher.finalize());
+    let base = target.file_stem().and_then(|x| x.to_str()).unwrap_or("export");
+    let manifest_path = dir.join(format!("{base}.manifest.json"));
+    let manifest = serde_json::json!({
+        "format": "fufumidi-export", "version": 1,
+        "createdAt": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
+        "file": { "name": file_name, "size": bytes.len(), "sha256": hash, "path": target.display().to_string() },
+        "audio": {
+            "format": meta.get("format").and_then(|v| v.as_str()).unwrap_or("wav"),
+            "bitDepth": meta.get("bitDepth").cloned().unwrap_or(serde_json::json!(16)),
+            "sampleRate": meta.get("sampleRate").cloned().unwrap_or(serde_json::json!(44100)),
+            "channels": meta.get("channels").cloned().unwrap_or(serde_json::json!(2)),
+            "durationSec": meta.get("durationSec").cloned().unwrap_or(serde_json::Value::Null),
+            "lufs": meta.get("lufs").cloned().unwrap_or(serde_json::Value::Null),
+            "peakDb": meta.get("peakDb").cloned().unwrap_or(serde_json::Value::Null),
+            "targetLufs": meta.get("targetLufs").cloned().unwrap_or(serde_json::Value::Null)
+        },
+        "source": { "name": meta.get("sourceName").and_then(|v| v.as_str()).unwrap_or(""), "app": app_version }
+    });
+    let tmpm = manifest_path.with_extension("manifest.json.tmp");
+    let text = serde_json::to_string_pretty(&manifest).unwrap_or_else(|_| "{}".to_string());
+    if let Err(e) = std::fs::write(&tmpm, &text) { return serde_json::json!({ "ok": false, "error": e.to_string() }); }
+    if let Err(e) = std::fs::rename(&tmpm, &manifest_path) { let _ = std::fs::remove_file(&tmpm); return serde_json::json!({ "ok": false, "error": e.to_string() }); }
+    serde_json::json!({ "ok": true, "path": target.display().to_string(), "manifestPath": manifest_path.display().to_string(), "manifest": manifest })
+}
+
+#[tauri::command]
+fn export_audio(app: AppHandle, payload: serde_json::Value) -> serde_json::Value {
+    let bytes: Vec<u8> = payload.get("bytes").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_u64().map(|n| n as u8)).collect()).unwrap_or_default();
+    if bytes.is_empty() { return serde_json::json!({ "ok": false, "error": "没有可导出的音频数据" }); }
+    let ext = payload.get("ext").and_then(|v| v.as_str()).unwrap_or("wav");
+    let name = payload.get("name").and_then(|v| v.as_str()).unwrap_or("export");
+    let mut target = payload.get("targetPath").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    if target.is_empty() {
+        let picked = app.dialog().file().set_title("导出音频").set_file_name(sanitize_export_name(name, ext)).add_filter("音频", &[ext.trim_start_matches('.')]).blocking_save_file();
+        target = match picked.and_then(|p| p.into_path().ok()) { Some(p) => p.display().to_string(), None => return serde_json::json!({ "ok": false, "canceled": true }) };
+    }
+    let tp = PathBuf::from(&target);
+    let dir = tp.parent().map(|x| x.to_path_buf()).unwrap_or_else(data_dir);
+    let stem = tp.file_stem().and_then(|x| x.to_str()).unwrap_or(name);
+    let meta = payload.clone();
+    write_export_at(&dir, stem, ext, &bytes, &meta, env!("CARGO_PKG_VERSION"))
+}
+
 
 fn audio_duration_at(p: &str) -> serde_json::Value {
     let path = Path::new(p);
@@ -1881,7 +1954,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, db_kv_get, db_kv_set,
-            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, model_list,
+            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
@@ -1915,6 +1988,25 @@ mod check_midi_tests {
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    #[test]
+    fn export_audio_writes_manifest() {
+        let root = tmpdir("export-audio");
+        let bytes = vec![82u8, 73, 70, 70, 1, 2];
+        let meta = serde_json::json!({ "format": "wav", "sampleRate": 48000, "channels": 2, "durationSec": 1.5 });
+        let r = super::write_export_at(&root, "mix", "wav", &bytes, &meta, "test");
+        assert_eq!(r["ok"], true);
+        let p = r["path"].as_str().unwrap();
+        assert_eq!(std::fs::read(p).unwrap(), bytes);
+        let mp = r["manifestPath"].as_str().unwrap();
+        let m: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(mp).unwrap()).unwrap();
+        assert_eq!(m["format"], "fufumidi-export");
+        assert_eq!(m["file"]["sha256"].as_str().unwrap().len(), 64);
+        assert_eq!(m["audio"]["sampleRate"], 48000);
+        assert_eq!(super::sanitize_export_name("a:b/c", "wav"), "a_b_c.wav");
+        assert_eq!(super::write_export_at(&root, "empty", "wav", &[], &meta, "test")["ok"], false);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

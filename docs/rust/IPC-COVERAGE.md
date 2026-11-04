@@ -5,10 +5,10 @@
 | 指标 | 数值 |
 |---|---:|
 | preload 暴露方法 | 265 |
-| Tauri 桥已映射方法 | 118 |
-| 尚未映射 | **147** |
+| Tauri 桥已映射方法 | 119 |
+| 尚未映射 | **146** |
 | preload IPC invoke 通道 | 250 |
-| Tauri call 通道 | 110 |
+| Tauri call 通道 | 111 |
 
 ## 缺口分类
 
@@ -18,7 +18,7 @@
 | diffsinger | 19 |
 | utau/voicebank | 18 |
 | 模型/安装/平台 | 14 |
-| 导出/渲染 | 14 |
+| 导出/渲染 | 13 |
 | 资源/音频/扩展 | 12 |
 | rvc | 12 |
 | gpu/运行时增强 | 8 |
@@ -70,7 +70,6 @@ diffsingerUninstallRuntime
 diffsingerVocoders
 diffsingerVoicebankRegistry
 downloadUrl
-exportAudio
 exportDawproject
 exportScorePdfPages
 exportStemsZip

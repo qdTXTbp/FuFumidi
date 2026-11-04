@@ -344,6 +344,10 @@
 - **Tauri 音频时长**：`audio_duration`（WAV RIFF、FLAC STREAMINFO、MP3 逐帧扫描；其他格式明确
   unsupported，前端回退 decodeAudioData）；桥补 audioDuration；Rust 测试 WAV/FLAC/MP3/坏文件；
   命令总数 **73**，覆盖 118 方法/147 未映射（110 call）。
+- **Tauri 音频导出落盘**：`export_audio`（文件名清洗、原子写、sidecar manifest 含 SHA-256/格式/
+  采样率/时长；支持 targetPath 或保存对话框）；桥补 exportAudio；Rust 测试字节/manifest/清洗/空字节；
+  命令总数 **74**，覆盖 119 方法/146 未映射（111 call）。manifest 的 createdAt 暂为 Unix 秒，
+  与 Electron 的 ISO 字符串有差异，待后续统一。
 - **T-117 曲库/设置共享 Electron 数据（重要）**：Rust 用 rusqlite 直读/写
   `%APPDATA%/FuFumidi/fufumidi/fufumidi.sqlite`（songs/playlists/kv），设置优先读 legacy
   settings.json；只读验收实测 **1972 首真实曲目**、57 个设置键、侧栏「全部曲目 1972」正常；
