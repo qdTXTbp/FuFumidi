@@ -510,3 +510,5 @@
 - **handler-audit 已并入 npm run audit**：命令注册审计成为常规门禁，136/136。
 
 - **插件外链白名单**：`plugins_open_platform` 只接受站内相对路径（长度/空白/引号/尖括号回退 `/`），并补 installedList.dir；Rust 测试 6 组路径；cargo **112/112 + 1 ignored**。
+
+- **插件 manifest 离线缓存**：`plugins_catalog` 成功时写 `dataRoot/plugins-manifest-{ch}.json`；curl 失败/无网络时返回缓存并标 `cached:true`（保持 plugins/url/channel 形状）；Rust 测试不变，cargo **112/112 + 1 ignored**。

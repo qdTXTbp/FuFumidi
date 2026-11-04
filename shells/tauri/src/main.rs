@@ -1066,6 +1066,15 @@ async fn rvc_refresh_catalog() -> serde_json::Value {
 
 fn plugin_platform_base() -> String { std::env::var("FUFUMIDI_PLATFORM_URL").ok().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "https://platform.fufumidi.de5.net".to_string()).trim_end_matches('/').to_string() }
 
+fn plugin_catalog_cache_reply(mut v: serde_json::Value, url: &str) -> serde_json::Value {
+    if let Some(o) = v.as_object_mut() {
+        o.insert("ok".into(), serde_json::json!(true));
+        o.insert("url".into(), serde_json::json!(url));
+        o.insert("cached".into(), serde_json::json!(true));
+    }
+    v
+}
+
 fn plugin_catalog_from_json(body: &str, channel: &str, url: &str) -> serde_json::Value {
     match serde_json::from_str::<serde_json::Value>(body) {
         Ok(v) => serde_json::json!({
@@ -1103,11 +1112,21 @@ async fn plugins_catalog(channel: Option<String>) -> serde_json::Value {
     tauri::async_runtime::spawn_blocking(move || {
         let ch = if channel.as_deref() == Some("beta") { "beta" } else { "stable" };
         let url = format!("{}/api/store/manifest/{ch}", plugin_platform_base());
+        let cache = data_dir().join(format!("plugins-manifest-{ch}.json"));
+        let cached = || std::fs::read_to_string(&cache).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
         let out = match Command::new("curl.exe").args(["-L", "--silent", "--show-error", "--max-time", "15", "-H", "accept: application/json", &url]).output() {
-            Ok(o) => o, Err(e) => return oto_err(&format!("curl 不可用: {e}")),
+            Ok(o) => o, Err(e) => {
+                return cached().map(|v| plugin_catalog_cache_reply(v, &url)).unwrap_or_else(|| oto_err(&format!("curl 不可用且无缓存: {e}")));
+            }
         };
-        if !out.status.success() { return oto_err(&String::from_utf8_lossy(&out.stderr).chars().rev().take(400).collect::<String>().chars().rev().collect::<String>()); }
-        plugin_catalog_from_json(&String::from_utf8_lossy(&out.stdout), ch, &url)
+        if !out.status.success() {
+            return cached().map(|v| plugin_catalog_cache_reply(v, &url)).unwrap_or_else(|| oto_err(&String::from_utf8_lossy(&out.stderr).chars().rev().take(400).collect::<String>().chars().rev().collect::<String>()));
+        }
+        let body = String::from_utf8_lossy(&out.stdout).to_string();
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) {
+            let _ = std::fs::write(&cache, serde_json::to_string(&v).unwrap_or_default());
+        }
+        plugin_catalog_from_json(&body, ch, &url)
     }).await.unwrap_or_else(|e| oto_err(&e.to_string()))
 }
 
