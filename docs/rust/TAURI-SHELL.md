@@ -126,8 +126,11 @@ worker running=true seq=1；输出 MIDI 头 `MThd`。**P1 实测**：cargo test 
 Python 子进程 echo/取消/EOF/暖复用测试）、cargo build release 通过、`--self-check` 通过；未开窗。
 **P3 子集已做**：`_id` / `engine:log` / `engine:progress` 改用前端 `cfg.id`（无 id 时 `job-<seq>`），
 结果 id 同时接受字符串/数字；桥补 `onEngineProgress`；结果仍带数字 `workerSeq` 供诊断。
-剩余：T-118 P2（cap=1..4、`__slots`、GPU−1）、P3 的进度节流/UI 队列绑定、批量队列 UI；
-模型列表等 host 通道（T-115 扩面）。
+**P2 已做**：`WorkerPool::set_cap(1..=4)` 动态并发；`convert` 按 `__slots` 调容，
+GPU 环境（未设 `FUFUMIDI_DISABLE_GPU=1`）自动 −1，`FUFUMIDI_MAX_WORKERS` 可压低；
+`JobMap` 用前端 id 精确取消，cap>1 未知 id 不误杀；`engine_worker_status` 返回 cap/workers[]；
+缩容只回收空闲暖 worker，在途 job 不杀。默认 `__slots` 缺省仍 cap=1（与 P1 等价）。
+剩余：P3 进度节流/UI 队列绑定、队列迁移 UI；模型列表等 host 通道（T-115 扩面）。
 
 ### 3.1.1 Release 构建（T-119 第一步，2026-11-04）
 

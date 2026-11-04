@@ -12,6 +12,7 @@
 
 use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -3261,11 +3262,44 @@ fn save_binary(app: AppHandle, opts: serde_json::Value) -> serde_json::Value {
 
 /* ---------------- T-118：常驻 Python 推理 worker（stdin JSON / stdout ###LOG|###PROG|###RESULT） ---------------- */
 
-/// P1：生产路径不再自己持有 Option<Worker>，改用 worker_pool::WorkerPool（cap 固定 1）。
-/// pool 负责串行、取消、退出回收；seq 是跨 job 单调递增的请求号（结果/事件的 id 仍走它）。
+/// P1/P2：生产路径不再自己持有 Option<Worker>，改用 worker_pool::WorkerPool。
+/// P2 起 pool 的 cap 由每次请求的 `__slots`（GPU/MAX_WORKERS 修正后）动态设置；
+/// seq 仍是跨 job 单调递增的诊断请求号（结果/事件的 id 走前端 `cfg.id`，P3）。
 struct WorkerState {
     pool: Arc<worker_pool::WorkerPool>,
     seq: Arc<AtomicU64>,
+    /// 前端 job id（`cfg.id`，如 `batch7`）→ 池内 [worker_pool::JobId]。
+    /// cap>1 时取消必须按它精确命中，不能靠“唯一在途”猜。
+    jobs: JobMap,
+}
+
+/// 前端 job id → 池内 JobId 的共享表（key 已 trim；值由池单调分配）。
+type JobMap = Arc<Mutex<HashMap<String, worker_pool::JobId>>>;
+
+/// run_convert 的 job 登记凭据：登记后任何 return / panic 展开都由 Drop 清理映射。
+/// 同一前端 id 被并发的后一个请求复用时，只删属于自己 JobId 的那条，不误删后来者。
+struct JobRegistration {
+    jobs: JobMap,
+    key: String,
+    pool_id: worker_pool::JobId,
+}
+
+impl JobRegistration {
+    fn register(jobs: JobMap, key: String, pool_id: worker_pool::JobId) -> Self {
+        jobs.lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .insert(key.clone(), pool_id);
+        Self { jobs, key, pool_id }
+    }
+}
+
+impl Drop for JobRegistration {
+    fn drop(&mut self) {
+        let mut jobs = self.jobs.lock().unwrap_or_else(|err| err.into_inner());
+        if jobs.get(&self.key) == Some(&self.pool_id) {
+            jobs.remove(&self.key);
+        }
+    }
 }
 struct ZoomState(Arc<Mutex<f64>>);
 
@@ -3363,9 +3397,35 @@ fn pool_io_text(err: worker_pool::PoolError) -> String {
     }
 }
 
-/// 把一次转录请求交给池里的常驻 worker（cap=1，跨请求复用暖 worker）。
-/// 模型/参数契约与 Electron 路径一致（req 原样转发）；
-/// 进度/日志仍通过 Tauri 事件 engine:log / engine:progress 推给前端。
+/// 按一次请求 + 宿主环境计算并发上限（纯函数；env 由调用方注入，便于单测）。
+///
+/// 规则（与 Electron `engineWorkerConvert` 对齐）：
+/// 1. `__slots` clamp 1..=4，缺省/非法为 1；
+/// 2. `FUFUMIDI_DISABLE_GPU != "1"` 视为 GPU 环境：cap = max(1, slots - 1)；
+/// 3. `FUFUMIDI_MAX_WORKERS` 可继续压低（只降不升，自身 clamp 1..=4）。
+fn effective_cap(req: &serde_json::Value, env: impl Fn(&str) -> Option<String>) -> usize {
+    let slots = match req.get("__slots") {
+        Some(serde_json::Value::Number(n)) => n
+            .as_u64()
+            .map(|v| v as usize)
+            .or_else(|| n.as_f64().filter(|f| f.is_finite()).map(|f| f.trunc().max(0.0) as usize)),
+        Some(serde_json::Value::String(s)) => s.trim().parse::<usize>().ok(),
+        _ => None,
+    }
+    .unwrap_or(1)
+    .clamp(worker_pool::MIN_CAP, worker_pool::MAX_CAP);
+
+    let mut cap = slots;
+    if env("FUFUMIDI_DISABLE_GPU").as_deref() != Some("1") {
+        cap = cap.saturating_sub(1).max(worker_pool::MIN_CAP);
+    }
+    if let Some(max) = env("FUFUMIDI_MAX_WORKERS").and_then(|raw| raw.trim().parse::<usize>().ok()) {
+        cap = cap.min(max.clamp(worker_pool::MIN_CAP, worker_pool::MAX_CAP));
+    }
+    cap
+}
+
+/// 前端 job id：优先 `cfg.id`（P3 起事件/结果都用它），缺省退回 `job-<seq>`。
 fn job_event_id(req: &serde_json::Value, seq: u64) -> String {
     req.get("id").and_then(|v| v.as_str()).map(|s| s.trim()).filter(|s| !s.is_empty()).map(|s| s.to_string()).unwrap_or_else(|| format!("job-{seq}"))
 }
@@ -3378,8 +3438,19 @@ fn result_id_matches(v: &serde_json::Value, job_id: &str) -> bool {
     }
 }
 
-fn run_convert(pool: Arc<worker_pool::WorkerPool>, seq: Arc<AtomicU64>, app: AppHandle, req: serde_json::Value) -> serde_json::Value {
+/// 把一次转录请求交给池里的 worker（P2：按请求调 cap；跨请求复用暖 worker）。
+/// 模型/参数契约与 Electron 路径一致（req 原样转发）；
+/// 进度/日志仍通过 Tauri 事件 engine:log / engine:progress 推给前端。
+fn run_convert(
+    pool: Arc<worker_pool::WorkerPool>,
+    seq: Arc<AtomicU64>,
+    jobs: JobMap,
+    app: AppHandle,
+    req: serde_json::Value,
+) -> serde_json::Value {
     let started = std::time::Instant::now();
+    // P2：先按本次请求的 __slots/GPU/MAX_WORKERS 调池上限；只影响排队与暖池，不杀在途 job。
+    pool.set_cap(effective_cap(&req, |key| std::env::var(key).ok()));
     let lease = match pool.acquire(|_id, _cancel| spawn_worker()) {
         Ok(lease) => lease,
         Err(worker_pool::PoolError::Shutdown) => {
@@ -3402,6 +3473,9 @@ fn run_convert(pool: Arc<worker_pool::WorkerPool>, seq: Arc<AtomicU64>, app: App
     }
     let seq_id = next_worker_seq(lease.reused(), &seq);
     let job_id = job_event_id(&req, seq_id);
+    // P2 精确取消：acquire 之后登记前端 job id → 池内 JobId。
+    // 之后所有返回路径（含提前 return / panic）都由 _registration 的 Drop 清理。
+    let _registration = JobRegistration::register(Arc::clone(&jobs), job_id.clone(), lease.id());
     let mut payload = req;
     if let Some(o) = payload.as_object_mut() {
         o.insert("_id".to_string(), serde_json::json!(job_id));
@@ -3480,7 +3554,8 @@ fn run_convert(pool: Arc<worker_pool::WorkerPool>, seq: Arc<AtomicU64>, app: App
 async fn convert(state: State<'_, WorkerState>, app: AppHandle, req: serde_json::Value) -> Result<serde_json::Value, String> {
     let pool = state.pool.clone();
     let seq = state.seq.clone();
-    tauri::async_runtime::spawn_blocking(move || run_convert(pool, seq, app, req))
+    let jobs = state.jobs.clone();
+    tauri::async_runtime::spawn_blocking(move || run_convert(pool, seq, jobs, app, req))
         .await
         .map_err(|e| e.to_string())
 }
@@ -3506,16 +3581,22 @@ fn set_transcribe_pause(on: bool) -> serde_json::Value {
 #[tauri::command]
 fn probe() -> serde_json::Value { engine_probe() }
 
-/// 取消当前转录。
+/// 取消转录（P2：按前端 job id 精确映射到池内 JobId）。
 ///
-/// - id 能解析成池内 job id 时只取消该 job；
-/// - 其余（旧前端传 batchN / 'sepN'、smoke 传 'smoke-cancel'、已过期的数字）按 cap=1
-///   的兼容行为取消当前唯一在途 job —— 与旧实现“忽略 id、砍当前 worker”一致；
-/// - 没有在途 job 时明确返回 no running worker。
+/// 优先级：
+/// 1. `id` 在 [JobMap] 中命中 → 只取消该 job（cap>1 时不会误杀别的在途转换）；
+/// 2. 数字 id 命中池内 job → 取消该 job（兼容旧调用/诊断）；
+/// 3. 只有 **cap == 1 且唯一在途** 时才回退取消它 —— 兼容 smoke 的 `smoke-cancel`
+///    和旧前端“忽略 id、砍当前 worker”的行为；
+/// 4. 其余返回 no running worker：**cap>1 的未知 id 不猜、不误杀**。
 #[tauri::command]
 fn cancel(state: State<'_, WorkerState>, id: Option<String>) -> serde_json::Value {
     let status = state.pool.status();
-    let Some(job_id) = cancel_target(id.as_deref(), &status.workers) else {
+    let target = {
+        let jobs = state.jobs.lock().unwrap_or_else(|err| err.into_inner());
+        cancel_target(id.as_deref(), status.cap, &status.workers, &jobs)
+    };
+    let Some(job_id) = target else {
         return serde_json::json!({ "ok": false, "canceled": false, "error": "no running worker", "id": id });
     };
     let pid = status.workers.iter().find(|worker| worker.id == job_id).and_then(|worker| worker.pid);
@@ -3528,36 +3609,83 @@ fn cancel(state: State<'_, WorkerState>, id: Option<String>) -> serde_json::Valu
 
 /// cancel(id) 的目标选择（纯函数，单测覆盖，不启动真实 worker）。
 ///
-/// 数字 id 命中在途 job → 该 job；其余情况在 cap=1（唯一在途）下取消当前 job，
-/// 兼容 smoke 的 {"id":"smoke-cancel"}；没有在途 job → None。
-fn cancel_target(id: Option<&str>, workers: &[worker_pool::WorkerInfo]) -> Option<worker_pool::JobId> {
+/// 映射优先、数字 id 次之、**仅 cap=1** 才允许“唯一在途”回退；cap>1 的未知 id → None。
+fn cancel_target(
+    id: Option<&str>,
+    cap: usize,
+    workers: &[worker_pool::WorkerInfo],
+    jobs: &HashMap<String, worker_pool::JobId>,
+) -> Option<worker_pool::JobId> {
+    let key = id.map(str::trim).filter(|raw| !raw.is_empty());
+    if let Some(job_id) = key.and_then(|raw| jobs.get(raw)).copied() {
+        return Some(job_id);
+    }
     if workers.is_empty() {
         return None;
     }
-    if let Some(parsed) = id.and_then(|raw| raw.trim().parse::<u64>().ok()) {
+    if let Some(parsed) = key.and_then(|raw| raw.parse::<u64>().ok()) {
         if workers.iter().any(|worker| worker.id == parsed) {
             return Some(parsed);
         }
     }
-    if workers.len() == 1 {
-        Some(workers[0].id)
-    } else {
-        None
+    if cap == 1 && workers.len() == 1 {
+        return Some(workers[0].id);
     }
+    None
+}
+
+/// 运行时状态：旧字段（ok/running/pid/seq）保持不变，另加 cap 与 workers 明细。
+///
+/// 只读池的原子元数据 + job 映射，**不抢任何在途 worker 的槽锁**：
+/// convert 正阻塞在 read_line 时这里也能立即返回。
+fn worker_status_json(
+    status: &worker_pool::PoolStatus,
+    seq: u64,
+    jobs: &HashMap<String, worker_pool::JobId>,
+) -> serde_json::Value {
+    // 反向表：池内 JobId → 前端 job id（同一前端 id 并发复用时后登记者获胜）。
+    let mut by_pool: HashMap<worker_pool::JobId, &str> = HashMap::new();
+    for (front_id, pool_id) in jobs {
+        by_pool.insert(*pool_id, front_id.as_str());
+    }
+    let mut running: Vec<&worker_pool::WorkerInfo> = status.workers.iter().collect();
+    running.sort_by_key(|worker| worker.id);
+
+    let mut workers: Vec<serde_json::Value> = Vec::with_capacity(running.len() + status.warm_pids.len());
+    for worker in &running {
+        let slot = workers.len();
+        workers.push(serde_json::json!({
+            "slot": slot,
+            "pid": worker.pid,
+            "jobId": by_pool.get(&worker.id).copied(),
+            "busy": true,
+        }));
+    }
+    // 空闲暖 worker 也列出来（busy=false，jobId=null），否则 running=true 时 workers 会是空的。
+    for pid in &status.warm_pids {
+        let slot = workers.len();
+        workers.push(serde_json::json!({
+            "slot": slot,
+            "pid": pid,
+            "jobId": serde_json::Value::Null,
+            "busy": false,
+        }));
+    }
+
+    let running_now = !running.is_empty() || status.warm_alive;
+    if !running_now {
+        return serde_json::json!({ "ok": true, "running": false, "seq": 0, "cap": status.cap, "workers": workers });
+    }
+    let pid = running.iter().find_map(|worker| worker.pid).or(status.warm_pid);
+    serde_json::json!({ "ok": true, "running": true, "pid": pid, "seq": seq, "cap": status.cap, "workers": workers })
 }
 
 #[tauri::command]
 fn engine_worker_status(state: State<'_, WorkerState>) -> serde_json::Value {
     let status = state.pool.status();
     let seq = state.seq.load(Ordering::SeqCst);
-    if let Some(worker) = status.workers.first() {
-        return serde_json::json!({ "ok": true, "running": true, "pid": worker.pid, "seq": seq });
-    }
-    if status.warm_alive {
-        return serde_json::json!({ "ok": true, "running": true, "pid": status.warm_pid, "seq": seq });
-    }
-    // 无在途、无暖 worker：旧实现返回 seq 0（worker 已不在）。
-    serde_json::json!({ "ok": true, "running": false, "seq": 0 })
+    let jobs = state.jobs.lock().unwrap_or_else(|err| err.into_inner());
+    worker_status_json(&status, seq, &jobs)
 }
 
 
@@ -3567,8 +3695,10 @@ fn main() {
         return;
     }
     let state = WorkerState {
+        // P1 的 cap=1 默认保留；每次 convert 再按请求 __slots 调 set_cap（P2）。
         pool: Arc::new(worker_pool::WorkerPool::with_reuse(1).expect("worker pool cap=1")),
         seq: Arc::new(AtomicU64::new(0)),
+        jobs: Arc::new(Mutex::new(HashMap::new())),
     };
     let zoom_state = ZoomState(Arc::new(Mutex::new(1.0)));
     let update_preferred_state = UpdatePreferredState(Mutex::new(None));
@@ -3626,22 +3756,152 @@ mod check_midi_tests {
     }
 
     #[test]
-    fn cancel_target_handles_smoke_and_numeric_ids() {
+    fn cancel_target_prefers_job_map_and_only_guesses_at_cap_one() {
+        use std::collections::HashMap;
         let info = |id: u64| super::worker_pool::WorkerInfo {
             id,
             pid: Some(100 + id as u32),
             ready: true,
             canceled: false,
         };
-        assert_eq!(super::cancel_target(None, &[]), None);
-        assert_eq!(super::cancel_target(Some("smoke-cancel"), &[info(7)]), Some(7));
-        assert_eq!(super::cancel_target(Some("sep3"), &[info(7)]), Some(7));
-        assert_eq!(super::cancel_target(Some("7"), &[info(7)]), Some(7));
+        let no_jobs = HashMap::new();
+        assert_eq!(super::cancel_target(None, 1, &[], &no_jobs), None);
+        assert_eq!(super::cancel_target(Some("smoke-cancel"), 1, &[info(7)], &no_jobs), Some(7));
+        assert_eq!(super::cancel_target(Some("sep3"), 1, &[info(7)], &no_jobs), Some(7));
+        assert_eq!(super::cancel_target(Some("7"), 1, &[info(7)], &no_jobs), Some(7));
         // 过期/未知数字：cap=1 下回退唯一在途，与旧实现忽略 id 等价。
-        assert_eq!(super::cancel_target(Some("9"), &[info(7)]), Some(7));
-        // cap>1 时不猜目标（生产 cap 固定 1，这里只保证函数不误杀）。
-        assert_eq!(super::cancel_target(Some("nope"), &[info(1), info(2)]), None);
-        assert_eq!(super::cancel_target(Some("1"), &[info(1), info(2)]), Some(1));
+        assert_eq!(super::cancel_target(Some("9"), 1, &[info(7)], &no_jobs), Some(7));
+        // cap>1 未知 id 不猜目标，也不误杀唯一在途。
+        assert_eq!(super::cancel_target(Some("nope"), 4, &[info(1), info(2)], &no_jobs), None);
+        assert_eq!(super::cancel_target(Some("nope"), 4, &[info(7)], &no_jobs), None);
+        assert_eq!(super::cancel_target(None, 4, &[info(7)], &no_jobs), None);
+        assert_eq!(super::cancel_target(Some("1"), 4, &[info(1), info(2)], &no_jobs), Some(1));
+
+        // 前端 job id 精确映射优先：只命中自己，不误杀另一个在途转换。
+        let mut jobs = HashMap::new();
+        jobs.insert("batch7".to_string(), 2u64);
+        assert_eq!(super::cancel_target(Some("batch7"), 4, &[info(1), info(2)], &jobs), Some(2));
+        assert_eq!(super::cancel_target(Some("batch8"), 4, &[info(1), info(2)], &jobs), None);
+        // 映射优先于数字 id（同名字符串不会把池内 job 2 当目标）。
+        jobs.insert("2".to_string(), 1u64);
+        assert_eq!(super::cancel_target(Some("2"), 1, &[info(1), info(2)], &jobs), Some(1));
+    }
+
+    #[test]
+    fn effective_cap_matrix_clamps_gpu_and_max_workers() {
+        fn cap(req: serde_json::Value, env: &[(&str, &str)]) -> usize {
+            let map: std::collections::HashMap<String, String> =
+                env.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+            super::effective_cap(&req, |key: &str| map.get(key).cloned())
+        }
+        // 缺省 __slots=1；缺省视为 GPU，再减 1 后仍 >=1。
+        assert_eq!(cap(serde_json::json!({}), &[]), 1);
+        assert_eq!(cap(serde_json::json!({ "__slots": 1 }), &[]), 1);
+        // CPU（FUFUMIDI_DISABLE_GPU=1）用满 slots。
+        let cpu = [("FUFUMIDI_DISABLE_GPU", "1")];
+        assert_eq!(cap(serde_json::json!({ "__slots": 1 }), &cpu), 1);
+        assert_eq!(cap(serde_json::json!({ "__slots": 2 }), &cpu), 2);
+        assert_eq!(cap(serde_json::json!({ "__slots": 3 }), &cpu), 3);
+        assert_eq!(cap(serde_json::json!({ "__slots": 4 }), &cpu), 4);
+        // GPU 语义：cap = max(1, slots-1)（只有显式 "1" 才算禁用 GPU）。
+        assert_eq!(cap(serde_json::json!({ "__slots": 2 }), &[]), 1);
+        assert_eq!(cap(serde_json::json!({ "__slots": 3 }), &[]), 2);
+        assert_eq!(cap(serde_json::json!({ "__slots": 4 }), &[]), 3);
+        assert_eq!(cap(serde_json::json!({ "__slots": 4 }), &[("FUFUMIDI_DISABLE_GPU", "0")]), 3);
+        // __slots clamp 1..=4；字符串/非法/浮点都容错。
+        assert_eq!(cap(serde_json::json!({ "__slots": 0 }), &cpu), 1);
+        assert_eq!(cap(serde_json::json!({ "__slots": 9 }), &cpu), 4);
+        assert_eq!(cap(serde_json::json!({ "__slots": "3" }), &cpu), 3);
+        assert_eq!(cap(serde_json::json!({ "__slots": "abc" }), &cpu), 1);
+        assert_eq!(cap(serde_json::json!({ "__slots": -2 }), &cpu), 1);
+        assert_eq!(cap(serde_json::json!({ "__slots": 3.9 }), &cpu), 3);
+        assert_eq!(cap(serde_json::json!({ "__slots": null }), &cpu), 1);
+        // FUFUMIDI_MAX_WORKERS 只降不升。
+        assert_eq!(cap(serde_json::json!({ "__slots": 4 }), &[("FUFUMIDI_DISABLE_GPU", "1"), ("FUFUMIDI_MAX_WORKERS", "2")]), 2);
+        assert_eq!(cap(serde_json::json!({ "__slots": 4 }), &[("FUFUMIDI_MAX_WORKERS", "2")]), 2);
+        assert_eq!(cap(serde_json::json!({ "__slots": 1 }), &[("FUFUMIDI_DISABLE_GPU", "1"), ("FUFUMIDI_MAX_WORKERS", "4")]), 1);
+        assert_eq!(cap(serde_json::json!({ "__slots": 4 }), &[("FUFUMIDI_DISABLE_GPU", "1"), ("FUFUMIDI_MAX_WORKERS", "0")]), 1);
+        assert_eq!(cap(serde_json::json!({ "__slots": 4 }), &[("FUFUMIDI_DISABLE_GPU", "1"), ("FUFUMIDI_MAX_WORKERS", "bogus")]), 4);
+    }
+
+    #[test]
+    fn job_registration_cleans_up_on_drop() {
+        let jobs = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+        {
+            let _reg = super::JobRegistration::register(jobs.clone(), "batch7".to_string(), 11);
+            assert_eq!(jobs.lock().unwrap().get("batch7"), Some(&11));
+        }
+        assert!(jobs.lock().unwrap().is_empty(), "Drop must clear the mapping");
+        // 同一前端 id 后登记覆盖先登记：先登记的 Drop 不误删后来者。
+        let first = super::JobRegistration::register(jobs.clone(), "batch8".to_string(), 21);
+        let second = super::JobRegistration::register(jobs.clone(), "batch8".to_string(), 22);
+        drop(first);
+        assert_eq!(jobs.lock().unwrap().get("batch8"), Some(&22));
+        drop(second);
+        assert!(jobs.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn worker_status_payload_keeps_legacy_fields_and_lists_workers() {
+        use std::collections::HashMap;
+        let queued = super::worker_pool::PoolStatus {
+            cap: 2,
+            busy: 2,
+            workers: vec![
+                super::worker_pool::WorkerInfo { id: 12, pid: None, ready: false, canceled: false },
+                super::worker_pool::WorkerInfo { id: 11, pid: Some(101), ready: true, canceled: false },
+            ],
+            warm: 1,
+            warm_alive: true,
+            warm_pid: Some(201),
+            warm_pids: vec![201],
+            ..Default::default()
+        };
+        let mut jobs = HashMap::new();
+        jobs.insert("batch7".to_string(), 11u64);
+        let value = super::worker_status_json(&queued, 7, &jobs);
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["running"], true);
+        assert_eq!(value["pid"], 101);
+        assert_eq!(value["seq"], 7);
+        assert_eq!(value["cap"], 2);
+        let workers = value["workers"].as_array().expect("workers array");
+        assert_eq!(workers.len(), 3);
+        // 在途 job 按池内 JobId 排序；jobId 是前端 id（取消用的就是它）。
+        assert_eq!(workers[0]["slot"], 0);
+        assert_eq!(workers[0]["pid"], 101);
+        assert_eq!(workers[0]["jobId"], "batch7");
+        assert_eq!(workers[0]["busy"], true);
+        assert_eq!(workers[1]["slot"], 1);
+        assert_eq!(workers[1]["pid"], serde_json::Value::Null);
+        assert_eq!(workers[1]["jobId"], serde_json::Value::Null);
+        assert_eq!(workers[1]["busy"], true);
+        // 暖 worker 是 idle 槽：busy=false、jobId=null。
+        assert_eq!(workers[2]["slot"], 2);
+        assert_eq!(workers[2]["pid"], 201);
+        assert_eq!(workers[2]["jobId"], serde_json::Value::Null);
+        assert_eq!(workers[2]["busy"], false);
+
+        // 只有暖 worker 时旧字段 running 仍为 true；彻底空闲时 seq=0、workers 为空。
+        let idle = super::worker_pool::PoolStatus {
+            warm: 1,
+            warm_alive: true,
+            warm_pid: Some(301),
+            warm_pids: vec![301],
+            ..Default::default()
+        };
+        let value = super::worker_status_json(&idle, 9, &HashMap::new());
+        assert_eq!(value["running"], true);
+        assert_eq!(value["pid"], 301);
+        assert_eq!(value["seq"], 9);
+        assert_eq!(value["workers"].as_array().unwrap().len(), 1);
+        assert_eq!(value["workers"][0]["busy"], false);
+
+        let down = super::worker_pool::PoolStatus::default();
+        let value = super::worker_status_json(&down, 9, &HashMap::new());
+        assert_eq!(value["running"], false);
+        assert_eq!(value["seq"], 0);
+        assert_eq!(value["workers"].as_array().unwrap().len(), 0);
     }
 
 

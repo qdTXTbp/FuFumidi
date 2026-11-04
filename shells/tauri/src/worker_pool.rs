@@ -1,10 +1,12 @@
-//! T-118 worker 调度池：P0 落调度模块，P1 接生产单 worker。
+//! T-118 worker 调度池：P0 落调度模块，P1 接生产单 worker，P2 动态并发（1..=4）。
 //!
 //! - [WorkerProc] 抽象“一个可长驻的推理进程”；[ChildWorker] 是真实实现
 //!   （std::process::Child 的 stdin/stdout，Windows 上 CREATE_NO_WINDOW，stderr 丢弃防阻塞）；
 //! - [WorkerPool] 用 Mutex<PoolInner> + Condvar 管上限、排队、取消与退出；
 //! - [Lease] 是占槽凭据，Drop 一定归还槽位（panic 展开也走 Drop）；
-//! - 生产路径用 cap=1 + reuse：请求之间保留一个暖 worker，取消/崩溃后才重新 spawn。
+//! - 生产路径默认 cap=1 + reuse：请求之间保留一个暖 worker，取消/崩溃后才重新 spawn；
+//! - P2：[WorkerPool::set_cap] 按请求动态调容（clamp 1..=4）。缩容只回收**空闲暖 worker**，
+//!   在途 job 不打断；扩容立即唤醒等待者。生产每请求按 `__slots` / GPU / MAX_WORKERS 调它。
 //!
 //! 纪律（对应设计报告）：
 //! - 池锁内只碰 O(1) 元数据（计数、HashMap）；spawn / kill / read_line 一律在锁外；
@@ -157,7 +159,7 @@ pub struct WorkerInfo {
 }
 
 /// status() 的只读快照。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PoolStatus {
     pub cap: usize,
     pub busy: usize,
@@ -175,8 +177,10 @@ pub struct PoolStatus {
     pub warm: usize,
     /// 至少有一个暖 worker 仍存活（status 时 try_wait 探测）。
     pub warm_alive: bool,
-    /// 第一个暖 worker 的 pid（engine_worker_status 用）。
+    /// 第一个存活暖 worker 的 pid（engine_worker_status 用）。
     pub warm_pid: Option<u32>,
+    /// 所有存活暖 worker 的 pid（P2 status 的 workers 数组用；顺序 = 暖池顺序）。
+    pub warm_pids: Vec<u32>,
 }
 
 /// 多 worker 调度池。
@@ -491,7 +495,7 @@ impl WorkerPool {
     /// 只读快照。**不抢在途 worker 的锁**（否则 convert 阻塞读时会卡住 status），
     /// pid 来自 job 自己的 atomic；只有空闲暖 worker 才做一次非阻塞 try_wait。
     pub fn status(&self) -> PoolStatus {
-        let (cap, max_waiters, busy, waiting, peak_busy, peak_waiters, counters, shutdown, handles, warm, warm_alive, warm_pid) = {
+        let (cap, max_waiters, busy, waiting, peak_busy, peak_waiters, counters, shutdown, handles, warm, warm_alive, warm_pids) = {
             let mut inner = self.lock();
             let handles: Vec<(JobId, JobHandle)> = inner
                 .jobs
@@ -500,13 +504,11 @@ impl WorkerPool {
                 .collect();
             let warm = inner.warm.len();
             let mut warm_alive = false;
-            let mut first_warm_pid = None;
+            let mut warm_pids = Vec::new();
             for worker in inner.warm.iter_mut() {
-                if first_warm_pid.is_none() {
-                    first_warm_pid = Some(worker.pid());
-                }
                 if worker.try_wait().map(|status| status.is_none()).unwrap_or(true) {
                     warm_alive = true;
+                    warm_pids.push(worker.pid());
                 }
             }
             (
@@ -521,9 +523,10 @@ impl WorkerPool {
                 handles,
                 warm,
                 warm_alive,
-                first_warm_pid,
+                warm_pids,
             )
         };
+        let warm_pid = warm_pids.first().copied();
         let workers = handles
             .iter()
             .map(|(id, handle)| {
@@ -552,7 +555,36 @@ impl WorkerPool {
             warm,
             warm_alive,
             warm_pid,
+            warm_pids,
         }
+    }
+
+    /// 调整并发上限：clamp 到 [MIN_CAP, MAX_CAP]，返回实际生效的 cap。
+    ///
+    /// P2 语义：
+    /// - 只改元数据，**不打断在途 job**；缩容后新 job 会排队，直到 `in_flight` 降到新 cap 以下；
+    /// - 超出新 cap 的空闲暖 worker 在锁外 kill，避免留下多余 Python 进程；
+    /// - 扩容后 `notify_all` 唤醒等待者（等待条件 `in_flight < cap` 需要重新求值）。
+    pub fn set_cap(&self, cap: usize) -> usize {
+        let cap = cap.clamp(MIN_CAP, MAX_CAP);
+        let excess: Vec<Box<dyn WorkerProc>> = {
+            let mut inner = self.lock();
+            inner.cap = cap;
+            // warm 末尾是刚放回的 worker：保留最近使用的 cap 个，多出来的从头部取走。
+            let extra = inner.warm.len().saturating_sub(cap);
+            inner.warm.drain(..extra).collect()
+        };
+        let killed = excess.len();
+        // kill / drop 一律在池锁外：ChildWorker::drop 会 kill + wait，不能占着锁等进程退出。
+        for mut worker in excess {
+            let _ = worker.kill();
+            drop(worker);
+        }
+        if killed > 0 {
+            self.lock().counters.killed += killed;
+        }
+        self.cv.notify_all();
+        cap
     }
 
     /// spawn 失败/panic 时归还预留槽。
@@ -1567,6 +1599,166 @@ mod tests {
         assert_eq!(stats.lock().unwrap().killed, 0, "release only drops, it does not force-kill");
     }
 
+    /* ---------------- P2：动态 cap（set_cap / cap2 并发 / status 非阻塞） ---------------- */
+
+    #[test]
+    fn set_cap_clamps_and_updates_status() {
+        let pool = WorkerPool::with_limits(1, 4).unwrap();
+        assert_eq!(pool.set_cap(0), MIN_CAP);
+        assert_eq!(pool.status().cap, MIN_CAP);
+        assert_eq!(pool.set_cap(99), MAX_CAP);
+        assert_eq!(pool.status().cap, MAX_CAP);
+        assert_eq!(pool.set_cap(2), 2);
+        assert_eq!(pool.status().cap, 2);
+    }
+
+    #[test]
+    fn set_cap_kills_excess_warm_workers_outside_lock() {
+        let stats = shared();
+        let pool = WorkerPool::with_limits_reuse(3, 8, true).unwrap();
+        {
+            let _a = pool.acquire(mock_factory(Arc::clone(&stats), 4_000)).unwrap();
+            let _b = pool.acquire(mock_factory(Arc::clone(&stats), 4_100)).unwrap();
+            let _c = pool.acquire(mock_factory(Arc::clone(&stats), 4_200)).unwrap();
+            assert_eq!(stats.lock().unwrap().active, 3);
+        }
+        assert_eq!(pool.status().warm, 3, "three healthy workers should be warm");
+
+        assert_eq!(pool.set_cap(1), 1);
+        let status = pool.status();
+        assert_eq!(status.cap, 1);
+        assert_eq!(status.warm, 1, "excess warm workers must be trimmed");
+        assert_eq!(status.warm_pids.len(), 1);
+        let state = stats.lock().unwrap();
+        assert_eq!(state.killed, 2, "trimmed warm workers must be killed");
+        assert_eq!(state.active, 1);
+        drop(state);
+
+        pool.shutdown();
+    }
+
+    #[test]
+    fn set_cap_shrink_keeps_running_jobs() {
+        let stats = shared();
+        let pool = WorkerPool::with_limits_reuse(3, 8, true).unwrap();
+        let a = pool.acquire(mock_factory(Arc::clone(&stats), 4_300)).unwrap();
+        let b = pool.acquire(mock_factory(Arc::clone(&stats), 4_400)).unwrap();
+        let c = pool.acquire(mock_factory(Arc::clone(&stats), 4_500)).unwrap();
+        assert_eq!(stats.lock().unwrap().active, 3);
+
+        assert_eq!(pool.set_cap(1), 1);
+        assert_eq!(pool.status().busy, 3, "in-flight jobs keep their slots");
+        assert_eq!(stats.lock().unwrap().active, 3);
+        assert_eq!(stats.lock().unwrap().killed, 0, "set_cap must never kill running jobs");
+
+        // 三个在途 job 都还能正常读写（缩容只影响新 job 的排队）。
+        a.send("a").unwrap();
+        b.send("b").unwrap();
+        c.send("c").unwrap();
+        assert_eq!(stats.lock().unwrap().sent, vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+
+        drop(a);
+        drop(b);
+        drop(c);
+        let status = pool.status();
+        assert_eq!(status.busy, 0);
+        assert_eq!(status.warm, 1, "cap=1 keeps one warm worker after draining");
+        assert_eq!(stats.lock().unwrap().active, 1);
+        pool.shutdown();
+    }
+
+    #[test]
+    fn set_cap_expand_wakes_waiter() {
+        let stats = shared();
+        let pool = Arc::new(WorkerPool::with_limits(1, 4).unwrap());
+        let held = pool.acquire(mock_factory(Arc::clone(&stats), 4_600)).unwrap();
+        let (tx, rx) = mpsc::channel();
+        let waiter_pool = Arc::clone(&pool);
+        let waiter_stats = Arc::clone(&stats);
+        let waiter = thread::spawn(move || {
+            let outcome = waiter_pool
+                .acquire(mock_factory(waiter_stats, 4_700))
+                .map(|lease| lease.pid());
+            tx.send(outcome).unwrap();
+        });
+        wait_until("waiter registered before set_cap", || pool.status().waiting == 1);
+
+        assert_eq!(pool.set_cap(2), 2);
+        let acquired = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("set_cap must wake the waiter")
+            .expect("waiter should acquire after cap expands");
+        assert!(acquired.is_some());
+        waiter.join().unwrap();
+        assert_eq!(pool.status().cap, 2);
+        drop(held);
+        assert_eq!(pool.status().busy, 0);
+    }
+
+    #[test]
+    fn set_cap_two_runs_jobs_concurrently_and_cancel_is_isolated() {
+        let stats = shared();
+        let pool = WorkerPool::with_limits_reuse(1, 8, true).unwrap();
+        assert_eq!(pool.set_cap(2), 2, "P2 must allow two slots");
+
+        let lease_a = pool.acquire(mock_factory(Arc::clone(&stats), 4_800)).unwrap();
+        let lease_b = pool.acquire(mock_factory(Arc::clone(&stats), 4_900)).unwrap();
+        {
+            let state = stats.lock().unwrap();
+            assert_eq!(state.active, 2, "cap=2 must run two workers at the same time");
+            assert_eq!(state.max_active, 2);
+        }
+        let status = pool.status();
+        assert_eq!(status.cap, 2);
+        assert_eq!(status.busy, 2);
+        assert_eq!(status.workers.len(), 2);
+
+        // 取消其中一个：另一个必须完全不受影响。
+        let id_a = lease_a.id();
+        assert!(pool.cancel(id_a));
+        assert!(lease_a.is_canceled());
+        assert!(!lease_b.is_canceled());
+        assert!(matches!(lease_a.send("gone"), Err(PoolError::WorkerGone)));
+        lease_b.send("b-alive").unwrap();
+        assert!(stats.lock().unwrap().sent.iter().any(|line| line == "b-alive"));
+
+        drop(lease_a);
+        drop(lease_b);
+        let status = pool.status();
+        assert_eq!(status.busy, 0);
+        assert_eq!(status.canceled, 1);
+        assert_eq!(status.warm, 1, "only the surviving worker can be warmed");
+        let state = stats.lock().unwrap();
+        assert_eq!(state.killed, 1);
+        assert_eq!(state.canceled, 1);
+        assert_eq!(state.active, 1);
+        drop(state);
+        pool.shutdown();
+    }
+
+    #[test]
+    fn status_does_not_block_on_busy_worker_slot() {
+        let stats = shared();
+        let pool = WorkerPool::with_limits(1, 4).unwrap();
+        let lease = pool.acquire(mock_factory(Arc::clone(&stats), 5_000)).unwrap();
+        // 模拟 convert 正卡在 read_line：该 job 的 worker 槽锁被长时间持有。
+        let guard = lease.slot.lock().unwrap_or_else(PoisonError::into_inner);
+        let started = Instant::now();
+        let status = pool.status();
+        let elapsed = started.elapsed();
+        drop(guard);
+
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "status() must not wait for the in-flight worker slot (took {elapsed:?})"
+        );
+        assert_eq!(status.busy, 1);
+        assert_eq!(status.workers.len(), 1);
+        assert_eq!(status.workers[0].pid, lease.pid());
+        assert!(status.workers[0].ready);
+        drop(lease);
+    }
+
     /* ---------------- P1：真实 Python 子进程（无窗口、不加载模型） ---------------- */
 
     const REAL_ECHO_CODE: &str = r#"
@@ -1803,5 +1995,33 @@ if line:
         let status = pool.status();
         assert_eq!(status.warm, 0);
         assert_eq!(status.busy, 0);
+    }
+
+    #[test]
+    fn real_cap_two_workers_run_independently() {
+        if missing_python("real_cap_two_workers_run_independently") {
+            return;
+        }
+        let pool = WorkerPool::with_limits_reuse(2, 8, true).unwrap();
+        let lease_a = pool.acquire(real_echo_factory()).expect("first worker");
+        let lease_b = pool.acquire(real_echo_factory()).expect("second worker");
+        let pid_a = lease_a.pid().expect("first pid");
+        let pid_b = lease_b.pid().expect("second pid");
+        assert_ne!(pid_a, pid_b, "cap=2 must spawn two independent children");
+
+        // 两个子进程各有自己的 stdin/stdout：同时写入并各自读回，互不串线。
+        lease_a.send("alpha").unwrap();
+        lease_b.send("beta").unwrap();
+        let line_a = lease_a.read_line().unwrap().expect("alpha response");
+        let line_b = lease_b.read_line().unwrap().expect("beta response");
+        assert!(line_a.contains("alpha"));
+        assert!(line_b.contains("beta"));
+        assert_eq!(pool.status().busy, 2);
+
+        drop(lease_a);
+        drop(lease_b);
+        assert_eq!(pool.status().warm, 2, "both healthy children stay warm under cap=2");
+        pool.shutdown();
+        assert_eq!(pool.status().warm, 0);
     }
 }
