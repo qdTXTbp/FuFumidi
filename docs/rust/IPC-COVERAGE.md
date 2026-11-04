@@ -8,7 +8,7 @@
 | Tauri 桥已映射方法 | 167 |
 | 尚未映射 | **99** |
 | preload IPC invoke 通道 | 250 |
-| Tauri call 通道 | 161 |
+| Tauri call 通道 | 162 |
 
 ## 缺口分类
 

@@ -4367,6 +4367,24 @@ fn tasks_list(state: State<'_, WorkerState>) -> Vec<serde_json::Value> {
 }
 
 #[tauri::command]
+fn tasks_cancel(state: State<'_, WorkerState>, app: AppHandle, id: String) -> serde_json::Value {
+    let status = state.pool.status();
+    let target = {
+        let jobs = state.jobs.lock().unwrap_or_else(|e| e.into_inner());
+        cancel_target(Some(&id), status.cap, &status.workers, &jobs)
+    };
+    let canceled = target.map(|job| state.pool.cancel(job)).unwrap_or(false);
+    let mut list = state.tasks.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(t) = list.iter_mut().find(|t| t.get("id").and_then(|v| v.as_str()) == Some(id.as_str())) {
+        if canceled { t["status"] = serde_json::json!("cancelled"); t["finishedAt"] = serde_json::json!(unix_now_ms()); }
+    }
+    let snapshot = list.clone();
+    drop(list);
+    let _ = app.emit("tasks:update", serde_json::json!({ "tasks": snapshot }));
+    serde_json::json!({ "ok": canceled, "canceled": canceled })
+}
+
+#[tauri::command]
 fn tasks_clear_finished(state: State<'_, WorkerState>) -> serde_json::Value {
     let mut list = state.tasks.lock().unwrap_or_else(|e| e.into_inner());
     list.retain(|t| t.get("status").and_then(|v| v.as_str()) == Some("running"));
@@ -4700,7 +4718,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, update_sources, update_set_preferred_source, db_kv_get, db_kv_set,
-            tasks_list, tasks_clear_finished, db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, wallpaper_set_desktop, gpu_status, gpu_uninstall, plugins_list, plugins_rescan, plugins_set_enabled, plugins_installed_list, plugins_platform_info, plugins_catalog, plugins_open_platform, plugins_install_from_platform, plugins_confirm_install, plugins_cancel_install, plugins_open_dir, plugins_open_docs, open_edit_guide, sf_workshop_list, sf_workshop_import, sf_workshop_delete, sf_workshop_open_dir, model_list,
+            tasks_list, tasks_cancel, tasks_clear_finished, db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, wallpaper_set_desktop, gpu_status, gpu_uninstall, plugins_list, plugins_rescan, plugins_set_enabled, plugins_installed_list, plugins_platform_info, plugins_catalog, plugins_open_platform, plugins_install_from_platform, plugins_confirm_install, plugins_cancel_install, plugins_open_dir, plugins_open_docs, open_edit_guide, sf_workshop_list, sf_workshop_import, sf_workshop_delete, sf_workshop_open_dir, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,

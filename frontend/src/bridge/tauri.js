@@ -274,6 +274,7 @@ export function installTauriBridge() {
     tasks: {
       list: () => call('tasks_list'),
       clearFinished: () => call('tasks_clear_finished'),
+      cancel: (id) => call('tasks_cancel', { id }),
       onUpdate: (cb) => listen('tasks:update', cb),
     },
 
