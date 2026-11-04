@@ -127,3 +127,9 @@ Tauri 默认从 GitHub 下载 `nsis-3.13.zip`，本机直连超时。已把工�
 - 新增 `scripts/e2e/cases/video-webcodecs.mjs`：隐藏窗口内 VideoEncoder 配置 H.264 Annex B，编码 6 帧，要求 chunks/bytes > 0；
 - 隐藏全量 **41/41** 通过；
 - 覆盖渲染端编码能力（Electron/Chromium）；Tauri WebView2 内同一路径仍需真实窗口验证。
+
+## 16. 2026-11-04 156 命令 release（cover）
+
+- 移除 CoverJob 未使用 id 后，release 构建 2m20s、**0 warning**；
+- engine self-check：真实 worker / warm=1 / 无残留；
+- 含 cover 后端；真实 engine_cover.py 仍未跑。

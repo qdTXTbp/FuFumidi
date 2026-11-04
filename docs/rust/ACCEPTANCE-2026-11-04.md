@@ -40,10 +40,10 @@
 - `npm run audit`：0
 - `cargo test --offline`：**114 passed / 0 failed / 1 ignored**
 - `npm run tauri:handler-audit`：**156/156** 已注册，并已并入 `npm run audit`
-- release build：通过（150 命令，2m11s、0 warning，见 `TAURI-BUILD.md` §14）
+- release build：通过（156 命令，2m20s、0 warning，见 `TAURI-BUILD.md` §16）
 - `npm run tauri:video-smoke`：ok=true / 15827 bytes（合成 H.264+WAV 封装）
 - hidden `video-webcodecs`：VideoEncoder 实际编码 6 帧 H.264 Annex B，chunks/bytes > 0（Electron/Chromium；WebView2 未直接验证）
-- release `--self-check` / `--engine-self-check`：通过（143 命令源码）
+- release `--self-check` / `--engine-self-check`：通过（156 命令源码）
 
 ## 4. 仍需完成的重型缺口
 

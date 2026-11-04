@@ -1392,7 +1392,7 @@ print(json.dumps({{"ok": r.returncode == 0, "err": (r.stderr or b"").decode("utf
     }
 }
 
-struct CoverJob { id: String, child: std::process::Child }
+struct CoverJob { child: std::process::Child }
 struct CoverState(Arc<Mutex<Option<CoverJob>>>);
 static COVER_CANCELED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -1482,7 +1482,7 @@ fn cover_run(state: State<'_, CoverState>, app: AppHandle, opts: serde_json::Val
         Ok(c) => c, Err(e) => return oto_err(&e.to_string()),
     };
     let stdout = child.stdout.take();
-    *state.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(CoverJob { id: id.clone(), child });
+    *state.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(CoverJob { child });
     let shared = state.0.clone(); let app2 = app.clone(); let id2 = id.clone();
     std::thread::spawn(move || {
         let mut result: Option<serde_json::Value> = None;
