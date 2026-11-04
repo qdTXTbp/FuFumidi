@@ -25,7 +25,7 @@ import { timelineOfSong, iterBars, secOfTick } from '../core/timeline.js';
 import { claimPointer, isPrimaryPointer, releasePointer, penPressure, makeLongPress } from '../core/pointer.js';
 // P-011 第一批：单音符 add/delete/update 走增量命令，其余操作仍走整轨快照
 import { makeAddNotesCommand, makeDeleteNotesCommand, makeUpdateNotesCommand } from '../core/note_commands.js';
-import { makeAddCcsCommand, makeDeleteCcsCommand } from '../core/cc_commands.js';
+import { makeAddCcsCommand, makeDeleteCcsCommand, makeReplaceCcStateCommand, snapshotCcState } from '../core/cc_commands.js';
 
 const props = defineProps({
   tool: { type: String, default: 'select' },      // select | pencil | erase
@@ -1299,18 +1299,30 @@ function ccYToVal(y) {
   const H2 = CC_LANE_H;
   return clamp(Math.round((H2 - 4 - y) / (H2 - 12) * 127), 0, 127);
 }
+let ccDragBase = null;
 function ccDown(e) {
   if (!claimPointer(e)) return;              // 笔/单指：CC 泳道同样要挡掌侧与第二根手指
   const tr = curTrack(); if (!tr) return;
   const target = e.target === ccCanvas2.value ? props.cc2Number : props.ccNumber;
-  pushState('CC');
+  ccDragBase = snapshotCcState(tr);          // 拖拽结束才入栈；一次手势一条命令
   ccDrawing.value = true;
   ccLast.value = null;
   ccTarget.value = target;
   ccPaint(e);
 }
 function ccMove(e) { if (!isPrimaryPointer(e)) return; if (ccDrawing.value) ccPaint(e); }
-function ccUp(e) { releasePointer(e); ccDrawing.value = false; ccLast.value = null; }
+function ccUp(e) {
+  releasePointer(e);
+  ccDrawing.value = false;
+  ccLast.value = null;
+  const tr = curTrack();
+  const base = ccDragBase;
+  ccDragBase = null;
+  if (!tr || !base) return;
+  const after = snapshotCcState(tr);
+  if (JSON.stringify(after) === JSON.stringify(base)) return;
+  pushCommandEntry(makeReplaceCcStateCommand(tr, base, after, 'CC'), props.trackIndex, tr.notes.length);
+}
 const ccTarget = ref(props.ccNumber);
 function ccPaint(e) {
   const cv = e.target && e.target.tagName === 'CANVAS' ? e.target : ccCanvas.value;

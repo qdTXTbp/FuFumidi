@@ -55,3 +55,28 @@ export function makeDeleteCcsCommand(track, captures, label = '删除控制器')
     },
   };
 }
+
+/** CC/PB 拖拽的轻量状态快照（只含 ccs/events，不含整轨音符）。 */
+export function snapshotCcState(track) {
+  return {
+    ccs: (track && Array.isArray(track.ccs) ? track.ccs : []).map((c) => ({ ...c })),
+    events: (track && Array.isArray(track.events) ? track.events : []).map((e) => ({ ...e })),
+  };
+}
+/** 整段 CC 拖拽一条命令：undo/redo 整体替换 ccs/events（CC 数量小，比逐点 diff 稳）。 */
+export function makeReplaceCcStateCommand(track, before, after, label = 'CC') {
+  const b = snapshotCcState(before);
+  const a = snapshotCcState(after);
+  const size = JSON.stringify(b).length + JSON.stringify(a).length;
+  const apply = (st) => {
+    track.ccs = (st.ccs || []).map((c) => ({ ...c }));
+    track.events = (st.events || []).map((e) => ({ ...e }));
+  };
+  return {
+    label,
+    kind: 'command',
+    bytes: 32 + size,
+    undo() { apply(b); },
+    redo() { apply(a); },
+  };
+}

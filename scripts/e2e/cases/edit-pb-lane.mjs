@@ -31,6 +31,15 @@ export default async function (app) {
   app.assert(bends.length > 0, '写入了 bend 事件，数量 ' + bends.length);
   app.assert(bends.every((e) => e.val >= 0 && e.val <= 16383), '弯音值在 14bit 范围内');
   app.assert(bends.some((e) => e.val > 8192), '画在上部应产生正弯音（>8192）');
+  // P-011：拖拽结束才入栈；Ctrl+Z 应撤销整段，Ctrl+Shift+Z 应恢复
+  await app.key('Ctrl+Z');
+  await new Promise((r) => setTimeout(r, 200));
+  const afterUndo = JSON.parse(await app.eval("JSON.stringify((window.__fufumidiE2E.song().tracks[0].events || []).filter((e) => e.type === 'bend'))"));
+  app.assert(afterUndo.length === 0, '撤销后 bend 事件清零（实际 ' + afterUndo.length + '）');
+  await app.key('Ctrl+Shift+Z');
+  await new Promise((r) => setTimeout(r, 200));
+  const afterRedo = JSON.parse(await app.eval("JSON.stringify((window.__fufumidiE2E.song().tracks[0].events || []).filter((e) => e.type === 'bend'))"));
+  app.assert(afterRedo.length === bends.length, '重做后 bend 事件恢复（' + afterRedo.length + '/' + bends.length + '）');
   await app.screenshot('edit-pb-lane');
-  app.assert(true, '弯音泳道通过：' + bends.length + ' 个 bend 事件');
+  app.assert(true, '弯音泳道通过：' + bends.length + ' 个 bend 事件，撤销/重做正常');
 }
