@@ -2037,16 +2037,16 @@ function selectNotes(arr) {
 /* 列表编辑器保存：按选中顺序写回草稿值 */
 function applyDraft(arr) {
   const tr = curTrack(); if (!tr || !selection.size || !arr) return;
-  pushState('编辑');
   const sorted = [...selection].sort((a, b) => a.start - b.start);
-  sorted.forEach((n, i) => {
-    const d = arr[i]; if (!d) return;
-    n.start = Math.max(0, Math.round(d.start));
-    n.end = Math.max(n.start + 1, Math.round(d.end));
-    n.midi = clamp(Math.round(d.midi), 0, 127);
-    n.vel = clamp(Math.round(d.vel), 1, 127);
+  editNotesWithCommand(sorted, ['start', 'end', 'midi', 'vel'], '编辑', () => {
+    sorted.forEach((n, i) => {
+      const d = arr[i]; if (!d) return;
+      n.start = Math.max(0, Math.round(d.start));
+      n.end = Math.max(n.start + 1, Math.round(d.end));
+      n.midi = clamp(Math.round(d.midi), 0, 127);
+      n.vel = clamp(Math.round(d.vel), 1, 127);
+    });
   });
-  afterEdit();
 }
 /* ---------------- 参数化工具的实时预览（M2） ----------------
    预览期间**不碰撤销栈**：beginPreview 存一份「选中音符的字段基线」，
@@ -2086,16 +2086,19 @@ function applyPreviewNow(fn) {
 }
 function commitPreview() {
   if (!previewBase) return 0;
+  const tr = curTrack(); if (!tr) return 0;
+  const before = previewBase.map((b) => ({ start: b.start, end: b.end, midi: b.midi, vel: b.vel, muted: !!b.muted }));
   const after = previewBase.map((b) => ({ start: b.n.start, end: b.n.end, midi: b.n.midi, vel: b.n.vel, muted: !!b.n.muted }));
   restorePreviewBase();
-  pushState('编辑');                 // 存的是「预览之前」的轨道，撤销一次回到预览前
   previewBase.forEach((b, i) => {
     const a = after[i];
     b.n.start = a.start; b.n.end = a.end; b.n.midi = a.midi; b.n.vel = a.vel; b.n.muted = a.muted;
   });
   const n = previewBase.length;
+  const updates = previewBase.map((b, i) => ({ idx: tr.notes.indexOf(b.n), note: b.n, before: before[i], after: after[i] })).filter((u) => u.idx >= 0);
   previewBase = null;
   afterEdit();
+  if (updates.length) pushNoteCommand(() => makeUpdateNotesCommand(tr, updates, '编辑'), props.trackIndex, tr.notes.length);
   return n;
 }
 function cancelPreview() {

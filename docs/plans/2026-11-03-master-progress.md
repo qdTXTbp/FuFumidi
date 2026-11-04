@@ -319,7 +319,9 @@
   **第四批**：`pasteAt/duplicateSelected` 改走 add 命令，并按引用选中新音符（避免 afterEdit 排序后选错尾部）；步进输入也改走 add 命令。
   **第五批**：新增 `core/cc_commands.js`（CC 增/删命令，按引用定位）；`addPedal/delPedal` 改走命令 entry，
   E2E 覆盖踏板 undo/redo。CC 泳道拖拽仍走快照。
-  尚未完成：CC 泳道拖拽、预览提交仍走快照；历史面板行内回退、
+  **第六批**：`commitPreview` 改为一条 update 命令（预览前后字段 diff，撤销回预览前）；
+  `applyDraft` 列表编辑器批量写回也走 update 命令；E2E 覆盖预览提交与草稿写回的 undo/redo。
+  尚未完成：CC 泳道拖拽仍走快照；历史面板行内回退、
   与 `session.js` 应用级单栈合流未做。**仍不能宣称 P-011 整体完成。**
 - **Tauri check_midi 已补**：Rust 实现与 Electron 同语义（只认数据根 midi/ 内非空文件），
   桥补 `checkMidi`；Tauri 曲库自愈不再因缺命令而跳过。Rust 单测覆盖根内保留/缺失/根外路径。

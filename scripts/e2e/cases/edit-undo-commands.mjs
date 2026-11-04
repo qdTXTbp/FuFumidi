@@ -181,5 +181,35 @@ export default async function (app) {
   await new Promise((r) => setTimeout(r, 150));
   if (await app.eval("((" + S + ".tracks[0].ccs) || []).length") !== ccBase + 2) throw new Error('delPedal undo 未恢复 CC');
 
+  // 实时预览提交：commitPreview 必须一条 update 命令，撤销回预览前
+  await clear();
+  await app.eval("(" + E + ".selectAll(), true)");
+  const prevBefore = await app.eval("(" + S + ".tracks[0].notes || []).map(n => n.vel)");
+  await app.eval("(" + E + ".beginPreview(), true)");
+  await app.eval("(" + E + ".applyPreviewNow(notes => { notes.forEach(n => { n.vel = 45; }); return notes.length; }), true)");
+  await app.eval("(" + E + ".commitPreview(), true)");
+  await new Promise((r) => setTimeout(r, 150));
+  const prevAfter = await app.eval("(" + S + ".tracks[0].notes || []).map(n => n.vel)");
+  if (!prevAfter.every((v) => v === 45)) throw new Error('commitPreview 未提交 vel=45: ' + JSON.stringify(prevAfter));
+  await app.key('Ctrl+Z');
+  await new Promise((r) => setTimeout(r, 150));
+  const prevUndo = await app.eval("(" + S + ".tracks[0].notes || []).map(n => n.vel)");
+  if (JSON.stringify(prevUndo) !== JSON.stringify(prevBefore)) throw new Error('commitPreview undo 未恢复');
+  await app.key('Ctrl+Shift+Z');
+  await new Promise((r) => setTimeout(r, 150));
+  if (!(await app.eval("(" + S + ".tracks[0].notes || []).every(n => n.vel === 45)"))) throw new Error('commitPreview redo 未恢复');
+
+  // 草稿批量写回也走 update 命令
+  await clear();
+  await app.eval("(" + E + ".selectAll(), true)");
+  const draftBefore = await app.eval("(" + S + ".tracks[0].notes || []).map(n => n.vel)");
+  await app.eval("(() => { const ed = " + E + ", arr = ed.selNotes(); arr.forEach(d => { d.vel = 51; }); return ed.applyDraft(arr); })()");
+  await new Promise((r) => setTimeout(r, 150));
+  if (!(await app.eval("(" + S + ".tracks[0].notes || []).every(n => n.vel === 51)"))) throw new Error('applyDraft 未批量写回');
+  await app.key('Ctrl+Z');
+  await new Promise((r) => setTimeout(r, 150));
+  const draftUndo = await app.eval("(" + S + ".tracks[0].notes || []).map(n => n.vel)");
+  if (JSON.stringify(draftUndo) !== JSON.stringify(draftBefore)) throw new Error('applyDraft undo 未恢复');
+
   // 隐藏窗口下 Page.captureScreenshot 偶发超时；本用例的验收证据是上面的状态断言，不依赖截图。
 }
