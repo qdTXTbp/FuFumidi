@@ -532,3 +532,5 @@
 - **146 命令 release（任务取消后）**：2m16s、0 warning；host/engine self-check 通过；无窗口/残留。
 
 - **任务中心后全量 E2E**：隐藏全量 **40/40**；任务中心/tasks_cancel 不改变现有前端流程。
+
+- **150 命令 release（视频导出）**：2m11s、0 warning；host/engine self-check 通过；bundled imageio_ffmpeg 可用（ffmpeg 7.1）；真实 H.264 编码未跑。
