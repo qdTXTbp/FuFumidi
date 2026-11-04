@@ -501,3 +501,5 @@
 - **Tauri 命令注册审计**：新增 `scripts/tauri/handler-audit.mjs` + `npm run tauri:handler-audit`；修掉 `model_delete` 漏挂（modelDelete 桥调用会失败）；当前 **136/136** 注册。
 
 - **modelDelete 委托 RVC**：`model_delete_at` 遇到 `rvc:` 前缀时转 `rvc_remove_at`，通用模型列表删除 RVC 不再报“尚未迁移”；测试覆盖物理目录删除。
+
+- **修复单实例监听未挂**：编译警告显示 `start_single_instance_listener` 未使用——此前 `.setup` 仍是 `|_app|`，首实例只 bind 不 accept，第二实例转发会丢。现 `.setup(move |app| ...)` 真正启动 accept 线程；build 无 unused 警告。

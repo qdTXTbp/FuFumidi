@@ -4419,7 +4419,8 @@ fn main() {
             convert, probe, refine, cancel, set_transcribe_pause, engine_worker_status,
             utau_list_voicebanks, voicebank_unified, utau_read_oto, utau_save_oto, utau_delete_voicebank, utau_import_voicebank_zip, utau_export_voicebank, utau_export_voicebank_zip, model_delete, take_pending_open_file, rvc_list, rvc_remove, rvc_pick_folder, rvc_pick_files, rvc_pick_zip, rvc_import_folder, rvc_import_files, rvc_import_zip, rvc_probe, rvc_catalog, rvc_open_catalog_page, rvc_refresh_catalog
         ])
-        .setup(|_app| {
+        .setup(move |app| {
+            if let Some(listener) = listener { start_single_instance_listener(listener, app.handle().clone()); }
             println!("[fufumidi-shell] {}", serde_json::to_string(&host_info_json()).unwrap_or_default());
             Ok(())
         })

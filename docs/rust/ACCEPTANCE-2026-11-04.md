@@ -26,7 +26,7 @@
 | 编辑页撤销/历史 | P-011 已做 | session 单栈；隐藏 E2E 39→40 |
 | 编辑↔编排跨页撤销 | P-011 已做 | session 同 doc 引擎；E2E edit-arrange-session |
 | 文件关联冷启动 | 已做 | argv → pending → importFiles |
-| 第二实例文件/聚焦 | 已做（协议级） | TCP 127.0.0.1:47823；Builder 前退出；Rust 单测路径/FOCUS |
+| 第二实例文件/聚焦 | 已做（协议级，监听已真实挂到 setup） | TCP 127.0.0.1:47823；Builder 前退出；Rust 单测路径/FOCUS；真实双实例窗口未跑 |
 | UTAU 声库 | 列表/OTO 读写/删除/导入 zip/导出目录/导出 zip | Rust 单测 + bridge |
 | RVC 模型 | 列表/删除/文件夹/文件/zip 导入/内置目录/probe；通用 modelDelete 的 rvc: 前缀委托 RVC 删除 | Rust 单测；probe 真实模型未跑 |
 
