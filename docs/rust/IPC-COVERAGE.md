@@ -5,10 +5,10 @@
 | 指标 | 数值 |
 |---|---:|
 | preload 暴露方法 | 265 |
-| Tauri 桥已映射方法 | 165 |
-| 尚未映射 | **101** |
+| Tauri 桥已映射方法 | 167 |
+| 尚未映射 | **99** |
 | preload IPC invoke 通道 | 250 |
-| Tauri call 通道 | 159 |
+| Tauri call 通道 | 161 |
 
 ## 缺口分类
 
@@ -20,18 +20,17 @@
 | 导出/渲染 | 11 |
 | utau/voicebank | 10 |
 | gpu/运行时增强 | 8 |
-| 事件/窗口 | 7 |
 | 模型/安装/平台 | 6 |
+| 事件/窗口 | 6 |
 | 更新/测速 | 4 |
-| 其他 | 3 |
 | 文件/诊断 | 3 |
 | 曲库/数据 | 2 |
+| 其他 | 2 |
 
 ## 尚未映射的方法
 
 ```text
 appUninstall
-clearFinished
 coverCancel
 coverOpen
 coverPickAudio
@@ -92,7 +91,6 @@ onSeparateProgress
 onSpeedtest
 onStemProgress
 onTrayControl
-onUpdate
 onUpdateSpeedtest
 onVoicebankProgress
 openFolder

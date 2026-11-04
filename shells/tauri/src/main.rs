@@ -4159,6 +4159,7 @@ struct WorkerState {
     /// 前端 job id（`cfg.id`，如 `batch7`）→ 池内 [worker_pool::JobId]。
     /// cap>1 时取消必须按它精确命中，不能靠“唯一在途”猜。
     jobs: JobMap,
+    tasks: Arc<Mutex<Vec<serde_json::Value>>>,
 }
 
 /// 前端 job id → 池内 JobId 的共享表（key 已 trim；值由池单调分配）。
@@ -4329,6 +4330,49 @@ fn result_id_matches(v: &serde_json::Value, job_id: &str) -> bool {
 /// 把一次转录请求交给池里的 worker（P2：按请求调 cap；跨请求复用暖 worker）。
 /// 模型/参数契约与 Electron 路径一致（req 原样转发）；
 /// 进度/日志仍通过 Tauri 事件 engine:log / engine:progress 推给前端。
+struct ConvertTask {
+    tasks: Arc<Mutex<Vec<serde_json::Value>>>,
+    app: AppHandle,
+    id: String,
+}
+
+impl ConvertTask {
+    fn start(tasks: Arc<Mutex<Vec<serde_json::Value>>>, app: AppHandle, id: String, title: String) -> Self {
+        if let Ok(mut list) = tasks.lock() {
+            list.retain(|t| t.get("id").and_then(|v| v.as_str()) != Some(id.as_str()));
+            list.push(serde_json::json!({ "id": id, "kind": "transcribe", "title": title, "status": "running", "startedAt": unix_now_ms() }));
+            let _ = app.emit("tasks:update", serde_json::json!({ "tasks": list.clone() }));
+        }
+        Self { tasks, app, id }
+    }
+}
+
+impl Drop for ConvertTask {
+    fn drop(&mut self) {
+        if let Ok(mut list) = self.tasks.lock() {
+            if let Some(t) = list.iter_mut().find(|t| t.get("id").and_then(|v| v.as_str()) == Some(self.id.as_str())) {
+                t["status"] = serde_json::json!("done");
+                t["finishedAt"] = serde_json::json!(unix_now_ms());
+            }
+            let _ = self.app.emit("tasks:update", serde_json::json!({ "tasks": list.clone() }));
+        }
+    }
+}
+
+fn unix_now_ms() -> u64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0) }
+
+#[tauri::command]
+fn tasks_list(state: State<'_, WorkerState>) -> Vec<serde_json::Value> {
+    state.tasks.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+#[tauri::command]
+fn tasks_clear_finished(state: State<'_, WorkerState>) -> serde_json::Value {
+    let mut list = state.tasks.lock().unwrap_or_else(|e| e.into_inner());
+    list.retain(|t| t.get("status").and_then(|v| v.as_str()) == Some("running"));
+    serde_json::json!({ "ok": true, "tasks": list.clone() })
+}
+
 fn run_convert(
     pool: Arc<worker_pool::WorkerPool>,
     seq: Arc<AtomicU64>,
@@ -4632,6 +4676,7 @@ fn main() {
         pool: Arc::new(worker_pool::WorkerPool::with_reuse(1).expect("worker pool cap=1")),
         seq: Arc::new(AtomicU64::new(0)),
         jobs: Arc::new(Mutex::new(HashMap::new())),
+        tasks: Arc::new(Mutex::new(Vec::new())),
     };
     let open_arg = pending_open_from_args(std::env::args());
     let listener = TcpListener::bind(("127.0.0.1", SINGLE_INSTANCE_PORT)).ok();
@@ -4651,7 +4696,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, update_sources, update_set_preferred_source, db_kv_get, db_kv_set,
-            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, wallpaper_set_desktop, gpu_status, gpu_uninstall, plugins_list, plugins_rescan, plugins_set_enabled, plugins_installed_list, plugins_platform_info, plugins_catalog, plugins_open_platform, plugins_install_from_platform, plugins_confirm_install, plugins_cancel_install, plugins_open_dir, plugins_open_docs, open_edit_guide, sf_workshop_list, sf_workshop_import, sf_workshop_delete, sf_workshop_open_dir, model_list,
+            tasks_list, tasks_clear_finished, db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, wallpaper_set_desktop, gpu_status, gpu_uninstall, plugins_list, plugins_rescan, plugins_set_enabled, plugins_installed_list, plugins_platform_info, plugins_catalog, plugins_open_platform, plugins_install_from_platform, plugins_confirm_install, plugins_cancel_install, plugins_open_dir, plugins_open_docs, open_edit_guide, sf_workshop_list, sf_workshop_import, sf_workshop_delete, sf_workshop_open_dir, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,

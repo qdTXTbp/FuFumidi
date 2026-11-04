@@ -271,6 +271,12 @@ export function installTauriBridge() {
       onDownloadProgress: (cb) => listen('wallpaper:downloadProgress', cb),
     },
 
+    tasks: {
+      list: () => call('tasks_list'),
+      clearFinished: () => call('tasks_clear_finished'),
+      onUpdate: (cb) => listen('tasks:update', cb),
+    },
+
     // ---- 持久化（JSON 文件）----
     dbStatus: () => call('db_status'),
     dbKvGet: (key) => call('db_kv_get', { key }),

@@ -90,6 +90,7 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 | wallpaper_list / add_local / remove_local / scan_folder | 本地动态壁纸（Electron legacy wallpapers/，.ok 标记、mp4/webm/mov、删除校验 basename）；扫描文件夹（图片/视频，深度 3、≤600） | Rust 单测：添加/列表/删除、../ 拒绝、扫描过滤 txt/空文件 |
 | file_assoc | MIDI 文件关联开关：HKCU .mid/.midi → FuFumidi.MIDI，图标用 build/icon.ico（开发）或 exe | Rust 单测：开/关注册表命令计划；**测试不写注册表** |
 | 单实例 TCP 转发 | 首个实例 bind 127.0.0.1:47823 并起 accept 线程；后续实例连接后发 .mid 路径或 `__FOCUS__` 并**在 Builder 前退出**；首个实例 emit `open-file` 并聚焦窗口 | Rust 单测：路径/FOCUS 转发；真实双实例需窗口，未跑 |
+| tasks_list / tasks_clear_finished | convert 开始登记 transcribe 任务（id/kind/title/status/startedAt），RAII Drop 标 done/finishedAt 并 emit `tasks:update`；list 返回数组，clear 只留 running | 由 convert 生命周期驱动；无独立单测（worker/convert 测试覆盖） |
 | take_pending_open_file | 冷启动从 argv 取第一个存在的 .mid/.midi（跳过 -flag），读字节返回 {name,bytes} 并清空；App.vue 兜底主动取一次后 importFiles | Rust 单测：MID 选中/非 MID 跳过/缺失忽略 |
 | gpu_status / gpu_uninstall | 读取 dataRoot/gpu-enhancements 下 cuda/rocm/xpu；返回当前 Python、rocm 是否需 3.12；卸载删除对应目录 | Rust 单测（临时目录）：识别 cuda、卸载删除、非法类型拒绝；真实 Python 版本读取在测试中执行 |
 | wallpaper_set_desktop | 静态图片设为桌面：HKCU Desktop Wallpaper/WallpaperStyle/TileWallpaper + `rundll32 user32.dll,UpdatePerUserSystemParameters` | Rust 单测：注册表命令计划/路径；**测试不改真实桌面** |
@@ -240,17 +241,17 @@ GPU 环境（未设 `FUFUMIDI_DISABLE_GPU=1`）自动 −1，`FUFUMIDI_MAX_WORKE
 
 - `npm run tauri:coverage` / `node scripts/tauri/ipc-coverage.mjs --write`：
   只解析 preload 与 Tauri 桥的方法名，不启动窗口；
-- 当前：preload 265 方法 / Tauri **165** 方法 / **101 未映射**；preload invoke 250 / tauri call **159**；
+- 当前：preload 265 方法 / Tauri **167** 方法 / **99 未映射**；preload invoke 250 / tauri call **161**；
 - 缺口分类：设置杂项 28、diffsinger 19、utau/voicebank 18、模型/安装 14、导出/渲染 14、
   资源/音频 13、rvc 12、曲库/数据 11、文件/诊断 11、事件/窗口 10、GPU 8、更新/测速 6、其他 4；
 - 明细见 [IPC-COVERAGE.md](IPC-COVERAGE.md)。
 - 前端实际调用审计：`npm run tauri:call-audit`（`docs/rust/BRIDGE-CALLS.md`），
   当前 212 个去重调用 / 104 未找到实现（启发式，含动态调用误报）。
-- 参数契约审计：`npm run tauri:arg-audit`（`docs/rust/ARG-AUDIT.md`），当前 143 命令 / 23 不一致
+- 参数契约审计：`npm run tauri:arg-audit`（`docs/rust/ARG-AUDIT.md`），当前 145 命令 / 23 不一致
   （主要来自尚未实现的 bridge 命令）；已修正 readSidecarLyrics/modelImportLocal/renameMidi/
   projectOpen/autosaveRead/autosaveClear 的 JS camelCase→Rust snake_case 参数错配。
 
-## 4. 当前命令清单（143 条）
+## 4. 当前命令清单（145 条）
 
 host_info, app_version, ping, python_selfcheck, engine_probe, convert, engine_worker_status,
 load_settings, save_settings, update_sources, update_set_preferred_source, utau_list_voicebanks, voicebank_unified, utau_read_oto, utau_save_oto, utau_delete_voicebank, utau_import_voicebank_zip, utau_export_voicebank, utau_export_voicebank_zip, rvc_list, rvc_remove, rvc_pick_folder, rvc_pick_files, rvc_import_folder, rvc_import_files, rvc_pick_zip, rvc_import_zip, rvc_catalog, rvc_open_catalog_page, rvc_probe, rvc_refresh_catalog, take_pending_open_file, db_kv_get, db_kv_set, db_status, db_songs_list, db_songs_put,

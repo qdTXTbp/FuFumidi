@@ -7,8 +7,8 @@
 |---|---:|
 | 前端调用的 bridge 方法（去重） | 213 |
 | Tauri 顶层方法 | 119 |
-| Tauri 嵌套方法 | 57 |
-| **未找到实现** | **75** |
+| Tauri 嵌套方法 | 60 |
+| **未找到实现** | **73** |
 
 ## 未找到实现的方法
 
@@ -65,8 +65,6 @@
 - `soundfonts.list` — frontend/src/audio.js
 - `storage` — frontend/src/components/StoragePanel.vue
 - `tasks` — frontend/src/App.vue
-- `tasks.list` — frontend/src/App.vue
-- `tasks.onUpdate` — frontend/src/App.vue
 - `update` — frontend/src/App.vue, frontend/src/components/SettingsPanel.vue
 - `updateSpeedtest` — frontend/src/components/SettingsPanel.vue
 - `usermeta` — frontend/src/views/ViewSoundfonts.vue
