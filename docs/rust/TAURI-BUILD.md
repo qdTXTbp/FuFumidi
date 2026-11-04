@@ -237,3 +237,9 @@ Tauri 默认从 GitHub 下载 `nsis-3.13.zip`，本机直连超时。已把工�
 - renderer_ready 命令写 logs/tauri-start.log（elapsedMs=自进程启动）；App 恢复曲库后调用；
 - 用于确认冷启动到底卡在 WebView2、渲染还是曲库恢复；
 - release 2m19s、0 warning；安装版 16,950,272 bytes，SHA-256 `92bab2b11e220212cb1b450d9514c6015b5453e880066bedc0d613f0730520d5`。
+
+## 33. 2026-11-04 曲库列表移出主线程
+
+- db_songs_list 改为 async + spawn_blocking；65MB 曲库 JSON 反序列化不再占 IPC/主线程；
+- release 2m09s、0 warning；安装版 16,965,120 bytes，SHA-256 `9880410fa2d4f66b2833df086558f19425d49b9b52c72548fec8ede022b4d1c2`；
+- startup log 仍记录 renderer-ready；等用户冷启动体感复测。

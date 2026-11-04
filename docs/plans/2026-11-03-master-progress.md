@@ -592,3 +592,5 @@
 - **冷启动/splash**：静态加载动画（Vue 前显示，恢复曲库后隐藏）；model_list 去掉 33GB 递归扫描；窗口底色；startup log；settings 顶层合并保护 data_root_last；release d11147f1/16,946,688；E2E 41/41、cargo 121、clippy 0。
 
 - **renderer-ready 计时**：logs/tauri-start.log 记录进程启动→渲染就绪毫秒；release 92bab2b1/16,950,272；用于定位冷启动。
+
+- **db_songs_list 移出主线程**：async spawn_blocking；release 9880410f/16,965,120；冷启动曲库卡顿候选已处理。

@@ -4402,7 +4402,12 @@ fn db_status() -> serde_json::Value {
 }
 
 #[tauri::command]
-fn db_songs_list() -> Vec<serde_json::Value> {
+async fn db_songs_list() -> Vec<serde_json::Value> {
+    // 65MB 曲库的 JSON 反序列化不能占住 IPC/主线程；放到阻塞线程池。
+    tauri::async_runtime::spawn_blocking(db_songs_list_blocking).await.unwrap_or_default()
+}
+
+fn db_songs_list_blocking() -> Vec<serde_json::Value> {
     let Ok(conn) = open_db() else { return Vec::new() };
     let Ok(mut stmt) = conn.prepare("SELECT data FROM songs ORDER BY updated_at DESC") else { return Vec::new() };
     let rows = stmt.query_map([], |r| r.get::<_, String>(0));
