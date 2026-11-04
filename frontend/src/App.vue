@@ -30,6 +30,7 @@ import { applyMaterial } from './core/material.js';
 import { installSfxClicks } from './core/sfx.js';
 import { playbackPrefs, applyPlaybackSettings } from './core/playback_prefs.js';
 import { holdRate, isEditableTarget } from './core/transport_keys.js';
+import { matchShortcutAction } from './core/shortcuts.js';
 import { getAppVersion, cmpVersion, getUpdateChannel } from './core/version.js';
 import { getBuiltinChangeLogs, fetchRemoteChangeLog } from './core/changelog.js';
 import { applyTheme, loadTheme } from './core/theme.js';
@@ -477,12 +478,15 @@ function onArrowHold(e, dir, isDown) {
 }
 
 function onKeyUp(e) {
-  if (e.key === "ArrowLeft" || e.key === "ArrowRight") _endHold();
+  const hit = matchShortcutAction(e);
+  if (e.key === "ArrowLeft" || e.key === "ArrowRight" || hit === 'seekBack' || hit === 'seekForward') _endHold();
 }
 
 function onKey(e) {
-  // 全局系统快捷键（优先于输入框拦截：Ctrl+K 命令面板、Esc 关闭浮层）
-  if (e.ctrlKey && (e.key === 'k' || e.key === 'K')) {
+  // 可配置全局快捷键（P-012）：先算命中项；命令面板/帮助优先于输入框与浮层。
+  const hit = matchShortcutAction(e);
+  try { if (hit && window.fuBridge && window.fuBridge.e2e) window.__fufumidiLastShortcut = hit; } catch (err) {}
+  if (hit === 'palette') {
     e.preventDefault();
     state.ui.paletteOpen = !state.ui.paletteOpen;
     return;
@@ -497,8 +501,8 @@ function onKey(e) {
       return;
     }
   }
-  // F1 帮助 / 新手引导（即使焦点在输入框也优先响应）
-  if (e.key === 'F1') { e.preventDefault(); state.ui.guideOpen = true; return; }
+  // 帮助 / 新手引导（即使焦点在输入框也优先响应）
+  if (hit === 'help') { e.preventDefault(); state.ui.guideOpen = true; return; }
   // Ctrl+1..9 快速切换视图
   if (e.ctrlKey && /^[1-9]$/.test(e.key)) {
     e.preventDefault();
@@ -518,19 +522,19 @@ function onKey(e) {
   // 系统级全局热键触发时，主进程会顺手发一个同名的合成按键事件；
   // 这里放行，避免同一次按键被处理两遍（播放/暂停、上一首/下一首会跳两次）。
   if (e.__fromGlobalHotkey) return;
-  if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
-  else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+  if (hit === 'togglePlay') { e.preventDefault(); togglePlay(); }
+  else if (hit === 'seekBack' || hit === 'seekForward') {
     // 步长可配（设置 → 快捷键）；按住不放 → 倍数播放（→ 快进；← 快退且不出声）
-    onArrowHold(e, e.key === 'ArrowRight' ? 1 : -1, true);
+    onArrowHold(e, hit === 'seekForward' ? 1 : -1, true);
   }
-  else if (e.key === 'l' || e.key === 'L') toggleLoop();
-  else if (e.key === 'm' || e.key === 'M') toggleMetro();
+  else if (hit === 'toggleLoop') toggleLoop();
+  else if (hit === 'toggleMetro') toggleMetro();
+  /* ---- 后台/前台通用的播放控制（不依赖底部播放栏，任何页面都能用）---- */
+  else if (hit === 'nextSong') { e.preventDefault(); void playNeighbor(1); }
+  else if (hit === 'prevSong') { e.preventDefault(); void playNeighbor(-1); }
+  else if (hit === 'cycleMode') { e.preventDefault(); app.cyclePlayMode(); }
   else if (e.key === '=' || e.key === '+') setTempo(state.tempo + 0.05);
   else if (e.key === '-' || e.key === '_') setTempo(state.tempo - 0.05);
-  /* ---- 后台/前台通用的播放控制（不依赖底部播放栏，任何页面都能用）---- */
-  else if (e.key === 'N' || e.key === 'n') { e.preventDefault(); void playNeighbor(1); }
-  else if (e.key === 'P' || e.key === 'p') { e.preventDefault(); void playNeighbor(-1); }
-  else if (e.key === 'o' || e.key === 'O') { e.preventDefault(); app.cyclePlayMode(); }
   /* ---- 歌单快捷键：数字 1..9 切到第 N 个歌单（侧栏里标了编号）---- */
   else if (/^[1-9]$/.test(e.key)) {
     const pl = playlistStore.playlists[parseInt(e.key, 10) - 1];
@@ -631,6 +635,7 @@ onMounted(() => {
       hasSong: () => !!(app.currentSong && app.currentSong.song),
       song: () => (app.currentSong && app.currentSong.song) || null,
       songCount: () => (Array.isArray(app.songs) ? app.songs.length : 0),
+      playing: () => !!app.playing,
       importMidi: (name, bytes) => app.importFiles([{ name: String(name || 'e2e.mid'), bytes: new Uint8Array(bytes) }]),
     };
   } catch (e) { /* 测试钩子失败不影响应用 */ }

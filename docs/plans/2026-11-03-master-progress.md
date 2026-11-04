@@ -20,7 +20,7 @@
 | P-007 标尺/点击定位 | **本轮新增** | EditorCanvas.vue（RULER_H / drawRuler / rulerDown/Move/Up） |
 | P-008 内置音色 CC 最小集 | **已满足（CC7/CC11/CC64/bend）** | synth.js:389-396、player.js:169-214（CC64 延长音符） |
 | P-009 轨道 CRUD | 未做 | 属 6.7 |
-| P-012 快捷键可配置 | 未做 | 属 6.7（SettingsPanel 仍只读） |
+| P-012 快捷键可配置 | **已完成（E2E 验收）** | core/shortcuts.js + SettingsPanel 录像/持久化；shortcuts-config E2E 验证改 T 后真实播放/暂停 |
 | P-013 量化体系 | 未做 | 属 6.7 |
 | P-015 编排进入播放 | **已完成（事件级验收）** | core/arrange.js + player.js 真源；E2E arrange-playback 验证移动/静音改变 player.events |
 
@@ -293,6 +293,11 @@
 - **T-119 收尾进展**：`mainBinaryName: FuFumidi`，安装包主程序改为 **FuFumidi.exe**；
   重打并安装到干净目录，安装版 smoke 仍 **24/24**（renderer=<embedded>，python/engine 来自安装目录，转录 5.3 s）。
   Electron 回退基准：E2E **35/35**、`pack:base` 成功（28 GB base 数据包，已删除不入库）。
+- **P-012 快捷键可配置已落地**：新增 `core/shortcuts.js`（10 个窗口级动作注册表、
+  localStorage 持久化、冲突检测、重置）；App.onKey 改为按注册表分发；SettingsPanel
+  快捷键页支持点击录制（Esc 取消、冲突提示）并保留只读编辑器键位表。
+  E2E `shortcuts-config.mjs`：把播放/暂停改为 T → 持久化/按钮显示 → 关闭设置后按 T
+  真实播放再暂停通过。
 - **P-015 编排进入播放（事件级验收）**：新增 E2E `arrange-playback.mjs`：
   导入两轨 MIDI → 编排页 → 等 `song.arrange` 回写 → 校验移动 clip 改变 player.events 起点、
   静音 clip 减少事件数；用例通过，E2E 总数 36。真实声卡听感仍待人工验收。

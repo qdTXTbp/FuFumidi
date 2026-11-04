@@ -10,6 +10,7 @@ import CloudSyncChoiceDialog from './CloudSyncChoiceDialog.vue';
 import { t, setLang, getLang } from '../core/i18n.js';
 // P1-14 B4：设置可搜索（索引是纯逻辑，见 core/settings_index.js）
 import { searchSettings } from '../core/settings_index.js';
+import { SHORTCUT_ACTIONS, loadShortcutMap, setShortcut, resetShortcuts, eventCombo } from '../core/shortcuts.js';
 
 const app = useAppStore();
 const state = app;
@@ -427,7 +428,7 @@ onMounted(async () => {
   const bridge = window.fuBridge;
   if (bridge && bridge.onSpeedtest) offSpeed = bridge.onSpeedtest(row => { speedRows.value = mergeRowSafe(speedRows.value, row); });
 });
-onBeforeUnmount(() => { try { offSpeed && offSpeed(); } catch (e) {} });
+onBeforeUnmount(() => { try { offSpeed && offSpeed(); } catch (e) {} stopShortcutRecord(); });
 
 /* ---------------- 卸载 ---------------- */
 // 3.2.7：设置 → 更新页签 → 卸载应用。二次确认后启动 NSIS 卸载器，主程序自动退出。
@@ -1027,8 +1028,39 @@ async function pruneLibrary() {
   pruneBusy.value = false;
 }
 
-/* ---------------- 快捷键 ---------------- */
-function resetKeys() { toast(t('恢复默认快捷键')); }
+/* ---------------- 快捷键（P-012：窗口级动作可录制/持久化） ---------------- */
+const shortcutMap = reactive({ ...loadShortcutMap() });
+const shortcutRecording = ref('');
+function refreshShortcutMap() { Object.assign(shortcutMap, loadShortcutMap()); }
+function stopShortcutRecord() {
+  shortcutRecording.value = '';
+  try { window.removeEventListener('keydown', onShortcutRecord, true); } catch (e) {}
+}
+function onShortcutRecord(e) {
+  e.preventDefault(); e.stopPropagation();
+  if (e.key === 'Escape') { stopShortcutRecord(); return; }
+  const combo = eventCombo(e);
+  if (!combo) return;
+  const target = shortcutRecording.value;
+  const res = setShortcut(target, combo);
+  if (!res.ok) {
+    toast(t('快捷键冲突：') + t((res.conflict && res.conflict.label) || ''), 'warn');
+    return;
+  }
+  refreshShortcutMap();
+  stopShortcutRecord();
+  toast(t('快捷键已更新'), 'ok');
+}
+function startShortcutRecord(id) {
+  stopShortcutRecord();
+  shortcutRecording.value = id;
+  window.addEventListener('keydown', onShortcutRecord, true);
+}
+function resetKeys() {
+  resetShortcuts();
+  refreshShortcutMap();
+  toast(t('恢复默认快捷键'));
+}
 /* ---------------- 操作系统级全局热键（用户自己录制） ----------------
    与应用内快捷键（上面的 KEYMAP，窗口有焦点才生效）不同：这一组走主进程
    globalShortcut 注册到操作系统，应用在后台/失焦时照样触发。
@@ -1592,6 +1624,23 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
 
         <!-- ============ 快捷键 ============ -->
         <div v-else-if="tab === 'keys'">
+          <div class="hk-sec">
+            <div class="hk-head">
+              <Icon name="kbd" :size="15" />
+              <b>{{ t('全局快捷键（可改）') }}</b>
+              <span class="sp" />
+              <span class="muted small">{{ t('点击右侧快捷键可重新录制；按 Esc 取消，修改自动保存。') }}</span>
+            </div>
+            <div class="kbd-row" v-for="s in SHORTCUT_ACTIONS" :key="s.id">
+              <b>{{ t(s.label) }}</b>
+              <div class="kbd-keys">
+                <button type="button" class="kbd-key" :class="{ rec: shortcutRecording === s.id }" :data-guide="'shortcut-' + s.id" @click="startShortcutRecord(s.id)">{{ shortcutRecording === s.id ? t('按下新键') : (shortcutMap[s.id] || s.combo) }}</button>
+              </div>
+            </div>
+            <div style="display:flex;gap:var(--sp-2);margin-top:8px">
+              <button class="btn sm" data-guide="shortcut-reset" @click="resetKeys">{{ t('恢复默认快捷键') }}</button>
+            </div>
+          </div>
           <p class="ov-note">{{ t('下面是应用内快捷键（窗口有焦点时生效）；系统级全局热键在页面下方单独设置。') }}</p>
           <div class="kbd-row" v-for="k in KEYMAP" :key="k.keys.join('+')">
             <b>{{ k.label }}</b>
@@ -1934,4 +1983,6 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
   .settings-search-item span { color: var(--muted); font-size: var(--fs-sm); }
   .settings-search-empty { padding: var(--sp-2); color: var(--muted); font-size: var(--fs-sm); }
   :deep(.field-row.set-flash) { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: var(--r-sm); }
+  .kbd-key.rec { border-style: dashed; border-color: var(--accent); color: var(--brand-text); cursor: pointer; }
+  .kbd-key { cursor: pointer; }
 </style>
