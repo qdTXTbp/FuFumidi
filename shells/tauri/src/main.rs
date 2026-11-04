@@ -509,6 +509,32 @@ fn utau_import_voicebank_zip(app: AppHandle) -> serde_json::Value {
     }
 }
 
+fn utau_export_voicebank_at(dir: &Path, files: &[serde_json::Value]) -> serde_json::Value {
+    if !dir.is_dir() { return oto_err("保存目录不存在"); }
+    let mut count = 0usize;
+    let mut total: u64 = 0;
+    for f in files {
+        let raw = f.get("name").and_then(|v| v.as_str()).unwrap_or("").trim();
+        if raw.is_empty() || raw == "." || raw == ".." { continue; }
+        let name = utau_safe_name(raw);
+        if name == "." || name == ".." { continue; }
+        let data = f.get("data").and_then(|v| v.as_str()).unwrap_or("");
+        let bytes = oto_b64_decode(data);
+        total += bytes.len() as u64;
+        if total > 512 * 1024 * 1024 { return oto_err("导出内容过大（上限 512MB）"); }
+        match std::fs::write(dir.join(&name), &bytes) {
+            Ok(_) => count += 1,
+            Err(e) => return oto_err(&e.to_string()),
+        }
+    }
+    serde_json::json!({ "ok": true, "dir": oto_path_text(dir), "count": count })
+}
+
+#[tauri::command]
+fn utau_export_voicebank(dir: String, files: Vec<serde_json::Value>) -> serde_json::Value {
+    utau_export_voicebank_at(Path::new(&dir), &files)
+}
+
 fn data_root_overridden() -> bool {
     std::env::var("FUFUMIDI_DATA_ROOT").map(|p| !p.trim().is_empty()).unwrap_or(false)
 }
@@ -3848,7 +3874,7 @@ fn main() {
             pick_file, pick_directory, pick_audio, pick_audio_files, pick_image, pick_music_xml,
             list_midi_files, list_audio_files, library_stats, read_soundfont, read_binary, save_binary,
             convert, probe, refine, cancel, set_transcribe_pause, engine_worker_status,
-            utau_list_voicebanks, voicebank_unified, utau_read_oto, utau_save_oto, utau_delete_voicebank, utau_import_voicebank_zip
+            utau_list_voicebanks, voicebank_unified, utau_read_oto, utau_save_oto, utau_delete_voicebank, utau_import_voicebank_zip, utau_export_voicebank
         ])
         .setup(|_app| {
             println!("[fufumidi-shell] {}", serde_json::to_string(&host_info_json()).unwrap_or_default());
@@ -5277,6 +5303,28 @@ mod oto_tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+
+
+    #[test]
+    fn export_voicebank_writes_sanitized_files() {
+        use super::{oto_b64_encode, utau_export_voicebank_at};
+        let root = tmpdir("export-root");
+        let out = root.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        let files = vec![
+            serde_json::json!({ "name": "a.wav", "data": oto_b64_encode(b"AAA") }),
+            serde_json::json!({ "name": "../escape.txt", "data": oto_b64_encode(b"no") }),
+            serde_json::json!({ "name": "", "data": oto_b64_encode(b"skip") }),
+        ];
+        let r = utau_export_voicebank_at(&out, &files);
+        assert_eq!(r["ok"], true, "{}", r);
+        assert_eq!(r["count"], 2);
+        assert_eq!(std::fs::read(out.join("a.wav")).unwrap(), b"AAA");
+        assert!(!root.join("escape.txt").exists());
+        assert!(!out.parent().unwrap().join("escape.txt").exists());
+        assert_eq!(utau_export_voicebank_at(&root.join("missing"), &files)["ok"], false);
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[test]
     fn import_zip_bank_nested_traversal_and_duplicate() {

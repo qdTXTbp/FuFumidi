@@ -120,6 +120,7 @@ export function installTauriBridge() {
     // ---- UTAU / 统一声库（只读；Electron 侧 utau:listVoicebanks / voicebank:unified）----
     // Tauri 端命令只扫数据目录，不 import / 不删除 / 不下载（那些动作仍未移植，见审计缺口）。
     utauListVoicebanks: () => call('utau_list_voicebanks'),
+    utauExportVoicebank: (opts) => call('utau_export_voicebank', { dir: opts && opts.dir, files: (opts && opts.files) || [] }),
     utauImportVoicebankZip: () => call('utau_import_voicebank_zip'),
     utauDeleteVoicebank: (dir) => call('utau_delete_voicebank', { voicebank: dir }),
     utauReadOto: (cfg) => call('utau_read_oto', { voicebank: cfg && cfg.voicebank }),
