@@ -12,6 +12,14 @@ export default async function (app) {
   app.assert(hashOk, '导航到资源中心存储页签');
   await app.waitFor('!!document.querySelector("[data-guide=storage-panel]")', { timeout: 30000, message: '存储面板出现' });
   await app.waitFor('document.body.innerText.indexOf("存储治理") >= 0', { timeout: 15000 });
+  // 存储扫描是异步的（首轮要枚举 6 万文件，主进程 60s 缓存）：面板头先出现、分类行后到。
+  // 必须等分类行真正渲染出来再断言，否则冷启动 E2E 会偶发读到 0 行（2026-11-04 实测）。
+  try {
+    await app.waitFor('document.querySelectorAll("[data-area]").length >= 8', { timeout: 45000 });
+  } catch (e) {
+    const n = await app.eval('document.querySelectorAll("[data-area]").length');
+    throw new Error('等待存储分类行超时（' + n + ' 行）');
+  }
   const info = JSON.parse(await app.eval('JSON.stringify({ rows: document.querySelectorAll(".st-row").length, areas: document.querySelectorAll("[data-area]").length, text: document.querySelector("[data-guide=storage-panel]").innerText })'));
   app.assert(info.areas >= 8, '分类行数 >= 8，实际 ' + info.areas);
   app.assert(info.text.indexOf('总计') >= 0, '有总计');
