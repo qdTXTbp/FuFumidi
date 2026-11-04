@@ -157,7 +157,18 @@
   sing 980 的一个 header 按钮（右溢出 3px）、sing 1280 的逐音素 select（右 1322）、
   transcribe 1280 的队列按钮（右 1316）。它们不影响功能但属于布局欠账，T-113 收口时一并处理。
 
-## 12. 待收口（下一轮）
+## 12. 6.7 轨道 CRUD（2026-11-04）
+
+- EditorCanvas 全量快照升级：除音符/CC 外记录轨道元数据（name / program / ch / isDrum / events），
+  undo/redo 走 `restoreAllSnapshot()` **重建 tracks 数组**，因此新建/删除轨道也能撤销（此前只回填音符）。
+- ViewEdit 检查器「轨道」页签新增操作行：新建 / 删除 / 改名 / 上移 / 下移。
+  · 新建默认名「轨道 N」，通道取第一个未占用（跳过 9）；
+  · 操作前 `pushStateForTrack(-1, 动作名)`，操作后 `notifyExternalEdit()` → 脏标记/自动保存；
+  · 删除至少保留一条；改名走统一 promptDialog。
+- E2E `edit-track-crud`：新建→改名→上移→删除→Ctrl+Z 恢复→Ctrl+Y 重做，断言直接读 song().tracks，全绿。
+- 验证：audit exit 0、test:ui 561/561、typecheck 0、build 通过、smoke/edit-basic/edit-track-crud 3/3。
+
+## 13. 待收口（下一轮）
 
 - Tauri POC（子代理 B）**已收口**：docs/rust/TAURI-POC.md。结论——外壳可行（cargo check 37s / build 44s；
   debug 12.58 MiB、release 5.87 MiB；开窗 0.73–0.86s；IPC 1.7–6.2ms；WebView2 156 已装）；

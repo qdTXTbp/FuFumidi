@@ -298,25 +298,56 @@ function makeTrackSnapshot(ti, label) {
     ...snapshotMeta(label, notes.bytes + ccs.bytes + (tempo ? tempo.length * 24 : 0), notes.value.length),
   };
 }
-/** 全量快照（ti = -1：跨轨 / 新增删除轨道的场景） */
+/** 全量快照（ti = -1：跨轨 / 新增删除轨道的场景）。
+ *  6.7：除了音符/CC，还要记住轨道本身的元数据（名字/音色/通道/鼓轨），
+ *  否则「新建轨道 / 删除轨道 / 重命名 / 排序」无法撤销。 */
 function makeAllSnapshot(label) {
   const s = song();
   if (!s || !s.tracks) return null;
   let bytes = 0, noteCount = 0;
-  const all = s.tracks.map((t) => {
+  const all = [];
+  const meta = [];
+  for (const t of s.tracks) {
     const notes = cloneMeasured(t.notes);
     const ccs = cloneMeasured(t.ccs || []);
-    bytes += notes.bytes + ccs.bytes;
+    const events = cloneMeasured(t.events || []);
+    bytes += notes.bytes + ccs.bytes + events.bytes;
     noteCount += notes.value.length;
-    return { notes: notes.value, ccs: ccs.value };
-  });
+    all.push({ notes: notes.value, ccs: ccs.value });
+    meta.push({ name: t.name, program: t.program, ch: t.ch, isDrum: !!t.isDrum, index: t.index, events: events.value });
+  }
   const tempo = tempoSnap();
   return {
     ti: -1,
     tempo,
     all,
+    meta,
     ...snapshotMeta(label, bytes + (tempo ? tempo.length * 24 : 0), noteCount),
   };
+}
+/** 恢复全量快照：重建 tracks 数组本身（增删轨也能撤销），而不是只回填音符。 */
+function restoreAllSnapshot(st) {
+  const s = song(); if (!s) return;
+  const prev = Array.isArray(s.tracks) ? s.tracks.slice() : [];
+  const meta = Array.isArray(st.meta) ? st.meta : prev.map((tr, i) => ({ name: tr.name, program: tr.program, ch: tr.ch, isDrum: tr.isDrum, index: i, events: tr.events || [] }));
+  const tracks = meta.map((m, i) => {
+    const snap = st.all && st.all[i];
+    return {
+      index: i,
+      name: m.name != null ? m.name : (prev[i] && prev[i].name) || ('Track ' + (i + 1)),
+      program: m.program != null ? m.program : (prev[i] ? prev[i].program : 0),
+      ch: m.ch != null ? m.ch : (prev[i] ? prev[i].ch : 0),
+      isDrum: !!(m.isDrum != null ? m.isDrum : (prev[i] && prev[i].isDrum)),
+      notes: snap ? snap.notes : [],
+      ccs: snap ? snap.ccs : [],
+      events: Array.isArray(m.events) ? m.events : ((prev[i] && prev[i].events) || []),
+    };
+  });
+  s.tracks.length = 0;
+  s.tracks.push(...tracks);
+  tempoRestore(s, st.tempo);
+  selection.clear();
+  afterEdit();
 }
 /** 栈裁剪：条数上限 → 超大单条 → 总内存预算（都从最老开始丢） */
 function trimHistoryStack(stack) {
@@ -403,17 +434,9 @@ function clearGhostSelection() {
 function undo() {
   const st = undoStack.pop(); if (!st) return;
   if (st.ti < 0) {
-    // 全量快照：恢复所有轨道（智能伴奏等新增/删除轨道场景）
-    const s = song(); if (!s) return;
-    // 当前状态进 redo：label 沿用这一步的操作名，重做后历史面板仍是同一个动作
+    // 全量快照：当前状态进 redo（label 沿用操作名），再重建整个 tracks（增删轨也盖得住）
     pushSnapshot(redoStack, makeAllSnapshot(st.label));
-    for (let i = 0; i < s.tracks.length; i++) {
-      if (st.all && st.all[i]) { s.tracks[i].notes = st.all[i].notes; s.tracks[i].ccs = st.all[i].ccs || []; }
-      else { s.tracks[i].notes = []; s.tracks[i].ccs = []; }
-    }
-    tempoRestore(s, st.tempo);
-    selection.clear();
-    afterEdit();
+    restoreAllSnapshot(st);
     return;
   }
   const tr = song()?.tracks[st.ti]; if (!tr) return;
@@ -427,15 +450,8 @@ function undo() {
 function redo() {
   const st = redoStack.pop(); if (!st) return;
   if (st.ti < 0) {
-    const s = song(); if (!s) return;
     pushSnapshot(undoStack, makeAllSnapshot(st.label));
-    for (let i = 0; i < s.tracks.length; i++) {
-      if (st.all && st.all[i]) { s.tracks[i].notes = st.all[i].notes; s.tracks[i].ccs = st.all[i].ccs || []; }
-      else { s.tracks[i].notes = []; s.tracks[i].ccs = []; }
-    }
-    tempoRestore(s, st.tempo);
-    selection.clear();
-    afterEdit();
+    restoreAllSnapshot(st);
     return;
   }
   const tr = song()?.tracks[st.ti]; if (!tr) return;

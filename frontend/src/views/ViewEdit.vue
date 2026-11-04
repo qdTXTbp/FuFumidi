@@ -1807,6 +1807,74 @@ function smartTimbre() {
   toast(t('智能音色：') + (GM_NAMES[p] || p), 'ok');
 }
 
+/* ------------------------------------------------------------ 6.7 MIDI 轨道 CRUD
+ * 增删轨/改名/排序都走全量快照（EditorCanvas pushStateForTrack(-1)），
+ * 撤销会重建 tracks 数组本身，而不只是回填音符。 */
+function reloadPlayerForTracks(s) {
+  try { const { player } = ensureAudio(); player.load(s); player.setScale(state.tempo); } catch (e) {}
+}
+function nextTrackChannel(tracks) {
+  const used = new Set((tracks || []).map((x) => Number(x.ch)));
+  for (let c = 0; c < 16; c++) { if (c === 9) continue; if (!used.has(c)) return c; }
+  return 0;
+}
+function addTrack() {
+  const s = song.value;
+  if (!s) { toast(t('请先打开一首曲目'), 'warn'); return; }
+  s.tracks = Array.isArray(s.tracks) ? s.tracks : [];
+  try { editor.value?.pushStateForTrack(-1, t('新建轨道')); } catch (e) {}
+  const n = s.tracks.length + 1;
+  const name = t('轨道') + ' ' + n;
+  s.tracks.push({ index: s.tracks.length, name, ch: nextTrackChannel(s.tracks), program: 0, isDrum: false, notes: [], events: [], ccs: [] });
+  trackIndex.value = s.tracks.length - 1;
+  reloadPlayerForTracks(s);
+  try { editor.value?.notifyExternalEdit(); } catch (e) {}
+  toast(t('已新建轨道：') + name, 'ok');
+}
+function deleteTrack() {
+  const s = song.value;
+  if (!s || !Array.isArray(s.tracks)) return;
+  if (s.tracks.length <= 1) { toast(t('至少保留一条轨道'), 'warn'); return; }
+  const ti = Math.max(0, Math.min(trackIndex.value, s.tracks.length - 1));
+  const tr = s.tracks[ti];
+  try { editor.value?.pushStateForTrack(-1, t('删除轨道')); } catch (e) {}
+  s.tracks.splice(ti, 1);
+  s.tracks.forEach((x, i) => { x.index = i; });
+  trackIndex.value = Math.max(0, Math.min(ti, s.tracks.length - 1));
+  reloadPlayerForTracks(s);
+  try { editor.value?.notifyExternalEdit(); } catch (e) {}
+  toast(t('已删除轨道：') + ((tr && tr.name) || ''), 'ok');
+}
+function renameTrack() {
+  const s = song.value;
+  const ti = trackIndex.value;
+  const tr = s && s.tracks && s.tracks[ti];
+  if (!tr) return;
+  app.promptDialog({ title: t('重命名轨道'), msg: t('输入新的轨道名'), value: tr.name || '' }).then((v) => {
+    if (v == null) return;
+    const nm = String(v).trim();
+    if (!nm || nm === tr.name) return;
+    try { editor.value?.pushStateForTrack(-1, t('重命名轨道')); } catch (e) {}
+    tr.name = nm;
+    try { editor.value?.notifyExternalEdit(); } catch (e) {}
+    toast(t('已重命名轨道：') + nm, 'ok');
+  });
+}
+function moveTrack(dir) {
+  const s = song.value;
+  if (!s || !Array.isArray(s.tracks)) return;
+  const from = trackIndex.value;
+  const to = from + dir;
+  if (from < 0 || from >= s.tracks.length || to < 0 || to >= s.tracks.length) return;
+  try { editor.value?.pushStateForTrack(-1, t('移动轨道')); } catch (e) {}
+  const [tr] = s.tracks.splice(from, 1);
+  s.tracks.splice(to, 0, tr);
+  s.tracks.forEach((x, i) => { x.index = i; });
+  trackIndex.value = to;
+  reloadPlayerForTracks(s);
+  try { editor.value?.notifyExternalEdit(); } catch (e) {}
+}
+
 /* ------------------------------------------------------------ 检查器宽度 / 折叠
  * ★ 右侧检查器固定 232px，占的是音符视图的宽度 —— 用户反馈「音符视图面积太小」。
  *   这里给两个自由度：可以拖分隔条改宽窄，也可以整块收起来（收起后舞台独享全宽）。 */
@@ -2624,6 +2692,13 @@ onBeforeUnmount(() => {
             <select class="select-input" v-model="trackIndex" style="width:100%">
               <option v-for="{ tr, i } in visibleTracks" :key="i" :value="i">{{ tr.name }}{{ t('（') }}{{ state.tracks[i]?.noteCount ?? tr.notes.length }}{{ t('）') }}</option>
             </select>
+            <div class="insp-btns tr-track-ops">
+              <button class="btn sm" data-guide="track-add" :title="t('新建轨道')" @click="addTrack">+ {{ t('新建') }}</button>
+              <button class="btn sm" data-guide="track-del" :title="t('删除轨道')" :disabled="!song || (song.tracks || []).length <= 1" @click="deleteTrack">{{ t('删除') }}</button>
+              <button class="btn sm" data-guide="track-rename" :title="t('重命名轨道')" @click="renameTrack">{{ t('改名') }}</button>
+              <button class="btn sm" data-guide="track-up" :title="t('上移轨道')" :disabled="!trackIndex" @click="moveTrack(-1)">↑</button>
+              <button class="btn sm" data-guide="track-down" :title="t('下移轨道')" :disabled="!song || trackIndex >= (song.tracks || []).length - 1" @click="moveTrack(1)">↓</button>
+            </div>
             <div class="insp-row"><span>{{ t('通道') }}</span><b>{{ (curTrackInfo?.ch ?? 0) + 1 }}</b></div>
             <div class="insp-row"><span>{{ t('音色') }}</span><b>{{ String(timbre).padStart(3, '0') }}</b></div>
             <select v-model.number="timbre" class="select-input" style="width:100%" @change="timbreChange">
@@ -3333,6 +3408,8 @@ onBeforeUnmount(() => {
 .insp-row .select-input, .insp-row .num-input { width: 100px; }
 .insp-range { width: 100%; }
 .insp-btns { display: flex; gap: var(--sp-1); flex-wrap: wrap; }
+.tr-track-ops { margin-top: var(--sp-2); }
+.tr-track-ops .btn { flex: 1 1 auto; }
 /* P1-12 任务模板 chips */
 .tpl-chips { display: flex; gap: var(--sp-1); flex-wrap: wrap; justify-content: flex-end; }
 .tpl-chip { border: 1px solid var(--hairline); background: var(--canvas); color: var(--steel); border-radius: var(--r-sm); padding: var(--sp-1) var(--sp-2); cursor: pointer; font-size: var(--fs-sm); }
