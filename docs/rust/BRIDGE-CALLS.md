@@ -6,9 +6,9 @@
 | 指标 | 数值 |
 |---|---:|
 | 前端调用的 bridge 方法（去重） | 213 |
-| Tauri 顶层方法 | 119 |
+| Tauri 顶层方法 | 123 |
 | Tauri 嵌套方法 | 61 |
-| **未找到实现** | **73** |
+| **未找到实现** | **69** |
 
 ## 未找到实现的方法
 
@@ -73,10 +73,6 @@
 - `utauDownloadVoicebank` — frontend/src/components/utau/UtauVoicebankStore.vue
 - `utauRenderTrack` — frontend/src/components/sing/VoicebankPanel.vue
 - `utauVoicebankRegistry` — frontend/src/components/utau/UtauVoicebankStore.vue
-- `videoExportAbort` — frontend/src/views/ViewConvert.vue
-- `videoExportBegin` — frontend/src/views/ViewConvert.vue
-- `videoExportEnd` — frontend/src/views/ViewConvert.vue
-- `videoExportWrite` — frontend/src/views/ViewConvert.vue
 - `wallpaper` — frontend/src/components/WallpaperGallery.vue, frontend/src/components/WallpaperLibrary.vue
 - `wallpaper.downloadUrl` — frontend/src/components/WallpaperLibrary.vue
 - `wallpaper.searchWallhaven` — frontend/src/components/WallpaperLibrary.vue

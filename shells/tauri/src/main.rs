@@ -1305,6 +1305,93 @@ fn plugins_cancel_install(token: String) -> serde_json::Value {
     }
 }
 
+struct VideoStream { path: PathBuf, bytes: u64, container: String }
+
+struct VideoExportState(Arc<Mutex<HashMap<String, VideoStream>>>);
+
+fn video_bytes(v: &serde_json::Value) -> Vec<u8> { v.as_array().map(|a| a.iter().filter_map(|x| x.as_u64()).map(|n| n as u8).collect()).unwrap_or_default() }
+
+#[tauri::command]
+fn video_export_begin(state: State<'_, VideoExportState>, opts: Option<serde_json::Value>) -> serde_json::Value {
+    let container = opts.as_ref().and_then(|o| o.get("container")).and_then(|v| v.as_str()).unwrap_or("h264");
+    let container = if container == "webm" { "webm" } else { "h264" };
+    let uniq = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let id = format!("v{}-{uniq}", std::process::id());
+    let dir = data_dir().join("temp").join("fufumidi-video");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join(format!("{id}.{container}"));
+    if let Err(e) = std::fs::File::create(&path) { return oto_err(&e.to_string()); }
+    if let Ok(mut m) = state.0.lock() { m.insert(id.clone(), VideoStream { path: path.clone(), bytes: 0, container: container.to_string() }); }
+    serde_json::json!({ "ok": true, "id": id, "container": container, "path": oto_path_text(&path) })
+}
+
+#[tauri::command]
+fn video_export_write(state: State<'_, VideoExportState>, id: String, data: Vec<u8>) -> serde_json::Value {
+    let mut map = state.0.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(st) = map.get_mut(&id) else { return oto_err("stream-not-found") };
+    match std::fs::OpenOptions::new().append(true).open(&st.path).and_then(|mut f| { use std::io::Write; f.write_all(&data) }) {
+        Ok(_) => { st.bytes += data.len() as u64; serde_json::json!({ "ok": true, "bytes": st.bytes }) },
+        Err(e) => oto_err(&e.to_string()),
+    }
+}
+
+#[tauri::command]
+fn video_export_abort(state: State<'_, VideoExportState>, id: String) -> serde_json::Value {
+    let mut map = state.0.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(st) = map.remove(&id) { let _ = std::fs::remove_file(st.path); }
+    serde_json::json!({ "ok": true })
+}
+
+#[tauri::command]
+fn video_export_end(app: AppHandle, state: State<'_, VideoExportState>, opts: serde_json::Value) -> serde_json::Value {
+    let id = opts.get("id").and_then(|v| v.as_str()).unwrap_or("");
+    let st = { let mut m = state.0.lock().unwrap_or_else(|e| e.into_inner()); m.remove(id) };
+    let Some(st) = st else { return oto_err("stream-not-found") };
+    if st.bytes == 0 { let _ = std::fs::remove_file(&st.path); return oto_err("empty-stream"); }
+    let mut out = opts.get("targetPath").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    if out.is_empty() {
+        let name = opts.get("name").and_then(|v| v.as_str()).unwrap_or("FuFumidi-video").trim().trim_end_matches(".mid").to_string();
+        let picked = app.dialog().file().set_title("导出视频 MP4").set_file_name(&format!("{}{}", if name.is_empty() { "FuFumidi-video" } else { &name }, ".mp4")).add_filter("MP4", &["mp4"]).blocking_save_file();
+        let Some(p) = picked.and_then(|p| p.into_path().ok()) else { let _ = std::fs::remove_file(&st.path); return serde_json::json!({ "ok": false, "canceled": true }); };
+        out = p.display().to_string();
+    }
+    let audio = opts.get("audio").map(video_bytes).unwrap_or_default();
+    let wav = if audio.is_empty() { None } else {
+        let p = data_dir().join("temp").join("fufumidi-video").join(format!("{id}.wav"));
+        if let Err(e) = std::fs::write(&p, &audio) { let _ = std::fs::remove_file(&st.path); return oto_err(&e.to_string()); }
+        Some(p)
+    };
+    let fps = opts.get("fps").and_then(|v| v.as_u64()).unwrap_or(24).clamp(1, 240);
+    let mut args: Vec<String> = vec!["-y".into(), "-hide_banner".into(), "-loglevel".into(), "error".into()];
+    if st.container == "h264" { args.extend(["-r".into(), fps.to_string(), "-f".into(), "h264".into(), "-framerate".into(), fps.to_string()]); }
+    args.extend(["-i".into(), st.path.display().to_string()]);
+    if let Some(w) = &wav {
+        let off = opts.get("audioOffset").and_then(|v| v.as_f64()).unwrap_or(0.0).max(0.0);
+        if off > 0.0 { args.extend(["-ss".into(), format!("{off:.6}")]); }
+        args.extend(["-i".into(), w.display().to_string(), "-map".into(), "0:v:0".into(), "-map".into(), "1:a:0".into()]);
+    }
+    args.extend(["-c:v".into(), "copy".into(), "-pix_fmt".into(), "yuv420p".into()]);
+    if wav.is_some() { args.extend(["-c:a".into(), "aac".into()]); }
+    let dur = opts.get("duration").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    if dur > 0.0 { args.extend(["-t".into(), format!("{dur:.6}")]); } else { args.push("-shortest".into()); }
+    args.extend(["-movflags".into(), "+faststart".into(), out.clone()]);
+    let Some(py) = python_path() else { let _ = std::fs::remove_file(&st.path); if let Some(w)=wav { let _=std::fs::remove_file(w); } return oto_err("python runtime not found") };
+    let code = format!(r#"import json, subprocess, imageio_ffmpeg
+ff = imageio_ffmpeg.get_ffmpeg_exe()
+r = subprocess.run([ff] + {}, capture_output=True)
+print(json.dumps({{"ok": r.returncode == 0, "err": (r.stderr or b"").decode("utf-8", "replace")[-300:]}}))
+"#, serde_json::to_string(&args).unwrap_or_else(|_| "[]".into()));
+    let run = Command::new(&py).args(["-c", &code]).env("PYTHONIOENCODING", "utf-8").creation_flags(0x08000000).output();
+    let parsed = match run { Ok(o) => parse_health_json(&String::from_utf8_lossy(&o.stdout)), Err(_) => None };
+    let _ = std::fs::remove_file(&st.path);
+    if let Some(w) = wav { let _ = std::fs::remove_file(w); }
+    match parsed {
+        Some(v) if v.get("ok").and_then(|x| x.as_bool()) == Some(true) => serde_json::json!({ "ok": true, "path": out, "bytes": st.bytes, "copy": true }),
+        Some(v) => oto_err(v.get("err").and_then(|x| x.as_str()).unwrap_or("ffmpeg failed")),
+        None => oto_err("ffmpeg helper failed"),
+    }
+}
+
 fn data_root_overridden() -> bool {
     std::env::var("FUFUMIDI_DATA_ROOT").map(|p| !p.trim().is_empty()).unwrap_or(false)
 }
@@ -4709,16 +4796,18 @@ fn main() {
     let pending_open = PendingOpen(Mutex::new(open_arg));
     let zoom_state = ZoomState(Arc::new(Mutex::new(1.0)));
     let update_preferred_state = UpdatePreferredState(Mutex::new(None));
+    let video_export_state = VideoExportState(Arc::new(Mutex::new(HashMap::new())));
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(state)
         .manage(pending_open)
         .manage(zoom_state)
         .manage(update_preferred_state)
+        .manage(video_export_state)
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, update_sources, update_set_preferred_source, db_kv_get, db_kv_set,
-            tasks_list, tasks_cancel, tasks_clear_finished, db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, wallpaper_set_desktop, gpu_status, gpu_uninstall, plugins_list, plugins_rescan, plugins_set_enabled, plugins_installed_list, plugins_platform_info, plugins_catalog, plugins_open_platform, plugins_install_from_platform, plugins_confirm_install, plugins_cancel_install, plugins_open_dir, plugins_open_docs, open_edit_guide, sf_workshop_list, sf_workshop_import, sf_workshop_delete, sf_workshop_open_dir, model_list,
+            tasks_list, tasks_cancel, tasks_clear_finished, db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, video_export_begin, video_export_write, video_export_abort, video_export_end, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, wallpaper_set_desktop, gpu_status, gpu_uninstall, plugins_list, plugins_rescan, plugins_set_enabled, plugins_installed_list, plugins_platform_info, plugins_catalog, plugins_open_platform, plugins_install_from_platform, plugins_confirm_install, plugins_cancel_install, plugins_open_dir, plugins_open_docs, open_edit_guide, sf_workshop_list, sf_workshop_import, sf_workshop_delete, sf_workshop_open_dir, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
