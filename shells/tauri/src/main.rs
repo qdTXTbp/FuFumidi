@@ -535,6 +535,34 @@ fn utau_export_voicebank(dir: String, files: Vec<serde_json::Value>) -> serde_js
     utau_export_voicebank_at(Path::new(&dir), &files)
 }
 
+fn write_voicebank_zip_at(path: &Path, files: &[serde_json::Value]) -> serde_json::Value {
+    let f = match std::fs::File::create(path) { Ok(f) => f, Err(e) => return oto_err(&e.to_string()) };
+    let mut z = zip::ZipWriter::new(f);
+    let opt = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    let mut count = 0usize;
+    let mut total: u64 = 0;
+    for item in files {
+        let raw = item.get("name").and_then(|v| v.as_str()).unwrap_or("").trim();
+        if raw.is_empty() || raw == "." || raw == ".." { continue; }
+        let name = utau_safe_name(raw);
+        let data = oto_b64_decode(item.get("data").and_then(|v| v.as_str()).unwrap_or(""));
+        total += data.len() as u64;
+        if total > 512 * 1024 * 1024 { let _ = std::fs::remove_file(path); return oto_err("导出内容过大（上限 512MB）"); }
+        if let Err(e) = z.start_file(&name, opt) { let _ = std::fs::remove_file(path); return oto_err(&e.to_string()); }
+        if let Err(e) = z.write_all(&data) { let _ = std::fs::remove_file(path); return oto_err(&e.to_string()); }
+        count += 1;
+    }
+    if let Err(e) = z.finish() { let _ = std::fs::remove_file(path); return oto_err(&e.to_string()); }
+    serde_json::json!({ "ok": true, "path": oto_path_text(path), "count": count })
+}
+
+#[tauri::command]
+fn utau_export_voicebank_zip(app: AppHandle, files: Vec<serde_json::Value>) -> serde_json::Value {
+    let picked = app.dialog().file().set_title("导出 UTAU 声库包").set_file_name("voicebank.zip").add_filter("ZIP", &["zip"]).blocking_save_file();
+    let Some(path) = picked.and_then(|p| p.into_path().ok()) else { return serde_json::json!({ "ok": false, "canceled": true }); };
+    write_voicebank_zip_at(&path, &files)
+}
+
 fn data_root_overridden() -> bool {
     std::env::var("FUFUMIDI_DATA_ROOT").map(|p| !p.trim().is_empty()).unwrap_or(false)
 }
@@ -3874,7 +3902,7 @@ fn main() {
             pick_file, pick_directory, pick_audio, pick_audio_files, pick_image, pick_music_xml,
             list_midi_files, list_audio_files, library_stats, read_soundfont, read_binary, save_binary,
             convert, probe, refine, cancel, set_transcribe_pause, engine_worker_status,
-            utau_list_voicebanks, voicebank_unified, utau_read_oto, utau_save_oto, utau_delete_voicebank, utau_import_voicebank_zip, utau_export_voicebank
+            utau_list_voicebanks, voicebank_unified, utau_read_oto, utau_save_oto, utau_delete_voicebank, utau_import_voicebank_zip, utau_export_voicebank, utau_export_voicebank_zip
         ])
         .setup(|_app| {
             println!("[fufumidi-shell] {}", serde_json::to_string(&host_info_json()).unwrap_or_default());
@@ -5304,6 +5332,35 @@ mod oto_tests {
     }
 
 
+
+
+    #[test]
+    fn export_voicebank_zip_sanitizes_entries() {
+        use super::{oto_b64_encode, write_voicebank_zip_at};
+        use std::io::Read as _;
+        let root = tmpdir("export-zip");
+        let out = root.join("bank.zip");
+        let files = vec![
+            serde_json::json!({ "name": "a.wav", "data": oto_b64_encode(b"AAA") }),
+            serde_json::json!({ "name": "../escape.txt", "data": oto_b64_encode(b"no") }),
+            serde_json::json!({ "name": "", "data": oto_b64_encode(b"skip") }),
+        ];
+        let r = write_voicebank_zip_at(&out, &files);
+        assert_eq!(r["ok"], true, "{}", r);
+        assert_eq!(r["count"], 2);
+        assert!(out.is_file());
+        let mut z = zip::ZipArchive::new(std::fs::File::open(&out).unwrap()).unwrap();
+        assert_eq!(z.len(), 2);
+        let mut names = Vec::new();
+        for i in 0..z.len() {
+            let mut e = z.by_index(i).unwrap();
+            names.push(e.name().to_string());
+            let mut b = Vec::new(); e.read_to_end(&mut b).unwrap();
+            if e.name() == "a.wav" { assert_eq!(b, b"AAA"); }
+        }
+        assert!(names.iter().all(|n| !n.contains("..") && !n.contains('/')));
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[test]
     fn export_voicebank_writes_sanitized_files() {

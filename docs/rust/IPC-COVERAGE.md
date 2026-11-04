@@ -5,10 +5,10 @@
 | 指标 | 数值 |
 |---|---:|
 | preload 暴露方法 | 265 |
-| Tauri 桥已映射方法 | 144 |
-| 尚未映射 | **122** |
+| Tauri 桥已映射方法 | 145 |
+| 尚未映射 | **121** |
 | preload IPC invoke 通道 | 250 |
-| Tauri call 通道 | 138 |
+| Tauri call 通道 | 139 |
 
 ## 缺口分类
 
@@ -20,7 +20,7 @@
 | rvc | 12 |
 | 资源/音频/扩展 | 11 |
 | 导出/渲染 | 11 |
-| utau/voicebank | 11 |
+| utau/voicebank | 10 |
 | gpu/运行时增强 | 8 |
 | 事件/窗口 | 7 |
 | 更新/测速 | 4 |
@@ -143,7 +143,6 @@ utauAliasRange
 utauAliases
 utauCancelVoicebankDownload
 utauDownloadVoicebank
-utauExportVoicebankZip
 utauFlags
 utauRenderTrack
 utauVoicebankRegistry
