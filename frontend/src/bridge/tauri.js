@@ -186,6 +186,9 @@ export function installTauriBridge() {
     updateDownload: (url, channel, name, size) => call('update_download', { url, channel, name, size }),
     updateOpen: (p) => call('update_open', { p }),
     onUpdateProgress: (cb) => listen('update:progress', cb),
+    // 线路列表 / 会话内首选线路（本地命令：只读设置，不联网、不下载；偏好只提前不锁定）
+    updateSources: (channel) => call('update_sources', { channel }),
+    updateSetPreferredSource: (id) => call('update_set_preferred_source', { id }),
 
     // ---- 转录参数预设 ----
     presets: {

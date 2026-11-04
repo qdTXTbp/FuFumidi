@@ -264,6 +264,19 @@ export interface UpdateRelease {
   body?: string;
 }
 
+/** 更新通道：stable = 正式版；beta = 测试通道（源 id 带 -beta 后缀） */
+export type UpdateChannel = 'stable' | 'beta';
+
+/** 更新线路（main/update.js 的 update:sources → Tauri update_sources）。
+ *  id 与 build/kachina.config.json 的 source[].id 一一对应。 */
+export interface UpdateSourceItem {
+  id: string;
+  label: string;
+  /** cnb = 国内源；mirror = GitHub 加速镜像；github = 官方直连 */
+  kind: 'cnb' | 'mirror' | 'github';
+  channel: UpdateChannel;
+}
+
 export interface Settings {
   theme?: string;
   accent?: string;
@@ -1287,6 +1300,10 @@ export interface FuBridge {
   updateDownload(url: string): Promise<any>;
   updateOpen(p: string): Promise<any>;
   onUpdateProgress(cb: (p: any) => void): () => void;
+  /** 当前通道的更新线路（只读设置 + 会话内首选；偏好只提到最前，不改变回退链） */
+  updateSources(channel?: UpdateChannel): Promise<UpdateSourceItem[]>;
+  /** 记下会话内首选线路（不落盘；持久化由前端写 settings.update_preferred_source）。返回归一化后的 id。 */
+  updateSetPreferredSource(id?: string): Promise<string>;
   update: {
     list(): Promise<UpdateRelease[]>;
     openExternal(url: string): Promise<GeneralResult>;

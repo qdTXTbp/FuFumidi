@@ -6,9 +6,9 @@
 | 指标 | 数值 |
 |---|---:|
 | 前端调用的 bridge 方法（去重） | 212 |
-| Tauri 顶层方法 | 95 |
+| Tauri 顶层方法 | 97 |
 | Tauri 嵌套方法 | 50 |
-| **未找到实现** | **104** |
+| **未找到实现** | **102** |
 
 ## 未找到实现的方法
 
@@ -88,8 +88,6 @@
 - `tasks.list` — frontend/src/App.vue
 - `tasks.onUpdate` — frontend/src/App.vue
 - `update` — frontend/src/App.vue, frontend/src/components/SettingsPanel.vue
-- `updateSetPreferredSource` — frontend/src/components/SettingsPanel.vue
-- `updateSources` — frontend/src/components/SettingsPanel.vue
 - `updateSpeedtest` — frontend/src/components/SettingsPanel.vue
 - `usermeta` — frontend/src/views/ViewSoundfonts.vue
 - `utauAliasRange` — frontend/src/components/sing/VoicebankPanel.vue

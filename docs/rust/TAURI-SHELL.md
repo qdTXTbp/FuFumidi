@@ -191,6 +191,16 @@ worker running=true seq=1；输出 MIDI 头 `MThd`。剩余：cancel/pause、UI 
 - 实测输出：version 6.5.0-beta.1、Python 3.12.10、settings 42 往返、MIDI 头 `MThd`、字节 4 往返；
 - 截图：`shells/tauri/artifacts/smoke.png`（真实 UI）。
 
+### 3.4b 更新线路（本地，2026-11-04）
+
+- 新增 `update_sources` / `update_set_preferred_source` 两条命令：
+  - stable/beta 通道 id 后缀、国内/全球优先顺序与 Electron `main/update.js` 一致；
+  - 首选线路只把该条提到最前，**不硬绑定**；
+  - 只读 settings 的 `download_source`/`update_preferred_source`，**绝不写 settings**；
+  - 会话首选存 `UpdatePreferredState` 内存，不落盘；
+- `build/kachina.config.json` 的 10 个 source id 由 Rust 单测校验；
+- **6 项单测全过**；本批不联网、不检查版本、不下载更新包。
+
 ### 3.5 NSIS 安装包（T-119，2026-11-04）
 
 - `npm run tauri:bundle` 成功产出 **237.81 MiB** 安装包；安装后 **814 MB**，资源在安装根目录
@@ -203,20 +213,20 @@ worker running=true seq=1；输出 MIDI 头 `MThd`。剩余：cancel/pause、UI 
 
 - `npm run tauri:coverage` / `node scripts/tauri/ipc-coverage.mjs --write`：
   只解析 preload 与 Tauri 桥的方法名，不启动窗口；
-- 当前：preload 265 方法 / Tauri **134** 方法 / **131 未映射**；preload invoke 250 / tauri call **129**；
+- 当前：preload 265 方法 / Tauri **136** 方法 / **129 未映射**；preload invoke 250 / tauri call **131**；
 - 缺口分类：设置杂项 28、diffsinger 19、utau/voicebank 18、模型/安装 14、导出/渲染 14、
   资源/音频 13、rvc 12、曲库/数据 11、文件/诊断 11、事件/窗口 10、GPU 8、更新/测速 6、其他 4；
 - 明细见 [IPC-COVERAGE.md](IPC-COVERAGE.md)。
 - 前端实际调用审计：`npm run tauri:call-audit`（`docs/rust/BRIDGE-CALLS.md`），
   当前 212 个去重调用 / 104 未找到实现（启发式，含动态调用误报）。
-- 参数契约审计：`npm run tauri:arg-audit`（`docs/rust/ARG-AUDIT.md`），当前 113 命令 / 23 不一致
+- 参数契约审计：`npm run tauri:arg-audit`（`docs/rust/ARG-AUDIT.md`），当前 115 命令 / 23 不一致
   （主要来自尚未实现的 bridge 命令）；已修正 readSidecarLyrics/modelImportLocal/renameMidi/
   projectOpen/autosaveRead/autosaveClear 的 JS camelCase→Rust snake_case 参数错配。
 
-## 4. 当前命令清单（113 条）
+## 4. 当前命令清单（115 条）
 
 host_info, app_version, ping, python_selfcheck, engine_probe, convert, engine_worker_status,
-load_settings, save_settings, db_kv_get, db_kv_set, db_status, db_songs_list, db_songs_put,
+load_settings, save_settings, update_sources, update_set_preferred_source, db_kv_get, db_kv_set, db_status, db_songs_list, db_songs_put,
 db_songs_delete, db_playlists_list, db_playlists_put, model_list, list_midi_files, read_binary,
 save_binary, soundfont_list, dep_check, diag_export, notify, open_output, open_external, cancel,
 presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,

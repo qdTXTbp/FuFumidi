@@ -287,6 +287,116 @@ fn save_settings(s: serde_json::Value) -> serde_json::Value {
     }
 }
 
+// ── 更新线路（本地：只读设置，不联网、不下载、不检查版本）────────────────────
+// 语义对齐 Electron：
+//   · main/update.js 的 orderedUpdateSources —— stable/beta 只改 id 后缀（-beta）；
+//     国内优先（auto/cnb）时 CNB 打头、GitHub 官方压尾；全球优先（github）时
+//     GitHub 官方打头、CNB 兜底。
+//   · main/update-speedtest.js 的 orderCandidates —— preferred 只把该条提到最前，
+//     其余保持原顺序（不可达时照旧沿回退链往下走，不能改成硬绑定）。
+// 源 id 必须与 build/kachina.config.json 的 source[].id 一一对应（单测校验）。
+struct UpdateMirror {
+    id: &'static str,
+    label: &'static str,
+    kind: &'static str,
+}
+
+const UPDATE_MIRRORS: [UpdateMirror; 4] = [
+    UpdateMirror { id: "ghfast", label: "ghfast.top", kind: "mirror" },
+    UpdateMirror { id: "ghproxy", label: "gh-proxy.com", kind: "mirror" },
+    UpdateMirror { id: "ghproxy-net", label: "ghproxy.net", kind: "mirror" },
+    UpdateMirror { id: "github", label: "GitHub 官方", kind: "github" },
+];
+
+/// 用户选定的首选线路：只存本次会话（不落盘）。None / 空串 = 没有会话内覆盖。
+struct UpdatePreferredState(Mutex<Option<String>>);
+
+fn norm_update_channel(v: Option<&str>) -> &'static str {
+    match v {
+        Some(s) if s.eq_ignore_ascii_case("beta") => "beta",
+        _ => "stable",
+    }
+}
+
+fn update_source_id(id: &str, channel: &str) -> String {
+    if channel == "beta" { format!("{id}-beta") } else { id.to_string() }
+}
+
+/// 与 main/download-source.js 的 preferCnb/normSource 一致：
+/// auto / cnb（含未知值 → 归一为 auto）走国内优先；只有 github 是全球优先。
+fn update_prefer_cnb(download_source: Option<&str>) -> bool {
+    !matches!(download_source.map(|s| s.to_ascii_lowercase()).as_deref(), Some("github"))
+}
+
+/// 与 main/update-speedtest.js 的 orderCandidates 一致：只把 preferred 移到最前。
+fn order_update_candidates(list: Vec<serde_json::Value>, preferred: Option<&str>) -> Vec<serde_json::Value> {
+    let Some(pref) = preferred.filter(|p| !p.is_empty()) else { return list };
+    let Some(i) = list.iter().position(|s| s.get("id").and_then(|v| v.as_str()) == Some(pref)) else { return list };
+    if i == 0 { return list; }
+    let mut out = Vec::with_capacity(list.len());
+    out.push(list[i].clone());
+    out.extend(list[..i].iter().cloned());
+    out.extend(list[i + 1..].iter().cloned());
+    out
+}
+
+/// 纯函数：给定通道 / 下载源偏好 / 首选线路，返回按优先级排好的线路列表。
+/// 不读设置、不联网 —— 命令层负责把设置里的值读出来再传进来。
+fn update_sources_at(
+    channel: Option<&str>,
+    download_source: Option<&str>,
+    preferred: Option<&str>,
+) -> Vec<serde_json::Value> {
+    let ch = norm_update_channel(channel);
+    let cnb = serde_json::json!({
+        "id": update_source_id("cnb", ch),
+        "label": "CNB 国内源",
+        "kind": "cnb",
+        "channel": ch,
+    });
+    let gh: Vec<serde_json::Value> = UPDATE_MIRRORS
+        .iter()
+        .map(|m| serde_json::json!({
+            "id": update_source_id(m.id, ch),
+            "label": m.label,
+            "kind": m.kind,
+            "channel": ch,
+        }))
+        .collect();
+    let github_i = gh.len() - 1; // UPDATE_MIRRORS 末位是官方直连
+    let mut ordered = Vec::with_capacity(gh.len() + 1);
+    if update_prefer_cnb(download_source) {
+        ordered.push(cnb);
+        ordered.extend(gh);
+    } else {
+        ordered.push(gh[github_i].clone());
+        ordered.extend(gh[..github_i].iter().cloned());
+        ordered.push(cnb);
+    }
+    order_update_candidates(ordered, preferred)
+}
+
+#[tauri::command]
+fn update_sources(state: State<'_, UpdatePreferredState>, channel: Option<String>) -> Vec<serde_json::Value> {
+    // 设置只读（前端自己持久化 update_preferred_source）；会话内选择覆盖持久值。
+    let settings = read_json(&settings_path());
+    let download_source = settings.get("download_source").and_then(|v| v.as_str());
+    let persisted = settings.get("update_preferred_source").and_then(|v| v.as_str()).unwrap_or("");
+    let session = state.0.lock().ok().and_then(|g| (*g).clone()).unwrap_or_default();
+    let preferred = if session.is_empty() { persisted.to_string() } else { session };
+    update_sources_at(channel.as_deref(), download_source, Some(preferred.as_str()))
+}
+
+/// 用户选定的线路只提到最前（不是锁定）；这里只存会话内存，绝不写 settings。
+#[tauri::command]
+fn update_set_preferred_source(state: State<'_, UpdatePreferredState>, id: Option<String>) -> String {
+    let v = id.unwrap_or_default();
+    if let Ok(mut g) = state.0.lock() {
+        *g = if v.is_empty() { None } else { Some(v.clone()) };
+    }
+    v
+}
+
 #[tauri::command]
 fn db_kv_get(key: String) -> serde_json::Value {
     let Ok(conn) = open_db() else { return serde_json::Value::Null };
@@ -3128,13 +3238,15 @@ fn main() {
     }
     let state = WorkerState(Arc::new(Mutex::new(None)), Arc::new(AtomicBool::new(false)), Arc::new(AtomicU32::new(0)));
     let zoom_state = ZoomState(Arc::new(Mutex::new(1.0)));
+    let update_preferred_state = UpdatePreferredState(Mutex::new(None));
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(state)
         .manage(zoom_state)
+        .manage(update_preferred_state)
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
-            load_settings, save_settings, db_kv_get, db_kv_set,
+            load_settings, save_settings, update_sources, update_set_preferred_source, db_kv_get, db_kv_set,
             db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, wallpaper_set_desktop, gpu_status, gpu_uninstall, plugins_list, plugins_rescan, plugins_set_enabled, plugins_open_dir, plugins_open_docs, open_edit_guide, sf_workshop_list, sf_workshop_import, sf_workshop_delete, sf_workshop_open_dir, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
@@ -3952,5 +4064,107 @@ mod check_midi_tests {
         assert!(missing.iter().any(|x| x["id"] == "c"), "outside root is missing");
         let _ = std::fs::remove_file(outside);
         let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+mod update_sources_tests {
+    use super::{update_sources_at, UPDATE_MIRRORS};
+    use std::path::Path;
+
+    fn ids(list: &[serde_json::Value]) -> Vec<String> {
+        list.iter().map(|x| x["id"].as_str().unwrap_or_default().to_string()).collect()
+    }
+
+    fn ids_at(channel: Option<&str>, download_source: Option<&str>, preferred: Option<&str>) -> Vec<String> {
+        ids(&update_sources_at(channel, download_source, preferred))
+    }
+
+    #[test]
+    fn stable_auto_prefers_cnb_then_mirrors_then_github() {
+        let list = update_sources_at(Some("stable"), Some("auto"), None);
+        assert_eq!(ids(&list), ["cnb", "ghfast", "ghproxy", "ghproxy-net", "github"]);
+        assert_eq!(list[0]["label"], "CNB 国内源");
+        assert_eq!(list[0]["kind"], "cnb");
+        assert_eq!(list[4]["label"], "GitHub 官方");
+        assert_eq!(list[4]["kind"], "github");
+        assert!(list[1..4].iter().all(|x| x["kind"] == "mirror"), "middle entries are mirrors");
+        assert!(list.iter().all(|x| x["channel"] == "stable"));
+        assert_eq!(list.len(), UPDATE_MIRRORS.len() + 1);
+    }
+
+    #[test]
+    fn stable_github_prefers_official_then_mirrors_then_cnb() {
+        assert_eq!(ids_at(Some("stable"), Some("github"), None), ["github", "ghfast", "ghproxy", "ghproxy-net", "cnb"]);
+        // 归一化与 main/download-source.js 的 normSource 一致：大小写不敏感，未知值 → auto
+        assert_eq!(ids_at(Some("stable"), Some("GITHUB"), None), ids_at(Some("stable"), Some("github"), None));
+        assert_eq!(ids_at(Some("stable"), Some("cnb"), None), ids_at(Some("stable"), Some("auto"), None));
+        assert_eq!(ids_at(Some("stable"), Some("bogus"), None), ids_at(Some("stable"), Some("auto"), None));
+        assert_eq!(ids_at(Some("stable"), None, None), ids_at(Some("stable"), Some("auto"), None));
+    }
+
+    #[test]
+    fn preferred_is_moved_to_front_without_reordering_the_rest() {
+        assert_eq!(
+            ids_at(Some("stable"), Some("auto"), Some("ghproxy-net")),
+            ["ghproxy-net", "cnb", "ghfast", "ghproxy", "github"]
+        );
+        assert_eq!(
+            ids_at(Some("stable"), Some("auto"), Some("github")),
+            ["github", "cnb", "ghfast", "ghproxy", "ghproxy-net"]
+        );
+        // 已在第一位 / 未知 id / 空串：顺序不变（preferred 只是提前，不是硬绑定）
+        let base = ids_at(Some("stable"), Some("auto"), None);
+        assert_eq!(ids_at(Some("stable"), Some("auto"), Some("cnb")), base);
+        assert_eq!(ids_at(Some("stable"), Some("auto"), Some("nope")), base);
+        assert_eq!(ids_at(Some("stable"), Some("auto"), Some("")), base);
+        // 通道不匹配的 preferred（stable id 用在 beta 列表）不应该改动顺序
+        assert_eq!(ids_at(Some("beta"), Some("auto"), Some("ghproxy")), ids_at(Some("beta"), Some("auto"), None));
+    }
+
+    #[test]
+    fn beta_channel_appends_beta_suffix_to_ids() {
+        let beta = update_sources_at(Some("beta"), Some("auto"), None);
+        assert_eq!(ids(&beta), ["cnb-beta", "ghfast-beta", "ghproxy-beta", "ghproxy-net-beta", "github-beta"]);
+        assert!(beta.iter().all(|x| x["channel"] == "beta"));
+        assert_eq!(beta[0]["label"], "CNB 国内源");
+        assert_eq!(beta[0]["kind"], "cnb");
+        assert_eq!(beta[4]["label"], "GitHub 官方");
+        assert_eq!(beta[4]["kind"], "github");
+        // preferred 必须用带 -beta 后缀的 id 才能提前
+        assert_eq!(
+            ids_at(Some("beta"), Some("auto"), Some("ghproxy-beta")),
+            ["ghproxy-beta", "cnb-beta", "ghfast-beta", "ghproxy-net-beta", "github-beta"]
+        );
+        // 只有等价于 beta（大小写不敏感）才进测试通道
+        assert_eq!(ids_at(Some("BETA"), None, None), ids(&beta));
+        assert_eq!(ids_at(Some("stable"), None, None), ids_at(None, None, None));
+    }
+
+    #[test]
+    fn unknown_channel_falls_back_to_stable() {
+        let stable = ids_at(Some("stable"), Some("auto"), None);
+        assert_eq!(ids_at(Some("nightly"), Some("auto"), None), stable);
+        assert_eq!(ids_at(None, Some("auto"), None), stable);
+        assert_eq!(ids_at(Some(""), Some("auto"), None), stable);
+    }
+
+    #[test]
+    fn ids_match_build_kachina_config() {
+        let cfg_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../build/kachina.config.json");
+        let raw = std::fs::read_to_string(&cfg_path).expect("build/kachina.config.json must exist");
+        let cfg: serde_json::Value = serde_json::from_str(&raw).expect("kachina config must be valid json");
+        let source = cfg.get("source").and_then(|v| v.as_array()).expect("kachina config needs source[]");
+        let mut config_ids: Vec<String> = source
+            .iter()
+            .filter_map(|s| s.get("id").and_then(|v| v.as_str()).map(str::to_string))
+            .collect();
+        config_ids.sort();
+        assert_eq!(config_ids.len(), 10, "kachina config should keep 5 stable + 5 beta sources");
+
+        let mut actual = ids(&update_sources_at(Some("stable"), Some("auto"), None));
+        actual.extend(ids(&update_sources_at(Some("beta"), Some("auto"), None)));
+        actual.sort();
+        assert_eq!(actual, config_ids, "Tauri 更新源 id 必须与 build/kachina.config.json 的 source[].id 一致");
     }
 }

@@ -316,7 +316,8 @@
   **第三批**：`quantize/transpose/velRamp/toggleMute/setSelMuted/setSelBend/setSelVel/setSelMidi/setSelStart/
   setSelLen/applyVelCurve` 在单轨内改走一条 update 命令（多字段 before/after + note 引用）；跨轨仍走快照，
   避免轨道归属错乱。E2E 增加 selectAll + transpose/setSelVel 的 undo/redo 断言。
-  尚未完成：复制/粘贴、步进输入、CC 泳道、踏板、预览提交仍走快照；历史面板行内回退、
+  **第四批**：`pasteAt/duplicateSelected` 改走 add 命令，并按引用选中新音符（避免 afterEdit 排序后选错尾部）；步进输入也改走 add 命令。
+  尚未完成：CC 泳道、踏板、预览提交仍走快照；历史面板行内回退、
   与 `session.js` 应用级单栈合流未做。**仍不能宣称 P-011 整体完成。**
 - **Tauri check_midi 已补**：Rust 实现与 Electron 同语义（只认数据根 midi/ 内非空文件），
   桥补 `checkMidi`；Tauri 曲库自愈不再因缺命令而跳过。Rust 单测覆盖根内保留/缺失/根外路径。
@@ -401,6 +402,9 @@
 - **Tauri 本地动态壁纸**：wallpaper_list/add_local/remove_local（共享 Electron legacy wallpapers/，.ok 标记、mp4/webm/mov、basename 校验）；桥补 bridge.wallpaper；Rust 测试添加/列表/删除/../ 拒绝；命令总数 **95**，arg 审计不一致 42→**39**，cargo test **28/28 + 1 ignored**。
 - **Tauri 壁纸文件夹扫描**：wallpaper_scan_folder（图片/视频，深度 3、≤600、跳过点文件/空文件）；桥 wallpaper.scanFolder（合并重复 wallpaper 对象）；Rust 测试过滤与排序；命令总数 **96**，覆盖 133 方法/132 未映射（128 call），bridge 未实现 **104**，cargo test **29/29 + 1 ignored**。
 - **Tauri MIDI 文件关联**：file_assoc（HKCU .mid/.midi→FuFumidi.MIDI；开发用 build/icon.ico，打包用 exe；隐藏 reg.exe；失败计数回报）；桥补 fileAssoc；Rust 测试开/关命令计划，**测试不写注册表**；命令总数 **97**，arg 审计不一致 39→**38**，cargo test **30/30 + 1 ignored**。
+- **Tauri 更新线路列表（本地）**：`update_sources`（stable/beta 后缀、CNB/GitHub 优先顺序、preferred 提前；只读 settings）、
+  `update_set_preferred_source`（会话内存，不落盘）；桥补顶层 updateSources/updateSetPreferredSource；
+  `build/kachina.config.json` 的 10 个 source id 单测校验；6 项 Rust 测试全过；命令总数 **115**，arg 审计仍 **23**。
 - **Tauri GPU 状态/卸载**：gpu_status（dataRoot/gpu-enhancements 的 cuda/rocm/xpu、当前 Python、rocm 3.12 判定）、gpu_uninstall（删除对应目录）；桥已有映射；Rust 测试临时目录识别/卸载/非法类型；命令总数 **99**，arg 审计不一致 38→**36**，cargo test **31/31 + 1 ignored**。
 - **Tauri 设桌面壁纸**：wallpaper_set_desktop（静态图片；HKCU Wallpaper/WallpaperStyle/TileWallpaper + rundll32 刷新；扩展名/文件校验）；桥补 setDesktop；Rust 测试注册表计划/路径，**测试不改真实桌面**；命令总数 **100**，覆盖 134 方法/131 未映射（129 call），cargo test **32/32 + 1 ignored**。
 - **Tauri 插件中心本地列表/启停**：plugins_list/rescan（调 engine/plugin_render.py list，--dir 来自 settings/env，按 settings.plugins_enabled 标 enabled）、plugins_set_enabled（写 settings）、plugins_open_dir；桥已有映射；Rust 测试解析/启停；真实 Python 列表手工无窗口跑过返回空列表；命令总数 **104**，arg 审计不一致 36→**32**，cargo test **33/33 + 1 ignored**。
