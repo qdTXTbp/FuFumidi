@@ -7,8 +7,8 @@
 |---|---:|
 | 前端调用的 bridge 方法（去重） | 213 |
 | Tauri 顶层方法 | 119 |
-| Tauri 嵌套方法 | 50 |
-| **未找到实现** | **82** |
+| Tauri 嵌套方法 | 54 |
+| **未找到实现** | **78** |
 
 ## 未找到实现的方法
 
@@ -56,12 +56,8 @@
 - `plugin.savePath` — frontend/src/views/ViewConvert.vue
 - `plugins` — frontend/src/views/PluginCenter.vue
 - `plugins.cancelInstall` — frontend/src/views/PluginCenter.vue
-- `plugins.catalog` — frontend/src/views/PluginCenter.vue
 - `plugins.confirmInstall` — frontend/src/views/PluginCenter.vue
 - `plugins.installFromPlatform` — frontend/src/views/PluginCenter.vue
-- `plugins.installedList` — frontend/src/views/PluginCenter.vue
-- `plugins.openPlatform` — frontend/src/views/PluginCenter.vue
-- `plugins.platformInfo` — frontend/src/views/PluginCenter.vue
 - `presets` — frontend/src/views/ViewTranscribe.vue
 - `probeVoicebank` — frontend/src/components/sing/VoicebankPanel.vue
 - `project` — frontend/src/views/ViewEdit.vue

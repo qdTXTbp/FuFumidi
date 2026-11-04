@@ -1064,6 +1064,50 @@ async fn rvc_refresh_catalog() -> serde_json::Value {
     }).await.unwrap_or_else(|e| oto_err(&e.to_string()))
 }
 
+fn plugin_platform_base() -> String { std::env::var("FUFUMIDI_PLATFORM_URL").ok().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "https://platform.fufumidi.de5.net".to_string()).trim_end_matches('/').to_string() }
+
+fn plugin_catalog_from_json(body: &str, channel: &str, url: &str) -> serde_json::Value {
+    match serde_json::from_str::<serde_json::Value>(body) {
+        Ok(v) => serde_json::json!({
+            "ok": true, "url": url, "channel": v.get("channel").and_then(|x| x.as_str()).unwrap_or(channel),
+            "generatedAt": v.get("generatedAt").cloned().unwrap_or(serde_json::json!("")),
+            "plugins": v.get("plugins").cloned().unwrap_or_else(|| serde_json::json!([])),
+        }),
+        Err(e) => oto_err(&e.to_string()),
+    }
+}
+
+#[tauri::command]
+fn plugins_installed_list() -> serde_json::Value { serde_json::json!({ "ok": true, "plugins": plugins_list() }) }
+
+#[tauri::command]
+fn plugins_platform_info() -> serde_json::Value {
+    let base = plugin_platform_base();
+    let host = base.trim_start_matches("https://").trim_start_matches("http://").to_string();
+    serde_json::json!({ "ok": true, "base": base, "host": host })
+}
+
+#[tauri::command]
+async fn plugins_catalog(channel: Option<String>) -> serde_json::Value {
+    tauri::async_runtime::spawn_blocking(move || {
+        let ch = if channel.as_deref() == Some("beta") { "beta" } else { "stable" };
+        let url = format!("{}/api/store/manifest/{ch}", plugin_platform_base());
+        let out = match Command::new("curl.exe").args(["-L", "--silent", "--show-error", "--max-time", "15", "-H", "accept: application/json", &url]).output() {
+            Ok(o) => o, Err(e) => return oto_err(&format!("curl 不可用: {e}")),
+        };
+        if !out.status.success() { return oto_err(&String::from_utf8_lossy(&out.stderr).chars().rev().take(400).collect::<String>().chars().rev().collect::<String>()); }
+        plugin_catalog_from_json(&String::from_utf8_lossy(&out.stdout), ch, &url)
+    }).await.unwrap_or_else(|e| oto_err(&e.to_string()))
+}
+
+#[tauri::command]
+fn plugins_open_platform(rel: Option<String>) -> serde_json::Value {
+    let base = plugin_platform_base();
+    let rel = rel.unwrap_or_default();
+    let url = if rel.starts_with("http://") || rel.starts_with("https://") { rel } else if rel.starts_with('/') { format!("{base}{rel}") } else { format!("{base}/{rel}") };
+    open_external(url)
+}
+
 fn data_root_overridden() -> bool {
     std::env::var("FUFUMIDI_DATA_ROOT").map(|p| !p.trim().is_empty()).unwrap_or(false)
 }
@@ -4410,7 +4454,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, update_sources, update_set_preferred_source, db_kv_get, db_kv_set,
-            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, wallpaper_set_desktop, gpu_status, gpu_uninstall, plugins_list, plugins_rescan, plugins_set_enabled, plugins_open_dir, plugins_open_docs, open_edit_guide, sf_workshop_list, sf_workshop_import, sf_workshop_delete, sf_workshop_open_dir, model_list,
+            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, wallpaper_set_desktop, gpu_status, gpu_uninstall, plugins_list, plugins_rescan, plugins_set_enabled, plugins_installed_list, plugins_platform_info, plugins_catalog, plugins_open_platform, plugins_open_dir, plugins_open_docs, open_edit_guide, sf_workshop_list, sf_workshop_import, sf_workshop_delete, sf_workshop_open_dir, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
@@ -6216,5 +6260,18 @@ mod rvc_catalog_api_tests {
         assert_eq!(m["sr"], 40000);
         assert_eq!(m["index"], "40k/作品/中文/角色/voice.index");
         assert!(super::rvc_catalog_from_api("{}").is_err());
+    }
+}
+
+#[cfg(test)]
+mod plugin_catalog_tests {
+    #[test]
+    fn parses_manifest_and_platform_defaults() {
+        let v = super::plugin_catalog_from_json(r#"{"channel":"beta","generatedAt":"x","plugins":[{"id":"p"}]}"#, "stable", "http://x");
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["channel"], "beta");
+        assert_eq!(v["plugins"][0]["id"], "p");
+        assert_eq!(super::plugin_catalog_from_json("{}", "stable", "u")["plugins"].as_array().unwrap().len(), 0);
+        assert!(super::plugin_platform_base().starts_with("http"));
     }
 }

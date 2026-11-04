@@ -5,10 +5,10 @@
 | 指标 | 数值 |
 |---|---:|
 | preload 暴露方法 | 265 |
-| Tauri 桥已映射方法 | 158 |
-| 尚未映射 | **108** |
+| Tauri 桥已映射方法 | 162 |
+| 尚未映射 | **104** |
 | preload IPC invoke 通道 | 250 |
-| Tauri call 通道 | 152 |
+| Tauri call 通道 | 156 |
 
 ## 缺口分类
 
@@ -16,10 +16,10 @@
 |---|---:|
 | diffsinger | 19 |
 | 设置/杂项 | 17 |
-| 模型/安装/平台 | 13 |
 | 资源/音频/扩展 | 11 |
 | 导出/渲染 | 11 |
 | utau/voicebank | 10 |
+| 模型/安装/平台 | 9 |
 | gpu/运行时增强 | 8 |
 | 事件/窗口 | 7 |
 | 更新/测速 | 4 |
@@ -32,7 +32,6 @@
 ```text
 appUninstall
 cancelInstall
-catalog
 clearFinished
 confirmInstall
 coverCancel
@@ -78,7 +77,6 @@ hotkeysGet
 importUstx
 install
 installFromPlatform
-installedList
 inventory
 langInstall
 langRemove
@@ -101,10 +99,8 @@ onUpdate
 onUpdateSpeedtest
 onVoicebankProgress
 openFolder
-openPlatform
 pathForFile
 pickDir
-platformInfo
 preview
 probeVoicebank
 renderFile
