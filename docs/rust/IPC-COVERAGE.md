@@ -5,10 +5,10 @@
 | 指标 | 数值 |
 |---|---:|
 | preload 暴露方法 | 265 |
-| Tauri 桥已映射方法 | 104 |
-| 尚未映射 | **161** |
+| Tauri 桥已映射方法 | 107 |
+| 尚未映射 | **158** |
 | preload IPC invoke 通道 | 250 |
-| Tauri call 通道 | 95 |
+| Tauri call 通道 | 98 |
 
 ## 缺口分类
 
@@ -21,9 +21,9 @@
 | 导出/渲染 | 14 |
 | 资源/音频/扩展 | 13 |
 | rvc | 12 |
-| 事件/窗口 | 10 |
 | 文件/诊断 | 9 |
 | gpu/运行时增强 | 8 |
+| 事件/窗口 | 7 |
 | 曲库/数据 | 6 |
 | 更新/测速 | 6 |
 | 其他 | 4 |
@@ -83,7 +83,6 @@ exportScorePdfPages
 exportStemsZip
 exportUstx
 generate
-getZoomFactor
 gpuCancelInstall
 gpuUnifiedMemoryExperiment
 homrInstall
@@ -154,9 +153,7 @@ searchWallhaven
 separateAudio
 set
 setDesktop
-setFullScreen
 setPreferredSource
-setZoomFactor
 singToPinyin
 sources
 speedtest

@@ -320,6 +320,9 @@
 - **Tauri 曲库体检/查重（Rust core）**：`has_midi`、`verify_midi`（复用 fufumidi-core 解析，
   返回轨道/音符/BPM/损坏列表）、`dupe_midi`（FNV-1a 分组）；桥补 hasMidi/midiStats/verifyMidi/dupeMidi；
   Rust 测试覆盖合法 SMF 2 音符、坏文件、重复组；命令总数 **57**，覆盖 104 方法/161 未映射（95 call）。
+- **Tauri 缩放/全屏**：`get_zoom_factor/set_zoom_factor/set_full_screen`（50%–300% 夹取、状态记忆、
+  WebView 缩放与全屏）；桥补 getZoomFactor/setZoomFactor/setFullScreen；Rust 测试覆盖缩放夹取；
+  命令总数 **60**，覆盖 107 方法/158 未映射（98 call）。真实窗口行为未在无头会话验证。
 - **T-117 曲库/设置共享 Electron 数据（重要）**：Rust 用 rusqlite 直读/写
   `%APPDATA%/FuFumidi/fufumidi/fufumidi.sqlite`（songs/playlists/kv），设置优先读 legacy
   settings.json；只读验收实测 **1972 首真实曲目**、57 个设置键、侧栏「全部曲目 1972」正常；

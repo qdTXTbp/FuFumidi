@@ -609,6 +609,37 @@ fn data_root_overview(root: &Path) -> serde_json::Value {
     })
 }
 
+fn clamp_zoom(f: f64) -> f64 {
+    if !f.is_finite() { return 1.0; }
+    (f * 100.0).round().clamp(50.0, 300.0) / 100.0
+}
+
+#[tauri::command]
+fn get_zoom_factor(state: State<'_, ZoomState>) -> serde_json::Value {
+    let f = *state.0.lock().unwrap_or_else(|e| e.into_inner());
+    serde_json::json!({ "ok": true, "factor": f })
+}
+
+#[tauri::command]
+fn set_zoom_factor(window: tauri::WebviewWindow, state: State<'_, ZoomState>, f: f64) -> serde_json::Value {
+    let factor = clamp_zoom(f);
+    match window.set_zoom(factor) {
+        Ok(_) => {
+            *state.0.lock().unwrap_or_else(|e| e.into_inner()) = factor;
+            serde_json::json!({ "ok": true, "factor": factor })
+        }
+        Err(e) => serde_json::json!({ "ok": false, "error": e.to_string(), "factor": factor }),
+    }
+}
+
+#[tauri::command]
+fn set_full_screen(window: tauri::WebviewWindow, on: bool) -> serde_json::Value {
+    match window.set_fullscreen(on) {
+        Ok(_) => serde_json::json!({ "ok": true, "fullscreen": on }),
+        Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
+    }
+}
+
 #[tauri::command]
 fn data_root() -> serde_json::Value { data_root_overview(&data_dir()) }
 
@@ -1100,6 +1131,7 @@ struct Worker {
 }
 
 struct WorkerState(Arc<Mutex<Option<Worker>>>, Arc<AtomicBool>, Arc<AtomicU32>);
+struct ZoomState(Arc<Mutex<f64>>);
 
 fn pause_file() -> PathBuf { data_dir().join("engine.pause") }
 
@@ -1343,13 +1375,15 @@ fn main() {
         return;
     }
     let state = WorkerState(Arc::new(Mutex::new(None)), Arc::new(AtomicBool::new(false)), Arc::new(AtomicU32::new(0)));
+    let zoom_state = ZoomState(Arc::new(Mutex::new(1.0)));
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(state)
+        .manage(zoom_state)
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, db_kv_get, db_kv_set,
-            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, model_list,
+            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
@@ -1382,6 +1416,15 @@ mod check_midi_tests {
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    #[test]
+    fn zoom_clamp() {
+        assert_eq!(super::clamp_zoom(1.0), 1.0);
+        assert_eq!(super::clamp_zoom(0.1), 0.5);
+        assert_eq!(super::clamp_zoom(9.0), 3.0);
+        assert_eq!(super::clamp_zoom(f64::NAN), 1.0);
+        assert_eq!(super::clamp_zoom(1.234), 1.23);
     }
 
     #[test]

@@ -139,6 +139,9 @@ export function installTauriBridge() {
     // 主程序检查更新（对比 GitHub latest 与当前版本，有新版才拉起更新器）
     getVersion: () => call('app_version'),
     dataRoot: () => call('data_root'),
+    getZoomFactor: () => call('get_zoom_factor').then((r) => (r && r.factor) || 1),
+    setZoomFactor: (f) => call('set_zoom_factor', { f: Number(f) || 1 }),
+    setFullScreen: (on) => call('set_full_screen', { on: !!on }),
     openDataRoot: (sub) => call('open_data_root', { sub }),
     cleanTemp: () => call('clean_temp'),
     updateCheck: (channel) => call('check_update', { channel }),
