@@ -72,6 +72,8 @@
 
 ## 5. 验收建议（不弹窗）
 
+- 2026-11-04 全量 `npm run tauri:acceptance` 实测 **ok:true**（11 步）；
+
 - 一键：`npm run tauri:acceptance`（完整）或 `npm run tauri:acceptance -- --quick`（低成本）；
 
 ```powershell

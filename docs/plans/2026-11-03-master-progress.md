@@ -574,3 +574,5 @@
 - **158 命令 release（分离进度 id）**：2m24s、0 warning；host/engine self-check 通过；无窗口/残留。
 
 - **一键验收脚本**：`npm run tauri:acceptance` / `-- --quick`；quick 实测 ok:true（typecheck/audit/test:ui/video/cover/separate smoke/cargo）。
+
+- **全量一键验收**：`npm run tauri:acceptance` ok:true（11 步，含隐藏 E2E/release/self-check）；无残留/窗口。
