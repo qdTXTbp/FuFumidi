@@ -308,6 +308,9 @@
 - **Tauri 曲库文件操作已补**：`delete_midi` / `rename_midi`（限数据根 midi/、非法字符清洗、
   重名加 (2)、扩展名保留），桥补 deleteMidi/renameMidi；Rust 单测覆盖根外拒绝、改名落盘、
   同名不重命名、删除消失。命令总数 **47**；仍全部无头验证。
+- **Tauri 曲库/音频辅助命令**：`list_audio_files`（递归音频扫描）、`library_stats`（顶层文件数/字节）、
+  `read_soundfont`（SF2 原始字节，512MB 保护；SF3 转换仍留在 Electron/Python 路径）；
+  Rust 测试覆盖音频扩展过滤/递归/统计；命令总数 **50**。
 - **T-117 曲库/设置共享 Electron 数据（重要）**：Rust 用 rusqlite 直读/写
   `%APPDATA%/FuFumidi/fufumidi/fufumidi.sqlite`（songs/playlists/kv），设置优先读 legacy
   settings.json；只读验收实测 **1972 首真实曲目**、57 个设置键、侧栏「全部曲目 1972」正常；

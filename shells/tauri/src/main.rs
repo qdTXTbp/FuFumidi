@@ -752,6 +752,68 @@ fn db_playlists_put(item: serde_json::Value) -> bool {
     ).is_ok()
 }
 
+fn is_audio_ext(ext: &str) -> bool {
+    matches!(ext.to_ascii_lowercase().as_str(),
+        "mp3" | "wav" | "flac" | "m4a" | "aac" | "ogg" | "oga" | "opus" | "wma"
+        | "mp4" | "mkv" | "avi" | "mov" | "webm" | "aiff" | "aif" | "au" | "snd"
+        | "caf" | "m4v" | "m4s" | "ts" | "mpg" | "mpeg" | "flv" | "3gp" | "amr" | "mka")
+}
+
+fn walk_audio_files(dir: &Path) -> Vec<String> {
+    fn walk(d: &Path, out: &mut Vec<String>, depth: usize) {
+        if out.len() >= 2000 || depth > 8 { return; }
+        let Ok(rd) = std::fs::read_dir(d) else { return };
+        for e in rd.flatten() {
+            if out.len() >= 2000 { return; }
+            let p = e.path();
+            if p.is_dir() { walk(&p, out, depth + 1); }
+            else if p.is_file() {
+                if let Some(ext) = p.extension().and_then(|x| x.to_str()) {
+                    if is_audio_ext(ext) { out.push(p.display().to_string()); }
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, &mut out, 0);
+    out.sort();
+    out
+}
+
+#[tauri::command]
+fn list_audio_files(dir: String) -> Vec<String> {
+    if dir.trim().is_empty() { return Vec::new(); }
+    walk_audio_files(Path::new(&dir))
+}
+
+fn library_stats_of(dir: &Path) -> (u64, u64) {
+    let mut count = 0u64;
+    let mut bytes = 0u64;
+    let Ok(rd) = std::fs::read_dir(dir) else { return (0, 0) };
+    for e in rd.flatten() {
+        if let Ok(m) = e.metadata() {
+            if m.is_file() { count += 1; bytes += m.len(); }
+        }
+    }
+    (count, bytes)
+}
+
+#[tauri::command]
+fn library_stats() -> serde_json::Value {
+    let dir = midi_root();
+    let (count, bytes) = library_stats_of(&dir);
+    serde_json::json!({ "ok": true, "dir": dir.display().to_string(), "count": count, "bytes": bytes })
+}
+
+#[tauri::command]
+fn read_soundfont(p: String) -> Result<tauri::ipc::Response, String> {
+    let path = Path::new(&p);
+    let m = std::fs::metadata(path).map_err(|e| e.to_string())?;
+    if !m.is_file() { return Err("not a file".to_string()); }
+    if m.len() > 512 * 1024 * 1024 { return Err("soundfont too large".to_string()); }
+    std::fs::read(path).map(tauri::ipc::Response::new).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn list_midi_files(dir: String) -> Vec<String> {
     fn walk(d: &Path, out: &mut Vec<String>, depth: usize) {
@@ -1114,7 +1176,7 @@ fn main() {
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
             pick_file, pick_directory, pick_audio, pick_audio_files, pick_image, pick_music_xml,
-            list_midi_files, read_binary, save_binary,
+            list_midi_files, list_audio_files, library_stats, read_soundfont, read_binary, save_binary,
             convert, cancel, set_transcribe_pause, engine_worker_status
         ])
         .setup(|_app| {
@@ -1141,6 +1203,24 @@ mod check_midi_tests {
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    #[test]
+    fn audio_scan_and_library_stats() {
+        let root = tmpdir("audio-scan");
+        let sub = root.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(root.join("a.wav"), b"1234").unwrap();
+        std::fs::write(root.join("b.txt"), b"x").unwrap();
+        std::fs::write(sub.join("c.mp3"), b"12").unwrap();
+        let files = super::walk_audio_files(&root);
+        assert_eq!(files.len(), 2);
+        assert!(files.iter().any(|f| f.ends_with("a.wav")));
+        assert!(files.iter().any(|f| f.ends_with("c.mp3")));
+        let (count, bytes) = super::library_stats_of(&root);
+        assert_eq!(count, 2);
+        assert_eq!(bytes, 5);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
