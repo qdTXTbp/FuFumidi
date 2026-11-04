@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -500,7 +501,7 @@ struct Worker {
     seq: u64,
 }
 
-struct WorkerState(Arc<Mutex<Option<Worker>>>);
+struct WorkerState(Arc<Mutex<Option<Worker>>>, Arc<AtomicBool>, Arc<AtomicU32>);
 
 fn spawn_worker() -> Result<Worker, String> {
     let py = python_path().ok_or("python runtime not found")?;
@@ -531,8 +532,9 @@ fn stop_worker(state: &Arc<Mutex<Option<Worker>>>) {
 
 /// 把一次转录请求交给常驻 worker。模型/参数契约与 Electron 路径一致（req 原样转发）。
 /// 进度/日志通过 Tauri 事件 engine:log / engine:progress 推给前端。
-fn run_convert(state: Arc<Mutex<Option<Worker>>>, app: AppHandle, req: serde_json::Value) -> serde_json::Value {
+fn run_convert(state: Arc<Mutex<Option<Worker>>>, cancel: Arc<AtomicBool>, pid_slot: Arc<AtomicU32>, app: AppHandle, req: serde_json::Value) -> serde_json::Value {
     let started = std::time::Instant::now();
+    cancel.store(false, Ordering::SeqCst);
     let mut guard = match state.lock() {
         Ok(g) => g,
         Err(_) => return serde_json::json!({ "ok": false, "error": "worker state poisoned" }),
@@ -544,6 +546,7 @@ fn run_convert(state: Arc<Mutex<Option<Worker>>>, app: AppHandle, req: serde_jso
         }
     }
     let w = guard.as_mut().unwrap();
+    pid_slot.store(w.child.id(), Ordering::SeqCst);
     if let Ok(Some(_)) = w.child.try_wait() {
         *guard = None;
         return serde_json::json!({ "ok": false, "error": "engine worker exited; retry restarts it" });
@@ -566,6 +569,10 @@ fn run_convert(state: Arc<Mutex<Option<Worker>>>, app: AppHandle, req: serde_jso
             Ok(0) => {
                 let _ = w.child.kill();
                 *guard = None;
+                pid_slot.store(0, Ordering::SeqCst);
+                if cancel.load(Ordering::SeqCst) {
+                    return serde_json::json!({ "ok": false, "canceled": true, "error": "canceled" });
+                }
                 return serde_json::json!({ "ok": false, "error": "engine worker closed" });
             }
             Ok(_) => {}
@@ -576,6 +583,12 @@ fn run_convert(state: Arc<Mutex<Option<Worker>>>, app: AppHandle, req: serde_jso
         }
         let t = buf.trim();
         if t.is_empty() { continue; }
+        if cancel.load(Ordering::SeqCst) {
+            let _ = w.child.kill();
+            *guard = None;
+            pid_slot.store(0, Ordering::SeqCst);
+            return serde_json::json!({ "ok": false, "canceled": true, "error": "canceled" });
+        }
         if let Some(rest) = t.strip_prefix("###RESULT ") {
             if let Ok(mut r) = serde_json::from_str::<serde_json::Value>(rest) {
                 let rid = r.get("_id").and_then(|v| v.as_u64()).or_else(|| r.get("id").and_then(|v| v.as_u64()));
@@ -612,9 +625,31 @@ fn run_convert(state: Arc<Mutex<Option<Worker>>>, app: AppHandle, req: serde_jso
 #[tauri::command]
 async fn convert(state: State<'_, WorkerState>, app: AppHandle, req: serde_json::Value) -> Result<serde_json::Value, String> {
     let arc = state.0.clone();
-    tauri::async_runtime::spawn_blocking(move || run_convert(arc, app, req))
+    let cancel = state.1.clone();
+    let pid = state.2.clone();
+    tauri::async_runtime::spawn_blocking(move || run_convert(arc, cancel, pid, app, req))
         .await
         .map_err(|e| e.to_string())
+}
+
+/// 取消当前转录：置标志 + taskkill 掉 worker；阻塞中的读会返回 EOF，convert 识别为 canceled。
+/// 下一次 convert 会重新拉起 worker（模型冷启动由用户可见日志承担）。
+#[tauri::command]
+fn cancel(state: State<'_, WorkerState>, id: Option<String>) -> serde_json::Value {
+    state.1.store(true, Ordering::SeqCst);
+    let pid = state.2.load(Ordering::SeqCst);
+    if pid == 0 {
+        return serde_json::json!({ "ok": false, "canceled": false, "error": "no running worker", "id": id });
+    }
+    #[cfg(target_os = "windows")]
+    {
+        match Command::new("taskkill").args(["/PID", &pid.to_string(), "/T", "/F"]).output() {
+            Ok(_) => serde_json::json!({ "ok": true, "canceled": true, "pid": pid, "id": id }),
+            Err(e) => serde_json::json!({ "ok": false, "canceled": false, "error": e.to_string(), "id": id }),
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    { serde_json::json!({ "ok": false, "canceled": false, "error": "unsupported platform", "id": id }) }
 }
 
 #[tauri::command]
@@ -637,7 +672,7 @@ fn main() {
         println!("{}", serde_json::to_string_pretty(&host_info_json()).unwrap_or_default());
         return;
     }
-    let state = WorkerState(Arc::new(Mutex::new(None)));
+    let state = WorkerState(Arc::new(Mutex::new(None)), Arc::new(AtomicBool::new(false)), Arc::new(AtomicU32::new(0)));
     let app = tauri::Builder::default()
         .manage(state)
         .invoke_handler(tauri::generate_handler![
@@ -646,7 +681,7 @@ fn main() {
             db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             list_midi_files, read_binary, save_binary,
-            convert, engine_worker_status
+            convert, cancel, engine_worker_status
         ])
         .setup(|_app| {
             println!("[fufumidi-shell] {}", serde_json::to_string(&host_info_json()).unwrap_or_default());

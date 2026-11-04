@@ -271,6 +271,9 @@
   返回 universal/piano/aria/muscriptor/separate/transkun 6 组）、`diag_export`（diagnostics-<ts>.json）、
   `notify`（明确 delivered=false）、`open_output/open_external`（校验路径/协议，非法安全失败）。
   smoke 增至 **21 项**全绿；页面数据仍缺 `presets_*`；
+- **T-118 取消已打通**：`cancel` 置 AtomicBool + taskkill pid，convert 识别 EOF 返回
+  `{ok:false,canceled:true}`，worker running=false；smoke 用 **120 s WAV** 在 1.2 s 时取消，
+  **22 项**全绿（新增 cancel）；下次 convert 自动重新拉起 worker。
   下一步：T-115 继续补这些 UI 必需通道，T-117 继续 settings/song/task host 化，cancel/pause 与批量并发。
 
 ## 17. 待收口（下一轮）

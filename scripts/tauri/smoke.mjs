@@ -26,6 +26,8 @@ fs.writeFileSync(MIDI, Buffer.from(MIDI_BYTES));
 const OUT = path.join(FIX, "out.bin");
 const WAV = path.join(FIX, "tone.wav");
 const OUTMIDI = path.join(FIX, "tone.mid");
+const LONGWAV = path.join(FIX, "long.wav");
+const OUTLONG = path.join(FIX, "long.mid");
 {
   const sr = 22050, n = sr;
   const data = Buffer.alloc(n * 2);
@@ -36,6 +38,13 @@ const OUTMIDI = path.join(FIX, "tone.mid");
   h.writeUInt32LE(sr, 24); h.writeUInt32LE(sr * 2, 28); h.writeUInt16LE(2, 32); h.writeUInt16LE(16, 34);
   h.write("data", 36); h.writeUInt32LE(data.length, 40);
   fs.writeFileSync(WAV, Buffer.concat([h, data]));
+  // 120s 长音：用于取消测试（Basic Pitch 在暖 worker 上对短音频可能 100ms 内就完成）
+  const n2 = sr * 120;
+  const data2 = Buffer.alloc(n2 * 2);
+  for (let i = 0; i < n2; i++) data2.writeInt16LE(Math.round(Math.sin(2 * Math.PI * 440 * i / sr) * 0.25 * 32767), i * 2);
+  const h2 = Buffer.from(h);
+  h2.writeUInt32LE(36 + data2.length, 4); h2.writeUInt32LE(data2.length, 40);
+  fs.writeFileSync(LONGWAV, Buffer.concat([h2, data2]));
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = [];
@@ -53,7 +62,7 @@ const send = (ws, id, method, params) => new Promise((resolve, reject) => {
 });
 const EXPR = [
   "(async () => {",
-  "  const P = " + JSON.stringify({ fix: FIX, midi: MIDI, out: OUT, wav: WAV, outmidi: OUTMIDI, midiBytes: MIDI_BYTES }) + ";",
+  "  const P = " + JSON.stringify({ fix: FIX, midi: MIDI, out: OUT, wav: WAV, outmidi: OUTMIDI, longwav: LONGWAV, outlong: OUTLONG, midiBytes: MIDI_BYTES }) + ";",
   "  const inv = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args || {});",
   "  const info = await inv('host_info');",
   "  const ver = await inv('app_version');",
@@ -75,6 +84,11 @@ const EXPR = [
   "  const songsAfter = await inv('db_songs_list');",
   "  const plPut = await inv('db_playlists_put', { item: { id: 'smoke-pl', name: 'Smoke PL' } });",
   "  const pls = await inv('db_playlists_list');",
+  "  const convPending = inv('convert', { req: { audio: P.longwav, out: P.outlong, mode: 'universal', model: 'basic', perf: 'balanced' } }).catch((e) => ({ ok: false, error: String(e) }));",
+  "  await new Promise((r) => setTimeout(r, 1200));",
+  "  const cancelR = await inv('cancel', { id: 'smoke-cancel' });",
+  "  const canceledConv = await convPending;",
+  "  const workerAfterCancel = await inv('engine_worker_status');",
   "  const models = await inv('model_list');",
   "  const sfs = await inv('soundfont_list');",
   "  const deps = await inv('dep_check');",
@@ -100,7 +114,7 @@ const EXPR = [
   "  return {",
   "    pages,",
   "    ui: { title: document.title, appChildren: (document.getElementById('app') || { childElementCount: -1 }).childElementCount, fuBridge: typeof window.fuBridge, tauri: typeof window.__TAURI__, hash: location.hash, textLen: (document.body.innerText || '').length },",
-  "    info, ver, py, eng, conv, worker, midiHeader, saved, loaded, set, got, songPut, songs, dbStat, songDel, songsAfter, plPut, pls, models, sfs, deps, diag, notifyR, openBad, extBad, uiSongPut, files, header, sb, backLen: back.length,",
+  "    info, ver, py, eng, conv, worker, midiHeader, saved, loaded, set, got, songPut, songs, dbStat, songDel, songsAfter, plPut, pls, models, cancelR, canceledConv, workerAfterCancel, sfs, deps, diag, notifyR, openBad, extBad, uiSongPut, files, header, sb, backLen: back.length,",
   "  };",
   "})()",
 ].join("\n");
@@ -163,6 +177,7 @@ try {
     worker: !!r.worker && r.worker.ok === true && r.worker.running === true && r.worker.seq >= 1,
     dbSongs: r.songPut === true && Array.isArray(r.songs) && r.songs.length === 1 && r.songs[0].id === "smoke-song" && !!r.dbStat && r.dbStat.songs === 1 && r.songDel === true && Array.isArray(r.songsAfter) && r.songsAfter.length === 0,
     dbPlaylists: r.plPut === true && Array.isArray(r.pls) && r.pls.some((x) => x.id === "smoke-pl"),
+    cancel: !!r.cancelR && r.cancelR.canceled === true && !!r.canceledConv && r.canceledConv.canceled === true && r.canceledConv.ok === false && !!r.workerAfterCancel && r.workerAfterCancel.running === false,
     soundfonts: Array.isArray(r.sfs) && r.sfs.length >= 1 && /\.sf[23]$/i.test((r.sfs[0] && r.sfs[0].path) || ""),
     depCheck: !!r.deps && r.deps.ok === true && !!r.deps.result && !!r.deps.result.groups,
     diagExport: !!r.diag && r.diag.ok === true && /diagnostics-\d+\.json$/.test(r.diag.path || ""),
