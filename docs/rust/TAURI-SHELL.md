@@ -74,6 +74,7 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 | copy_asset | 复制分轨导出资产（自动建父目录） | Rust 单测：复制字节一致、源缺失报错 |
 | project_save / project_open | .fufumidi ZIP（project.json + files/），对话框/指定路径；开包校验条目数/总大小/路径穿越/资产白名单 | Rust 单测：写包→读包、资产字节一致、非法资产 id 计入 missing；缓存目录隔离；恶意包 ../evil.txt 不产生 resolved |
 | storage_report / storage_cleanup | 存储治理：10 类占用（曲库 protected、资产显式 includeAssets、日志保留 5 份） | Rust 单测：分类/总字节、默认只清 safe、资产需显式、midi 永不清 |
+| audio_duration | 读文件头取时长：WAV RIFF/fmt/data、FLAC STREAMINFO、MP3 逐帧扫描；其他格式返回 unsupported | Rust 单测：1s WAV、1s FLAC、100 帧 MP3（约 2.61s）、坏文件 false |
 | open_folder | 打开目录（仅目录） | 实际打开资源管理器不在无头会话触发 |
 | soundfont_list | 扫描 renderer/vendor/soundfonts + dataDir/soundfonts（sf2/sf3） | 开发树返回 GeneralUser.sf2 |
 | dep_check | Rust 启动 Python `deps.py check`，解析 `###RESULT` 的 groups | 返回 universal/piano/aria/muscriptor/separate/transkun 6 组 |
@@ -180,12 +181,12 @@ worker running=true seq=1；输出 MIDI 头 `MThd`。剩余：cancel/pause、UI 
 
 - `npm run tauri:coverage` / `node scripts/tauri/ipc-coverage.mjs --write`：
   只解析 preload 与 Tauri 桥的方法名，不启动窗口；
-- 当前：preload 265 方法 / Tauri **117** 方法 / **148 未映射**；preload invoke 250 / tauri call **109**；
+- 当前：preload 265 方法 / Tauri **118** 方法 / **147 未映射**；preload invoke 250 / tauri call **110**；
 - 缺口分类：设置杂项 28、diffsinger 19、utau/voicebank 18、模型/安装 14、导出/渲染 14、
   资源/音频 13、rvc 12、曲库/数据 11、文件/诊断 11、事件/窗口 10、GPU 8、更新/测速 6、其他 4；
 - 明细见 [IPC-COVERAGE.md](IPC-COVERAGE.md)。
 
-## 4. 当前命令清单（72 条）
+## 4. 当前命令清单（73 条）
 
 host_info, app_version, ping, python_selfcheck, engine_probe, convert, engine_worker_status,
 load_settings, save_settings, db_kv_get, db_kv_set, db_status, db_songs_list, db_songs_put,
@@ -198,7 +199,7 @@ wallpaper_defaults, delete_midi, rename_midi, list_audio_files, library_stats, r
 db_playlists_delete, data_root, open_data_root, clean_temp, has_midi, verify_midi, dupe_midi,
 get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear,
 read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open,
-storage_report, storage_cleanup。
+storage_report, storage_cleanup, audio_duration。
 
 ## 4.1 下一步
 

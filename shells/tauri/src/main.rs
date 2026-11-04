@@ -558,6 +558,122 @@ fn presets_restore() -> serde_json::Value {
 
 fn midi_root() -> PathBuf { data_dir().join("midi") }
 
+fn audio_duration_at(p: &str) -> serde_json::Value {
+    let path = Path::new(p);
+    let Ok(meta) = std::fs::metadata(path) else { return serde_json::json!({ "ok": false, "error": "not found" }); };
+    if !meta.is_file() { return serde_json::json!({ "ok": false, "error": "not a file" }); }
+    let Ok(mut f) = std::fs::File::open(path) else { return serde_json::json!({ "ok": false, "error": "open failed" }); };
+    let mut head = vec![0u8; 65536.min(meta.len() as usize)];
+    let n = f.read(&mut head).unwrap_or(0); head.truncate(n);
+    let ext = path.extension().and_then(|x| x.to_str()).unwrap_or("").to_ascii_lowercase();
+    let secs: Option<f64> = match ext.as_str() {
+        "wav" | "wave" => wav_duration(&head),
+        "flac" => flac_duration(&head),
+        "mp3" => mp3_duration(path),
+        _ => None,
+    };
+    match secs {
+        Some(s) if s > 0.0 => serde_json::json!({ "ok": true, "seconds": s }),
+        Some(s) => serde_json::json!({ "ok": true, "seconds": s }),
+        None => serde_json::json!({ "ok": false, "error": "unsupported or invalid audio" }),
+    }
+}
+
+fn wav_duration(b: &[u8]) -> Option<f64> {
+    if b.len() < 12 || &b[0..4] != b"RIFF" || &b[8..12] != b"WAVE" { return None; }
+    let mut i = 12usize;
+    let mut byte_rate = 0u32;
+    let mut data_size = None;
+    while i + 8 <= b.len() {
+        let id = &b[i..i + 4];
+        let size = u32::from_le_bytes([b[i+4], b[i+5], b[i+6], b[i+7]]) as usize;
+        let body = i + 8;
+        if id == b"fmt " && body + 16 <= b.len() {
+            byte_rate = u32::from_le_bytes([b[body+8], b[body+9], b[body+10], b[body+11]]);
+        } else if id == b"data" {
+            data_size = Some(size as u64);
+            break;
+        }
+        i = body.saturating_add(size).saturating_add(size % 2);
+    }
+    let ds = data_size?;
+    if byte_rate == 0 { return None; }
+    Some(ds as f64 / byte_rate as f64)
+}
+
+fn flac_duration(b: &[u8]) -> Option<f64> {
+    if b.len() < 42 || &b[0..4] != b"fLaC" { return None; }
+    let mut i = 4usize;
+    while i + 4 <= b.len() {
+        let header = b[i];
+        let typ = header & 0x7f;
+        let last = header & 0x80 != 0;
+        let len = ((b[i+1] as usize) << 16) | ((b[i+2] as usize) << 8) | b[i+3] as usize;
+        let body = i + 4;
+        if typ == 0 && len >= 34 && body + 34 <= b.len() {
+            let s = body + 10;
+            let packed = u64::from_be_bytes([b[s], b[s+1], b[s+2], b[s+3], b[s+4], b[s+5], b[s+6], b[s+7]]);
+            let sample_rate = ((packed >> 44) & 0xfffff) as u32;
+            let total = packed & 0xfffffffff;
+            if sample_rate == 0 || total == 0 { return None; }
+            return Some(total as f64 / sample_rate as f64);
+        }
+        if last { break; }
+        i = body.saturating_add(len);
+    }
+    None
+}
+
+fn mp3_bitrate(version: u8, index: usize) -> u32 {
+    const V1L3: [u32; 15] = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320];
+    const V2L3: [u32; 15] = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160];
+    let i = index.min(14);
+    if version == 3 { V1L3[i] } else { V2L3[i] }
+}
+
+fn mp3_duration(path: &Path) -> Option<f64> {
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut data = Vec::new();
+    f.read_to_end(&mut data).ok()?;
+    let mut i = 0usize;
+    if data.len() >= 10 && &data[0..3] == b"ID3" {
+        let size = (((data[6] & 0x7f) as usize) << 21) | (((data[7] & 0x7f) as usize) << 14) | (((data[8] & 0x7f) as usize) << 7) | (data[9] & 0x7f) as usize;
+        i = 10 + size;
+    }
+    let mut total = 0.0f64;
+    let mut frames = 0usize;
+    while i + 4 <= data.len() && frames < 2_000_000 {
+        if data[i] != 0xff || (data[i+1] & 0xe0) != 0xe0 { i += 1; continue; }
+        let b1 = data[i+1]; let b2 = data[i+2];
+        let version = (b1 >> 3) & 0x03;
+        let layer = (b1 >> 1) & 0x03;
+        if layer != 1 || version == 1 { i += 1; continue; }
+        let br_idx = ((b2 >> 4) & 0x0f) as usize;
+        let sr_idx = ((b2 >> 2) & 0x03) as usize;
+        if br_idx == 0 || br_idx == 15 || sr_idx == 3 { i += 1; continue; }
+        let sr = match (version, sr_idx) {
+            (3, 0) => 44100, (3, 1) => 48000, (3, 2) => 32000,
+            (2, 0) => 22050, (2, 1) => 24000, (2, 2) => 16000,
+            (0, 0) => 11025, (0, 1) => 12000, (0, 2) => 8000,
+            _ => { i += 1; continue; }
+        };
+        let br = mp3_bitrate(version, br_idx);
+        if br == 0 { i += 1; continue; }
+        let pad = ((b2 >> 1) & 1) as usize;
+        let samples = if version == 3 { 1152.0 } else { 576.0 };
+        total += samples / sr as f64;
+        let len = if version == 3 { (144 * br as usize * 1000 / sr as usize) + pad } else { (72 * br as usize * 1000 / sr as usize) + pad };
+        if len < 4 { i += 1; continue; }
+        frames += 1;
+        i = i.saturating_add(len);
+    }
+    if frames == 0 { None } else { Some(total) }
+}
+
+#[tauri::command]
+fn audio_duration(p: String) -> serde_json::Value { audio_duration_at(&p) }
+
+
 fn storage_areas(root: &Path) -> Vec<(&'static str, &'static str, &'static str, PathBuf)> {
     vec![
         ("models", "转录/分离模型", "asset", root.join("models")),
@@ -1765,7 +1881,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, db_kv_get, db_kv_set,
-            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, model_list,
+            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
@@ -1799,6 +1915,50 @@ mod check_midi_tests {
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    #[test]
+    fn audio_duration_wav_and_flac() {
+        let root = tmpdir("audio-duration");
+        let wav = root.join("one.wav");
+        let mut b: Vec<u8> = Vec::new();
+        b.extend_from_slice(b"RIFF"); b.extend_from_slice(&8036u32.to_le_bytes()); b.extend_from_slice(b"WAVE");
+        b.extend_from_slice(b"fmt "); b.extend_from_slice(&16u32.to_le_bytes());
+        b.extend_from_slice(&1u16.to_le_bytes()); b.extend_from_slice(&1u16.to_le_bytes());
+        b.extend_from_slice(&8000u32.to_le_bytes()); b.extend_from_slice(&8000u32.to_le_bytes());
+        b.extend_from_slice(&1u16.to_le_bytes()); b.extend_from_slice(&8u16.to_le_bytes());
+        b.extend_from_slice(b"data"); b.extend_from_slice(&8000u32.to_le_bytes());
+        b.resize(b.len() + 8000, 128);
+        std::fs::write(&wav, &b).unwrap();
+        let r = super::audio_duration_at(wav.to_str().unwrap());
+        assert_eq!(r["ok"], true);
+        assert!((r["seconds"].as_f64().unwrap() - 1.0).abs() < 0.001);
+        let flac = root.join("one.flac");
+        let mut fb: Vec<u8> = Vec::new();
+        fb.extend_from_slice(b"fLaC");
+        fb.push(0x80); fb.extend_from_slice(&[0, 0, 34]);
+        fb.extend_from_slice(&[0u8; 10]);
+        let packed: u64 = ((44100u64) << 44) | ((2u64 - 1) << 41) | ((16u64 - 1) << 36) | 44100u64;
+        fb.extend_from_slice(&packed.to_be_bytes());
+        fb.extend_from_slice(&[0u8; 16]); // STREAMINFO MD5
+        std::fs::write(&flac, &fb).unwrap();
+        let r2 = super::audio_duration_at(flac.to_str().unwrap());
+        assert_eq!(r2["ok"], true);
+        assert!((r2["seconds"].as_f64().unwrap() - 1.0).abs() < 0.001);
+        let mp3 = root.join("frames.mp3");
+        let mut mb: Vec<u8> = Vec::new();
+        for _ in 0..100 {
+            mb.extend_from_slice(&[0xFF, 0xFB, 0x90, 0x00]); // MPEG1 L3 128k 44.1k, frame=417
+            mb.resize(mb.len() + 413, 0);
+        }
+        std::fs::write(&mp3, &mb).unwrap();
+        let r3 = super::audio_duration_at(mp3.to_str().unwrap());
+        assert_eq!(r3["ok"], true);
+        assert!((r3["seconds"].as_f64().unwrap() - 2.6122).abs() < 0.02, "100 frames ~2.61s");
+        let bad = root.join("bad.mp3");
+        std::fs::write(&bad, b"not audio").unwrap();
+        assert_eq!(super::audio_duration_at(bad.to_str().unwrap())["ok"], false);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

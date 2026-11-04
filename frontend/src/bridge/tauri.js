@@ -80,6 +80,7 @@ export function installTauriBridge() {
     deleteMidi: (p) => call('delete_midi', { p }),
     revealMidi: (p) => call('reveal_midi', { p }),
     readSidecarLyrics: (filePath) => call('read_sidecar_lyrics', { filePath }),
+    audioDuration: (p) => call('audio_duration', { p }),
     renameMidi: (p, newName) => call('rename_midi', { p, newName }),
     readBinary: (p) => call('read_binary', { p }),
     readSoundFont: (p) => call('read_soundfont', { p }),

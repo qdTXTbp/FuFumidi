@@ -341,6 +341,9 @@
 - **Tauri 存储治理**：`storage_report/storage_cleanup`（10 类占用；曲库 protected 永不清；
   资产默认保留、includeAssets 才删；日志保留最近 5 份）；桥补 bridge.storage；Rust 测试分类/总字节/
   默认只清 safe/资产显式/midi 保留；命令总数 **72**，覆盖 117 方法/148 未映射（109 call）。
+- **Tauri 音频时长**：`audio_duration`（WAV RIFF、FLAC STREAMINFO、MP3 逐帧扫描；其他格式明确
+  unsupported，前端回退 decodeAudioData）；桥补 audioDuration；Rust 测试 WAV/FLAC/MP3/坏文件；
+  命令总数 **73**，覆盖 118 方法/147 未映射（110 call）。
 - **T-117 曲库/设置共享 Electron 数据（重要）**：Rust 用 rusqlite 直读/写
   `%APPDATA%/FuFumidi/fufumidi/fufumidi.sqlite`（songs/playlists/kv），设置优先读 legacy
   settings.json；只读验收实测 **1972 首真实曲目**、57 个设置键、侧栏「全部曲目 1972」正常；
