@@ -523,3 +523,5 @@
 - **插件解压/回滚测试**：抽出 `plugins_confirm_install_at`，用临时 plugins 目录验证解压、非覆盖拒绝、覆盖升级、坏包失败保留旧插件；cargo **114/114 + 1 ignored**。
 
 - **Tauri 任务中心**：convert 运行期间登记 transcribe 任务，Drop 标 done 并 emit `tasks:update`；tasks_list/clearFinished 桥补；App.vue 的 wallpaper 暂停逻辑现在能收到 running 状态；命令 **145**，覆盖 **167/99**，call 161；cargo **114/114 + 1 ignored**。
+
+- **任务中心真正接线**：release 警告暴露 ConvertTask::start 未使用——run_convert 仍未接 tasks 参数/guard；现补签名、clone、start 调用，release 无 unused 警告（2m18s）；tasks:update 才会真实发出。

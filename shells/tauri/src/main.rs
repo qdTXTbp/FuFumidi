@@ -4377,6 +4377,7 @@ fn run_convert(
     pool: Arc<worker_pool::WorkerPool>,
     seq: Arc<AtomicU64>,
     jobs: JobMap,
+    tasks: Arc<Mutex<Vec<serde_json::Value>>>,
     app: AppHandle,
     req: serde_json::Value,
 ) -> serde_json::Value {
@@ -4408,6 +4409,8 @@ fn run_convert(
     // P2 精确取消：acquire 之后登记前端 job id → 池内 JobId。
     // 之后所有返回路径（含提前 return / panic）都由 _registration 的 Drop 清理。
     let _registration = JobRegistration::register(Arc::clone(&jobs), job_id.clone(), lease.id());
+    let title = req.get("audio").and_then(|v| v.as_str()).and_then(|p| Path::new(p).file_name()).and_then(|x| x.to_str()).unwrap_or("transcribe").to_string();
+    let _task = ConvertTask::start(Arc::clone(&tasks), app.clone(), job_id.clone(), title);
     let mut payload = req;
     if let Some(o) = payload.as_object_mut() {
         o.insert("_id".to_string(), serde_json::json!(job_id));
@@ -4493,7 +4496,8 @@ async fn convert(state: State<'_, WorkerState>, app: AppHandle, req: serde_json:
     let pool = state.pool.clone();
     let seq = state.seq.clone();
     let jobs = state.jobs.clone();
-    tauri::async_runtime::spawn_blocking(move || run_convert(pool, seq, jobs, app, req))
+    let tasks = state.tasks.clone();
+    tauri::async_runtime::spawn_blocking(move || run_convert(pool, seq, jobs, tasks, app, req))
         .await
         .map_err(|e| e.to_string())
 }
