@@ -41,7 +41,7 @@
 - `npm run audit`：0
 - `cargo test --offline`：**114 passed / 0 failed / 1 ignored**
 - `npm run tauri:handler-audit`：**158/158** 已注册，并已并入 `npm run audit`
-- release build：通过（158 命令，2m29s、0 warning，见 `TAURI-BUILD.md` §27）
+- release build：通过（158 命令，2m32s、0 warning，见 `TAURI-BUILD.md` §28）
 - `npm run tauri:video-smoke`：ok=true / 15827 bytes（合成 H.264+WAV 封装）
 - `npm run tauri:cover-smoke`：ok=true / status 0，engine_cover.py 参数面存在
 - `npm run tauri:cover-engine-smoke`：ok=true / status 0，真实 analyze 合成音频并返回 ###RESULT（不含 RVC/分离/混音）
@@ -123,8 +123,8 @@ cargo build --release --offline
 ## 9. Release 产物指纹
 
 - 文件：`poc/tauri-poc/target/release/fufumidi-shell.exe`
-- 大小：**16,848,896 bytes**
-- SHA-256：`48f05c4d45f31db2e72130797d3d698735ba2e2cc624a9b46e0da105551c7b7b`
+- 大小：**16,935,936 bytes**
+- SHA-256：`cdfd08ad3eb7eaab08aff4b702455f3d2246dfc9820a92d76ae362e0396c3286`
 - Authenticode：**NotSigned**（未签名；符合当前外部前置未采购的状态）
 
 ## 10. 转录/分轨恢复（2026-11-04 夜间）

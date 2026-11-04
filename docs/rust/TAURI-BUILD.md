@@ -200,3 +200,11 @@ Tauri 默认从 GitHub 下载 `nsis-3.13.zip`，本机直连超时。已把工�
 - release 构建 2m29s、**0 warning**；
 - host/engine self-check 通过（embedded renderer / warm=1 / 无残留）；
 - 含 clippy 修复；产物 16,848,896 bytes。
+
+## 28. 2026-11-04 转录/分轨修复 release
+
+- 全量一键验收 **ok:true**（12 步，含 hidden E2E 41/41、clippy、release、host/engine self-check）；
+- release 构建 2m32s、**0 warning**；产物 16,935,936 bytes，SHA-256 `cdfd08ad3eb7eaab08aff4b702455f3d2246dfc9820a92d76ae362e0396c3286`；
+- release dataDir=E:/Midi/FuFumidi/FuFumidiData，models=13；
+- release --stem-smoke ok / 6 tracks（分轨→逐 stem→合并）；
+- 发布版 python 经 PYTHONPATH 加载 gpu-enhancements/cuda（torch 2.9.1+cu128）。
