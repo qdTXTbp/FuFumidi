@@ -317,7 +317,9 @@
   setSelLen/applyVelCurve` 在单轨内改走一条 update 命令（多字段 before/after + note 引用）；跨轨仍走快照，
   避免轨道归属错乱。E2E 增加 selectAll + transpose/setSelVel 的 undo/redo 断言。
   **第四批**：`pasteAt/duplicateSelected` 改走 add 命令，并按引用选中新音符（避免 afterEdit 排序后选错尾部）；步进输入也改走 add 命令。
-  尚未完成：CC 泳道、踏板、预览提交仍走快照；历史面板行内回退、
+  **第五批**：新增 `core/cc_commands.js`（CC 增/删命令，按引用定位）；`addPedal/delPedal` 改走命令 entry，
+  E2E 覆盖踏板 undo/redo。CC 泳道拖拽仍走快照。
+  尚未完成：CC 泳道拖拽、预览提交仍走快照；历史面板行内回退、
   与 `session.js` 应用级单栈合流未做。**仍不能宣称 P-011 整体完成。**
 - **Tauri check_midi 已补**：Rust 实现与 Electron 同语义（只认数据根 midi/ 内非空文件），
   桥补 `checkMidi`；Tauri 曲库自愈不再因缺命令而跳过。Rust 单测覆盖根内保留/缺失/根外路径。

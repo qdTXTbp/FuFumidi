@@ -161,5 +161,25 @@ export default async function (app) {
   await new Promise((r) => setTimeout(r, 150));
   if (await count() !== clipBase * 2) throw new Error('duplicate undo 未恢复');
 
+  // 延音踏板：CC 增删也走命令 entry
+  await clear();
+  const ccBase = await app.eval("((" + S + ".tracks[0].ccs) || []).length");
+  const addedCc = await app.eval("(" + E + ".addPedal() || 0)");
+  if (addedCc !== 2) throw new Error('addPedal 未添加两个 CC');
+  if (await app.eval("((" + S + ".tracks[0].ccs) || []).length") !== ccBase + 2) throw new Error('addPedal 后 CC 数不对');
+  const ccSnaps = await snapshots();
+  if (!ccSnaps.length || ccSnaps[ccSnaps.length - 1].kind !== 'command') throw new Error('踏板未生成 command entry');
+  await app.key('Ctrl+Z');
+  await new Promise((r) => setTimeout(r, 150));
+  if (await app.eval("((" + S + ".tracks[0].ccs) || []).length") !== ccBase) throw new Error('踏板 undo 未删除 CC');
+  await app.key('Ctrl+Shift+Z');
+  await new Promise((r) => setTimeout(r, 150));
+  if (await app.eval("((" + S + ".tracks[0].ccs) || []).length") !== ccBase + 2) throw new Error('踏板 redo 未恢复 CC');
+  const removedCc = await app.eval("(" + E + ".delPedal() || 0)");
+  if (removedCc < 1) throw new Error('delPedal 未删除 CC');
+  await app.key('Ctrl+Z');
+  await new Promise((r) => setTimeout(r, 150));
+  if (await app.eval("((" + S + ".tracks[0].ccs) || []).length") !== ccBase + 2) throw new Error('delPedal undo 未恢复 CC');
+
   // 隐藏窗口下 Page.captureScreenshot 偶发超时；本用例的验收证据是上面的状态断言，不依赖截图。
 }

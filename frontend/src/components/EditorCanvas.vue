@@ -25,6 +25,7 @@ import { timelineOfSong, iterBars, secOfTick } from '../core/timeline.js';
 import { claimPointer, isPrimaryPointer, releasePointer, penPressure, makeLongPress } from '../core/pointer.js';
 // P-011 第一批：单音符 add/delete/update 走增量命令，其余操作仍走整轨快照
 import { makeAddNotesCommand, makeDeleteNotesCommand, makeUpdateNotesCommand } from '../core/note_commands.js';
+import { makeAddCcsCommand, makeDeleteCcsCommand } from '../core/cc_commands.js';
 
 const props = defineProps({
   tool: { type: String, default: 'select' },      // select | pencil | erase
@@ -2171,25 +2172,32 @@ function selSpan() {
 function addPedal() {
   const tr = curTrack(); if (!tr) return 0;
   const span = selSpan(); if (!span) return 0;
-  pushState('延音踏板');
   const arr = tr.ccs = tr.ccs || [];
   const { a, b } = span;
-  arr.push({ tick: a, cc: 64, cv: 127 });
-  arr.push({ tick: Math.max(a, b - Math.max(1, Math.round((song()?.tpb || 480) / 8))), cc: 64, cv: 0 });
+  const added = [
+    { tick: a, cc: 64, cv: 127 },
+    { tick: Math.max(a, b - Math.max(1, Math.round((song()?.tpb || 480) / 8))), cc: 64, cv: 0 },
+  ];
+  arr.push(...added);
   arr.sort((x, y) => x.tick - y.tick);
   afterEdit();
-  return 2;
+  pushCommandEntry(makeAddCcsCommand(tr, added, '延音踏板'), props.trackIndex, tr.notes.length);
+  return added.length;
 }
 function delPedal() {
   const tr = curTrack(); if (!tr) return 0;
   const span = selSpan(); if (!span || !(tr.ccs || []).length) return 0;
-  pushState('延音踏板');
-  const before = tr.ccs.length;
-  tr.ccs = tr.ccs.filter(c => !(c.cc === 64 && c.tick >= span.a && c.tick <= span.b));
-  const removed = before - tr.ccs.length;
-  if (removed) afterEdit();
-  else { redoStack.length = 0; undoStack.pop(); }
-  return removed;
+  const removed = [];
+  const keep = [];
+  for (const c of tr.ccs) {
+    if (c.cc === 64 && c.tick >= span.a && c.tick <= span.b) removed.push({ idx: tr.ccs.indexOf(c), cc: c });
+    else keep.push(c);
+  }
+  if (!removed.length) return 0;
+  tr.ccs = keep;
+  afterEdit();
+  pushCommandEntry(makeDeleteCcsCommand(tr, removed, '延音踏板'), props.trackIndex, tr.notes.length);
+  return removed.length;
 }
 function canUndo() { return undoStack.length > 0; }
 function canRedo() { return redoStack.length > 0; }
