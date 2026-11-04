@@ -561,6 +561,108 @@ fn presets_restore() -> serde_json::Value {
 
 fn midi_root() -> PathBuf { data_dir().join("midi") }
 
+fn usermeta_path() -> PathBuf { data_dir().join("usermeta.json") }
+
+fn usermeta_blank() -> serde_json::Value { serde_json::json!({ "schema_version": 1, "items": {} }) }
+
+fn usermeta_load_at(root: &Path) -> serde_json::Value {
+    let p = root.join("usermeta.json");
+    let Ok(raw) = std::fs::read_to_string(&p) else { return usermeta_blank(); };
+    match serde_json::from_str::<serde_json::Value>(&raw) {
+        Ok(mut v) if v.is_object() => {
+            if !v.get("items").map(|x| x.is_object()).unwrap_or(false) { v["items"] = serde_json::json!({}); }
+            v["schema_version"] = serde_json::json!(1);
+            v
+        }
+        _ => {
+            let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+            let _ = std::fs::rename(&p, root.join(format!("usermeta.corrupt-{ts}.json")));
+            usermeta_blank()
+        }
+    }
+}
+
+fn usermeta_save_at(root: &Path, data: &serde_json::Value) -> bool {
+    let p = root.join("usermeta.json");
+    let _ = std::fs::create_dir_all(root);
+    let tmp = p.with_extension("json.tmp");
+    let text = serde_json::to_string_pretty(data).unwrap_or_else(|_| "{}".to_string());
+    if std::fs::write(&tmp, text).is_err() { return false; }
+    std::fs::rename(&tmp, &p).is_ok()
+}
+
+fn usermeta_clean(item: &serde_json::Value) -> serde_json::Value {
+    let mut o = serde_json::Map::new();
+    for f in ["name", "author", "source", "category"] {
+        if let Some(s) = item.get(f).and_then(|v| v.as_str()) { let t = s.trim(); if !t.is_empty() { o.insert(f.to_string(), serde_json::json!(t)); } }
+    }
+    if let Some(tags) = item.get("tags").and_then(|v| v.as_array()) {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut out = Vec::new();
+        for t in tags { let s = t.as_str().unwrap_or("").trim(); if !s.is_empty() && seen.insert(s.to_string()) { out.push(serde_json::json!(s)); } }
+        if !out.is_empty() { o.insert("tags".to_string(), serde_json::json!(out)); }
+    }
+    if let Some(n) = item.get("order").and_then(|v| v.as_i64()) { o.insert("order".to_string(), serde_json::json!(n)); }
+    if item.get("pinned").and_then(|v| v.as_bool()) == Some(true) { o.insert("pinned".to_string(), serde_json::json!(true)); }
+    serde_json::Value::Object(o)
+}
+
+fn usermeta_valid(kind: &str, id: &str) -> bool {
+    matches!(kind, "model" | "utau" | "ds" | "sf" | "voice" | "rvc") && !id.trim().is_empty()
+}
+
+fn usermeta_set_at(root: &Path, kind: &str, id: &str, patch: &serde_json::Value) -> serde_json::Value {
+    if !usermeta_valid(kind, id) { return serde_json::json!({ "ok": false, "error": "非法的 kind/id" }); }
+    let mut data = usermeta_load_at(root);
+    let key = format!("{kind}:{id}");
+    let mut merged = data["items"].get(&key).cloned().unwrap_or(serde_json::json!({}));
+    if let (Some(dst), Some(src)) = (merged.as_object_mut(), patch.as_object()) { for (k, v) in src { dst.insert(k.clone(), v.clone()); } }
+    let next = usermeta_clean(&merged);
+    if next.as_object().map(|o| o.is_empty()).unwrap_or(true) { data["items"].as_object_mut().map(|o| o.remove(&key)); }
+    else { data["items"][&key] = next.clone(); }
+    if !usermeta_save_at(root, &data) { return serde_json::json!({ "ok": false, "error": "写入失败" }); }
+    serde_json::json!({ "ok": true, "item": next })
+}
+
+fn usermeta_remove_at(root: &Path, kind: &str, id: &str) -> serde_json::Value {
+    if !usermeta_valid(kind, id) { return serde_json::json!({ "ok": false, "error": "非法的 kind/id" }); }
+    let mut data = usermeta_load_at(root);
+    data["items"].as_object_mut().map(|o| o.remove(&format!("{kind}:{id}")));
+    if !usermeta_save_at(root, &data) { return serde_json::json!({ "ok": false, "error": "写入失败" }); }
+    serde_json::json!({ "ok": true })
+}
+
+fn usermeta_reorder_at(root: &Path, kind: &str, ids: &[String]) -> serde_json::Value {
+    if !matches!(kind, "model" | "utau" | "ds" | "sf" | "voice" | "rvc") { return serde_json::json!({ "ok": false, "error": "非法入参" }); }
+    let mut data = usermeta_load_at(root);
+    for (i, id) in ids.iter().enumerate() {
+        if id.trim().is_empty() { continue; }
+        let key = format!("{kind}:{id}");
+        let mut merged = data["items"].get(&key).cloned().unwrap_or(serde_json::json!({}));
+        merged["order"] = serde_json::json!(i as i64 + 1);
+        let next = usermeta_clean(&merged);
+        data["items"][&key] = next;
+    }
+    if !usermeta_save_at(root, &data) { return serde_json::json!({ "ok": false, "error": "写入失败" }); }
+    serde_json::json!({ "ok": true })
+}
+
+#[tauri::command]
+fn usermeta_list() -> serde_json::Value { let d = usermeta_load_at(&data_dir()); serde_json::json!({ "ok": true, "items": d["items"], "path": usermeta_path().display().to_string() }) }
+
+#[tauri::command]
+fn usermeta_set(kind: String, id: String, patch: serde_json::Value) -> serde_json::Value { usermeta_set_at(&data_dir(), &kind, &id, &patch) }
+
+#[tauri::command]
+fn usermeta_remove(kind: String, id: String) -> serde_json::Value { usermeta_remove_at(&data_dir(), &kind, &id) }
+
+#[tauri::command]
+fn usermeta_reorder(kind: String, ids: Vec<String>) -> serde_json::Value { usermeta_reorder_at(&data_dir(), &kind, &ids) }
+
+#[tauri::command]
+fn usermeta_pin(kind: String, id: String, pinned: bool) -> serde_json::Value { usermeta_set_at(&data_dir(), &kind, &id, &serde_json::json!({ "pinned": pinned })) }
+
+
 fn sanitize_midi_base(name: &str) -> String {
     let mut stem = name;
     if let Some((s, e)) = name.rsplit_once('.') {
@@ -2387,7 +2489,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             load_settings, save_settings, db_kv_get, db_kv_set,
-            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, model_list,
+            db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, model_list,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
@@ -2421,6 +2523,27 @@ mod check_midi_tests {
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    #[test]
+    fn usermeta_roundtrip() {
+        let root = tmpdir("usermeta");
+        let r = super::usermeta_set_at(&root, "model", "m1", &serde_json::json!({ "name": " X ", "tags": ["a", "a", ""], "pinned": true, "order": 2 }));
+        assert_eq!(r["ok"], true);
+        assert_eq!(r["item"]["name"], "X");
+        assert_eq!(r["item"]["tags"].as_array().unwrap().len(), 1);
+        let list = super::usermeta_load_at(&root);
+        assert_eq!(list["items"]["model:m1"]["pinned"], true);
+        assert_eq!(super::usermeta_reorder_at(&root, "model", &["m1".to_string()])["ok"], true);
+        assert_eq!(super::usermeta_load_at(&root)["items"]["model:m1"]["order"], 1);
+        assert_eq!(super::usermeta_set_at(&root, "model", "m1", &serde_json::json!({ "pinned": false }))["ok"], true);
+        assert!(super::usermeta_load_at(&root)["items"]["model:m1"].get("pinned").is_none());
+        assert_eq!(super::usermeta_remove_at(&root, "model", "m1")["ok"], true);
+        std::fs::write(root.join("usermeta.json"), "bad json").unwrap();
+        let list2 = super::usermeta_load_at(&root);
+        assert_eq!(list2["items"].as_object().unwrap().len(), 0);
+        assert!(std::fs::read_dir(&root).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().contains("usermeta.corrupt-")));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

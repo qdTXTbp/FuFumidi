@@ -7,8 +7,8 @@
 |---|---:|
 | 前端调用的 bridge 方法（去重） | 212 |
 | Tauri 顶层方法 | 95 |
-| Tauri 嵌套方法 | 43 |
-| **未找到实现** | **108** |
+| Tauri 嵌套方法 | 48 |
+| **未找到实现** | **105** |
 
 ## 未找到实现的方法
 
@@ -92,9 +92,6 @@
 - `updateSources` — frontend/src/components/SettingsPanel.vue
 - `updateSpeedtest` — frontend/src/components/SettingsPanel.vue
 - `usermeta` — frontend/src/views/ViewSoundfonts.vue
-- `usermeta.list` — frontend/src/views/ViewSoundfonts.vue
-- `usermeta.remove` — frontend/src/views/ViewSoundfonts.vue
-- `usermeta.set` — frontend/src/components/models/ItemMetaEditor.vue, frontend/src/views/ViewSoundfonts.vue
 - `utauAliasRange` — frontend/src/components/sing/VoicebankPanel.vue
 - `utauCancelVoicebankDownload` — frontend/src/components/utau/UtauVoicebankStore.vue
 - `utauDeleteVoicebank` — frontend/src/components/utau/UtauVoicebankStore.vue

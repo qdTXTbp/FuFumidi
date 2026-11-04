@@ -377,6 +377,7 @@
   bridge 未实现 **110**，cargo test **23/23 + 1 ignored**。
 - **Tauri 设置完整性检验/修复**：check_integrity/repair_integrity（settings 缺失/损坏；修复前备份并写回默认；presets/asar 校验不适用 Tauri）；桥 repairIntegrity 参数从 {req:{ids}} 改为 {ids}（修真实调用错配）；Rust 测试缺失/损坏/备份/恢复；命令总数 **85**，cargo test **24/24 + 1 ignored**。
 - **Tauri 曲库写盘**：write_midi（曲目字节→真实 .mid，同名复用/重名 (2)/prev 路径根内校验）、write_binary（任意二进制写盘）；桥补 writeMidi/writeBinary——此前 Tauri 曲目自检重建文件会直接返回空路径；Rust 测试落盘/复用/重名/二进制；命令总数 **87**，覆盖 130 方法/135 未映射（122 call），bridge 未实现 **108**，cargo test **25/25 + 1 ignored**。
+- **Tauri 资源用户元数据**：usermeta_list/set/remove/reorder/pin（name/author/source/category/tags/order/pinned，dataRoot/usermeta.json，损坏先另存 .corrupt-*）；桥补 bridge.usermeta；Rust 测试合并/标签去重/排序/取消 pin/删除/损坏备份；命令总数 **92**，覆盖 132 方法/133 未映射（127 call），bridge 未实现 **105**，cargo test **26/26 + 1 ignored**。
 - **T-117 曲库/设置共享 Electron 数据（重要）**：Rust 用 rusqlite 直读/写
   `%APPDATA%/FuFumidi/fufumidi/fufumidi.sqlite`（songs/playlists/kv），设置优先读 legacy
   settings.json；只读验收实测 **1972 首真实曲目**、57 个设置键、侧栏「全部曲目 1972」正常；

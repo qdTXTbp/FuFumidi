@@ -85,6 +85,7 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 | clear_user_data | 按 scope 清除 models/soundfonts/deps（GPU/缓存）/playdata；**MIDI、设置、歌单永不清** | Rust 单测（临时目录）：单 scope/多 scope、needRestart、MIDI/settings 保留 |
 | check_integrity / repair_integrity | 检查 settings 缺失/损坏；修复前备份并写回默认（presets/asar 校验不适用 Tauri） | Rust 单测：缺失/损坏/修复/备份/恢复后 ok；并修正桥参数从 {req:{ids}} 为 {ids} |
 | write_midi / write_binary | 曲库真实 .mid 落盘（同名复用/重名 (2)/prev 路径安全）；任意二进制写盘 | Rust 单测：落盘/相同内容复用/不同内容重名、二进制写盘；修复曲目自检写不了文件的问题 |
+| usermeta_list / set / remove / reorder / pin | 资源中心用户元数据（name/author/source/category/tags/order/pinned），dataRoot/usermeta.json，损坏先另存 .corrupt-* | Rust 单测：合并/标签去重/排序/取消 pin/删除/损坏备份 |
 | open_folder | 打开目录（仅目录） | 实际打开资源管理器不在无头会话触发 |
 | soundfont_list | 扫描 renderer/vendor/soundfonts + dataDir/soundfonts（sf2/sf3） | 开发树返回 GeneralUser.sf2 |
 | dep_check | Rust 启动 Python `deps.py check`，解析 `###RESULT` 的 groups | 返回 universal/piano/aria/muscriptor/separate/transkun 6 组 |
@@ -191,14 +192,14 @@ worker running=true seq=1；输出 MIDI 头 `MThd`。剩余：cancel/pause、UI 
 
 - `npm run tauri:coverage` / `node scripts/tauri/ipc-coverage.mjs --write`：
   只解析 preload 与 Tauri 桥的方法名，不启动窗口；
-- 当前：preload 265 方法 / Tauri **130** 方法 / **135 未映射**；preload invoke 250 / tauri call **122**；
+- 当前：preload 265 方法 / Tauri **132** 方法 / **133 未映射**；preload invoke 250 / tauri call **127**；
 - 缺口分类：设置杂项 28、diffsinger 19、utau/voicebank 18、模型/安装 14、导出/渲染 14、
   资源/音频 13、rvc 12、曲库/数据 11、文件/诊断 11、事件/窗口 10、GPU 8、更新/测速 6、其他 4；
 - 明细见 [IPC-COVERAGE.md](IPC-COVERAGE.md)。
 - 前端实际调用审计：`npm run tauri:call-audit`（`docs/rust/BRIDGE-CALLS.md`），
-  当前 212 个去重调用 / 108 未找到实现（启发式，含动态调用误报）。
+  当前 212 个去重调用 / 105 未找到实现（启发式，含动态调用误报）。
 
-## 4. 当前命令清单（87 条）
+## 4. 当前命令清单（92 条）
 
 host_info, app_version, ping, python_selfcheck, engine_probe, convert, engine_worker_status,
 load_settings, save_settings, db_kv_get, db_kv_set, db_status, db_songs_list, db_songs_put,
@@ -213,7 +214,7 @@ get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list
 read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open,
 storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, pick_cover, export_dawproject,
 autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data,
-check_integrity, repair_integrity, write_midi, write_binary。
+check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin。
 
 ## 4.1 下一步
 

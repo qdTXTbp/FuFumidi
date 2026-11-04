@@ -86,6 +86,13 @@ export function installTauriBridge() {
     pickCover: () => call('pick_cover'),
     exportDawproject: (payload) => call('export_dawproject', { payload }),
     writeMidi: (opts) => call('write_midi', { opts }),
+    usermeta: {
+      list: () => call('usermeta_list'),
+      set: (kind, id, patch) => call('usermeta_set', { kind, id, patch }),
+      remove: (kind, id) => call('usermeta_remove', { kind, id }),
+      reorder: (kind, ids) => call('usermeta_reorder', { kind, ids }),
+      pin: (kind, id, pinned) => call('usermeta_pin', { kind, id, pinned: !!pinned }),
+    },
     writeBinary: (p, data) => call('write_binary', { p, data: Array.from(data || []) }),
     autostartGet: () => call('autostart_get'),
     diagHealth: () => call('diag_health'),
