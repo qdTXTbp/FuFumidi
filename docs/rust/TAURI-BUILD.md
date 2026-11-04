@@ -145,3 +145,9 @@ Tauri 默认从 GitHub 下载 `nsis-3.13.zip`，本机直连超时。已把工�
 - `npm run tauri:cover-smoke`：用 bundled Python 跑 `engine_cover.py all --help`；
 - 实测 ok=true / status=0，CLI 含 `--rvc-model` / `--sep-model` / `--no-separate`；
 - 只验证引擎入口/参数面，不跑模型推理。
+
+## 19. Cover 引擎真实 analyze smoke
+
+- `npm run tauri:cover-engine-smoke`：合成 1s WAV，调 `engine_cover.py analyze`（显式 vocals/instrumental，跳过分离模型）；
+- 实测 ok=true / status 0，返回 `###RESULT {stage:"analyze", ok:true}`；
+- 验证引擎启动/读音频/结果协议；不含 RVC 转换、分离、混音。

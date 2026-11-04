@@ -552,3 +552,5 @@
 - **156 命令 release（分离解析）**：去掉 resolver 重复 best 后 2m16s、0 warning；engine self-check 通过；无窗口/残留。
 
 - **cover CLI smoke**：新增 `npm run tauri:cover-smoke`，校验 engine_cover.py all 的参数面（rvc-model/sep-model/no-separate）；实测 ok/status0；不跑推理。
+
+- **cover 引擎真实 analyze**：新增 `npm run tauri:cover-engine-smoke`，合成 1s WAV 跑 engine_cover.py analyze（vocals/instrumental 跳过分离）；实测 ok=true/status0/###RESULT；验证启动/读音频/协议，不含 RVC/分离/混音。
