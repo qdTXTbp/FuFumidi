@@ -120,4 +120,4 @@ Tauri 默认从 GitHub 下载 `nsis-3.13.zip`，本机直连超时。已把工�
 - release 构建 2m11s、0 warning；
 - host/engine self-check 通过，无窗口/残留；
 - bundled Python 已确认可 import `imageio_ffmpeg` 并返回 ffmpeg 7.1 路径；
-- 真实 H.264 帧编码/封装仍未跑。
+- `npm run tauri:video-smoke`（合成 1s H.264 + WAV，按 `video_export_end` 参数封装 MP4）：**ok=true / 15827 bytes**；验证 stream copy + AAC + `-t` + faststart；WebCodecs 编码本身仍未跑。
