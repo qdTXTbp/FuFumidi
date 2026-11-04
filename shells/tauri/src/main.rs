@@ -17,6 +17,7 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_dialog::DialogExt;
 
 fn exe_dir() -> Option<PathBuf> {
     std::env::current_exe().ok()?.parent().map(|p| p.to_path_buf())
@@ -683,6 +684,55 @@ struct WorkerState(Arc<Mutex<Option<Worker>>>, Arc<AtomicBool>, Arc<AtomicU32>);
 
 fn pause_file() -> PathBuf { data_dir().join("engine.pause") }
 
+fn file_path_string(p: tauri_plugin_dialog::FilePath) -> Option<String> {
+    p.into_path().ok().map(|x| x.display().to_string())
+}
+
+#[tauri::command]
+fn pick_file(app: AppHandle, opts: Option<serde_json::Value>) -> Option<String> {
+    let mut b = app.dialog().file();
+    if let Some(o) = opts.as_ref().and_then(|v| v.as_object()) {
+        if let Some(t) = o.get("title").and_then(|v| v.as_str()) { if !t.is_empty() { b = b.set_title(t); } }
+        if let Some(p) = o.get("defaultPath").and_then(|v| v.as_str()) { if !p.is_empty() { b = b.set_directory(p); } }
+        if let Some(filters) = o.get("filters").and_then(|v| v.as_array()) {
+            for f in filters {
+                let name = f.get("name").and_then(|v| v.as_str()).unwrap_or("Files");
+                let exts: Vec<String> = f.get("extensions").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.trim_start_matches('.').to_string())).collect()).unwrap_or_default();
+                if !exts.is_empty() {
+                    let refs: Vec<&str> = exts.iter().map(|s| s.as_str()).collect();
+                    b = b.add_filter(name, &refs);
+                }
+            }
+        }
+    }
+    b.blocking_pick_file().and_then(file_path_string)
+}
+
+#[tauri::command]
+fn pick_directory(app: AppHandle) -> Option<String> {
+    app.dialog().file().blocking_pick_folder().and_then(file_path_string)
+}
+
+#[tauri::command]
+fn pick_audio(app: AppHandle) -> Option<String> {
+    app.dialog().file().add_filter("Audio", &["mp3", "wav", "flac", "ogg", "m4a", "aac", "wma", "aiff", "aif", "opus", "mp4", "mkv", "webm"]).blocking_pick_file().and_then(file_path_string)
+}
+
+#[tauri::command]
+fn pick_audio_files(app: AppHandle) -> Option<Vec<String>> {
+    app.dialog().file().add_filter("Audio", &["mp3", "wav", "flac", "ogg", "m4a", "aac", "wma", "aiff", "aif", "opus", "mp4", "mkv", "webm"]).blocking_pick_files().map(|v| v.into_iter().filter_map(file_path_string).collect())
+}
+
+#[tauri::command]
+fn pick_image(app: AppHandle) -> Option<String> {
+    app.dialog().file().add_filter("Images", &["png", "jpg", "jpeg", "webp", "gif", "bmp"]).blocking_pick_file().and_then(file_path_string)
+}
+
+#[tauri::command]
+fn pick_music_xml(app: AppHandle) -> Option<String> {
+    app.dialog().file().add_filter("MusicXML", &["xml", "mxl", "musicxml"]).blocking_pick_file().and_then(file_path_string)
+}
+
 fn spawn_worker() -> Result<Worker, String> {
     let py = python_path().ok_or("python runtime not found")?;
     let eng = engine_dir().ok_or("engine/music2midi.py not found")?;
@@ -875,6 +925,7 @@ fn main() {
     }
     let state = WorkerState(Arc::new(Mutex::new(None)), Arc::new(AtomicBool::new(false)), Arc::new(AtomicU32::new(0)));
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
@@ -883,6 +934,7 @@ fn main() {
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
+            pick_file, pick_directory, pick_audio, pick_audio_files, pick_image, pick_music_xml,
             list_midi_files, read_binary, save_binary,
             convert, cancel, set_transcribe_pause, engine_worker_status
         ])

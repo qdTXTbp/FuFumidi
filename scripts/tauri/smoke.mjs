@@ -127,6 +127,7 @@ const EXPR = [
   "  await new Promise((res) => setTimeout(res, 500));",
   "  return {",
   "    pages,",
+  "    dialogs: { pickFile: typeof window.fuBridge.pickFile, pickDirectory: typeof window.fuBridge.pickDirectory, pickAudio: typeof window.fuBridge.pickAudio, pickAudioFiles: typeof window.fuBridge.pickAudioFiles, pickImage: typeof window.fuBridge.pickImage, pickMusicXML: typeof window.fuBridge.pickMusicXML },",
   "    ui: { title: document.title, appChildren: (document.getElementById('app') || { childElementCount: -1 }).childElementCount, fuBridge: typeof window.fuBridge, tauri: typeof window.__TAURI__, hash: location.hash, textLen: (document.body.innerText || '').length },",
   "    info, ver, py, eng, conv, worker, midiHeader, saved, loaded, set, got, songPut, songs, dbStat, songDel, songsAfter, plPut, pls, models, pauseR, resumeR, settledEarly, pausedConv, cancelR, canceledConv, workerAfterCancel, pList, pSave, pList2, pBind, pUnbind, pDel, pList3, sfs, deps, diag, notifyR, openBad, extBad, uiSongPut, files, header, sb, backLen: back.length,",
   "  };",
@@ -207,6 +208,7 @@ try {
     readBinary: r.header === "MThd",
     saveBinary: !!r.sb && r.sb.ok === true && r.backLen === 4,
     ui: r.ui.fuBridge === "object" && r.ui.tauri === "object" && r.ui.appChildren > 0 && r.ui.textLen > 200,
+    dialogs: !!r.dialogs && Object.values(r.dialogs).every((v) => v === "function"),
     uiRoutes: Array.isArray(r.pages) && r.pages.length === 4 && r.pages.every((p) => p.textLen > 80 && p.appChildren > 0 && p.hash.indexOf(p.name) >= 0),
     uiLibrary: !!r.uiLibrary && r.uiLibrary.hasName === true && r.uiLibrary.appChildren > 0 && r.uiSongPut === true,
   };

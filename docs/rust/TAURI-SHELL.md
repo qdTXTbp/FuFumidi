@@ -54,6 +54,7 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 | presets_list / save / delete / last_used | Rust 读写 dataRoot/presets.json；内置表由 engine/presets.py 生成并嵌入（builtin_presets.json） | 9 个内置预设 + 11 个 model_defaults；保存 Smoke Preset → last_used；删除后消失 |
 | presets_set_model / reorder / reorder_to / restore | 模型→预设绑定、排序、恢复内置 | 绑定 basic→Smoke Preset、解绑、删除均成功 |
 | set_transcribe_pause | 写/删 `dataRoot/engine.pause`，引擎 pause_gate 监听（worker 启动时注入 FUFUMIDI_PAUSE_FILE） | 120 s WAV：暂停后 900 ms 仍未结束（settledEarly=false），继续后完成，pausedConv.ok=true |
+| pick_file / pick_directory / pick_audio / pick_audio_files / pick_image / pick_music_xml | 原生文件/目录对话框（tauri-plugin-dialog 2.8.4，Rust 直接调用） | 桥 6 个方法均为 function；安装版 smoke 通过（人工点选仍待验收） |
 | model_list | 13 个核心模型条目（basic/piano/hft/MuScriptor×3/yourmt3/miros/aria/beat_this/audio_tagger/hnsep/HTDemucs4_6stems）；exists 按 models 目录真实大小判断 | smoke 断言 13 条、id 齐全、含 separate 条目 |
 | db_status / db_songs_list / db_songs_put / db_songs_delete | JSON 曲库（dataDir/songs.json），按 id upsert/删除 | 写 smoke-song → 列表 1 条 → 删除 → 0 条 |
 | db_playlists_list / db_playlists_put | JSON 歌单（dataDir/playlists.json） | 默认歌单 + smoke-pl 出现 |
@@ -128,7 +129,7 @@ worker running=true seq=1；输出 MIDI 头 `MThd`。剩余：cancel/pause、UI 
 - smoke 实测：9 builtins / 11 model_defaults；保存 Smoke Preset → last_used；绑定/解绑 basic；删除后列表消失；
   **23 项**断言全绿。
 
-- 断言 **24 项全绿**：host / engineProbe / convert / worker / **pause** / cancel / presets / dbSongs / dbPlaylists /
+- 断言 **25 项全绿**：host / engineProbe / convert / worker / pause / cancel / presets / dbSongs / dbPlaylists /
   soundfonts / depCheck / diagExport / safeShellOps / modelList / version / python / settings / kv /
   listMidi / readBinary / saveBinary / ui / uiRoutes / uiLibrary；
   `uiLibrary` = 写入曲库 → 真刷新 → 侧栏/首页出现该曲（storeSongs=1，曲库 1 首）；
@@ -144,14 +145,15 @@ worker running=true seq=1；输出 MIDI 头 `MThd`。剩余：cancel/pause、UI 
   renderer 为 `<embedded>`，真实转录 **5.3 s**；详见 `docs/rust/TAURI-BUILD.md`；
 - 限制：安装包未签名；Electron 回退基准为 E2E 35/35 + `pack:base` 成功（未重打 Electron 安装包）。
 
-## 4. 当前命令清单（37 条）
+## 4. 当前命令清单（43 条）
 
 host_info, app_version, ping, python_selfcheck, engine_probe, convert, engine_worker_status,
 load_settings, save_settings, db_kv_get, db_kv_set, db_status, db_songs_list, db_songs_put,
 db_songs_delete, db_playlists_list, db_playlists_put, model_list, list_midi_files, read_binary,
 save_binary, soundfont_list, dep_check, diag_export, notify, open_output, open_external, cancel,
 presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
-presets_reorder, presets_reorder_to, presets_restore, set_transcribe_pause。
+presets_reorder, presets_reorder_to, presets_restore, set_transcribe_pause,
+pick_file, pick_directory, pick_audio, pick_audio_files, pick_image, pick_music_xml。
 
 ## 4.1 下一步
 

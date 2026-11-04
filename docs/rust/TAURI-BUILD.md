@@ -13,6 +13,7 @@ npm run tauri:bundle      # build:ui + stage + NSIS 安装包
 ```
 
 Tauri CLI 固定在 devDependency `@tauri-apps/cli@2.12.4`（crate tauri 2.12.5）。
+原生文件对话框用 `tauri-plugin-dialog 2.8.4`（Rust 侧直接调用，不依赖前端插件权限）。
 
 ## 2. 打包内容（与 electron-builder.base.yml 对齐）
 
