@@ -9,6 +9,10 @@ const OUT = path.join(ROOT, "scripts", "design", "artifacts");
 const WIDTHS = [980, 1280, 1585];
 const HEIGHT = 900;
 const VIEWS = [
+  { hash: "#/home", name: "home", marker: "开始你的下一首" },
+  { hash: "#/music", name: "music", marker: "MIDI 歌单" },
+  { hash: "#/views", name: "views", marker: "可视化" },
+  { hash: "#/resources", name: "resources", marker: "模型管理" },
   { hash: "#/edit", name: "edit", marker: "canvas" },
   { hash: "#/singer", name: "sing", marker: "演唱" },
   { hash: "#/transcribe", name: "transcribe", marker: "转录" },
@@ -33,7 +37,8 @@ const MEASURE_JS = `(() => {
     const cs = getComputedStyle(el);
     if (cs.visibility === "hidden" || cs.display === "none" || Number(cs.opacity) === 0) continue;
     const cls = (el.className && typeof el.className === "string") ? el.className.split(/\s+/).slice(0, 4).join(".") : "";
-    bad.push({ tag: el.tagName.toLowerCase(), cls, left: Math.round(r.left), right: Math.round(r.right), width: Math.round(r.width) });
+    const tag = el.tagName.toLowerCase();
+    bad.push({ tag, cls, left: Math.round(r.left), right: Math.round(r.right), width: Math.round(r.width), interactive: ["button", "select", "input", "a", "textarea"].indexOf(tag) >= 0 });
   }
   const uniq = [];
   const seen = new Set();

@@ -150,6 +150,13 @@
 - E2E 基础设施：`Page.addScriptToEvaluateOnNewDocument` 持久注入浮层关闭器，`location.reload()`
   后不再被动态壁纸/更新浮层挡住。
 
+### 11.2 设计回归覆盖（2026-11-04）
+
+- design:shoot 扩到 **7 个主视图 × 3 档宽度 = 21 张**（home / music / views / resources / edit / sing / transcribe）。
+- 21/21 无页面级横向溢出；仍有 3 个「越界但可滚动/被容器裁剪」的交互控件，记为下一批：
+  sing 980 的一个 header 按钮（右溢出 3px）、sing 1280 的逐音素 select（右 1322）、
+  transcribe 1280 的队列按钮（右 1316）。它们不影响功能但属于布局欠账，T-113 收口时一并处理。
+
 ## 12. 待收口（下一轮）
 
 - Tauri POC（子代理 B）**已收口**：docs/rust/TAURI-POC.md。结论——外壳可行（cargo check 37s / build 44s；
