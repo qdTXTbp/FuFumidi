@@ -3366,6 +3366,18 @@ fn pool_io_text(err: worker_pool::PoolError) -> String {
 /// 把一次转录请求交给池里的常驻 worker（cap=1，跨请求复用暖 worker）。
 /// 模型/参数契约与 Electron 路径一致（req 原样转发）；
 /// 进度/日志仍通过 Tauri 事件 engine:log / engine:progress 推给前端。
+fn job_event_id(req: &serde_json::Value, seq: u64) -> String {
+    req.get("id").and_then(|v| v.as_str()).map(|s| s.trim()).filter(|s| !s.is_empty()).map(|s| s.to_string()).unwrap_or_else(|| format!("job-{seq}"))
+}
+
+fn result_id_matches(v: &serde_json::Value, job_id: &str) -> bool {
+    match v.get("_id") {
+        Some(serde_json::Value::String(s)) => s == job_id,
+        Some(serde_json::Value::Number(n)) => n.as_u64().map(|x| x.to_string() == job_id).unwrap_or(false),
+        _ => false,
+    }
+}
+
 fn run_convert(pool: Arc<worker_pool::WorkerPool>, seq: Arc<AtomicU64>, app: AppHandle, req: serde_json::Value) -> serde_json::Value {
     let started = std::time::Instant::now();
     let lease = match pool.acquire(|_id, _cancel| spawn_worker()) {
@@ -3388,10 +3400,11 @@ fn run_convert(pool: Arc<worker_pool::WorkerPool>, seq: Arc<AtomicU64>, app: App
     if lease.is_canceled() {
         return canceled_convert();
     }
-    let id = next_worker_seq(lease.reused(), &seq);
+    let seq_id = next_worker_seq(lease.reused(), &seq);
+    let job_id = job_event_id(&req, seq_id);
     let mut payload = req;
     if let Some(o) = payload.as_object_mut() {
-        o.insert("_id".to_string(), serde_json::json!(id));
+        o.insert("_id".to_string(), serde_json::json!(job_id));
     }
     if let Err(err) = lease.send(&payload.to_string()) {
         lease.mark_broken();
@@ -3432,11 +3445,11 @@ fn run_convert(pool: Arc<worker_pool::WorkerPool>, seq: Arc<AtomicU64>, app: App
         }
         if let Some(rest) = t.strip_prefix("###RESULT ") {
             if let Ok(mut r) = serde_json::from_str::<serde_json::Value>(rest) {
-                let rid = r.get("_id").and_then(|v| v.as_u64()).or_else(|| r.get("id").and_then(|v| v.as_u64()));
-                if rid == Some(id) {
+                if result_id_matches(&r, &job_id) {
                     if let Some(o) = r.as_object_mut() {
+                        o.insert("_id".to_string(), serde_json::json!(job_id));
                         o.insert("elapsedMs".to_string(), serde_json::json!(started.elapsed().as_millis() as u64));
-                        o.insert("workerSeq".to_string(), serde_json::json!(id));
+                        o.insert("workerSeq".to_string(), serde_json::json!(seq_id));
                         o.insert("logLines".to_string(), serde_json::json!(logs.len()));
                     }
                     return r;
@@ -3448,13 +3461,13 @@ fn run_convert(pool: Arc<worker_pool::WorkerPool>, seq: Arc<AtomicU64>, app: App
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(rest) {
                 let s = v.get("line").and_then(|x| x.as_str()).unwrap_or("").to_string();
                 if logs.len() < 200 { logs.push(s.clone()); }
-                let _ = app.emit("engine:log", serde_json::json!({ "id": id, "line": s }));
+                let _ = app.emit("engine:log", serde_json::json!({ "id": job_id, "line": s }));
             }
             continue;
         }
         if let Some(rest) = t.strip_prefix("###PROG ") {
             if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(rest) {
-                if let Some(o) = v.as_object_mut() { o.insert("id".to_string(), serde_json::json!(id)); }
+                if let Some(o) = v.as_object_mut() { o.insert("id".to_string(), serde_json::json!(job_id)); }
                 let _ = app.emit("engine:progress", v);
             }
             continue;
@@ -3683,6 +3696,17 @@ mod check_midi_tests {
         let status = pool.status();
         assert_eq!(status.warm, 0);
         assert_eq!(status.busy, 0);
+    }
+
+    #[test]
+    fn p3_job_event_id_and_result_matching() {
+        assert_eq!(super::job_event_id(&serde_json::json!({ "id": "batch37" }), 7), "batch37");
+        assert_eq!(super::job_event_id(&serde_json::json!({ "id": "  " }), 7), "job-7");
+        assert_eq!(super::job_event_id(&serde_json::json!({}), 7), "job-7");
+        assert!(super::result_id_matches(&serde_json::json!({ "_id": "batch37" }), "batch37"));
+        assert!(!super::result_id_matches(&serde_json::json!({ "_id": "batch38" }), "batch37"));
+        assert!(super::result_id_matches(&serde_json::json!({ "_id": 7 }), "7"));
+        assert!(!super::result_id_matches(&serde_json::json!({ "_id": null }), "7"));
     }
 
     #[test]

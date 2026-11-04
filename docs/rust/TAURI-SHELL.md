@@ -124,8 +124,10 @@ cargo build --manifest-path shells/tauri/Cargo.toml --offline
 实测（smoke）：1 s 440 Hz WAV → Basic Pitch 1 个音符；冷启动 14.3 s、暖 5.5 s；13 条日志；
 worker running=true seq=1；输出 MIDI 头 `MThd`。**P1 实测**：cargo test **78/78 + 1 ignored**（含真实
 Python 子进程 echo/取消/EOF/暖复用测试）、cargo build release 通过、`--self-check` 通过；未开窗。
-剩余：T-118 P2（cap=1..4、`__slots`、GPU−1）、P3（事件/结果 id 改前端 `cfg.id`、进度绑定）、
-批量队列 UI；模型列表等 host 通道（T-115 扩面）。
+**P3 子集已做**：`_id` / `engine:log` / `engine:progress` 改用前端 `cfg.id`（无 id 时 `job-<seq>`），
+结果 id 同时接受字符串/数字；桥补 `onEngineProgress`；结果仍带数字 `workerSeq` 供诊断。
+剩余：T-118 P2（cap=1..4、`__slots`、GPU−1）、P3 的进度节流/UI 队列绑定、批量队列 UI；
+模型列表等 host 通道（T-115 扩面）。
 
 ### 3.1.1 Release 构建（T-119 第一步，2026-11-04）
 

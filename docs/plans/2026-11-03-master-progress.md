@@ -265,8 +265,10 @@
   `ChildWorker`（stdin/stdout、stderr null、CREATE_NO_WINDOW、kill 幂等、Drop 兜底、暖复用）；
   `run_convert/spawn_worker/cancel/engine_worker_status` 全走池；取消先置 per-job 标志再锁外 taskkill，
   cap=1 未知 id 回退唯一在途；退出 `pool.shutdown()` 杀暖 worker。新增 10 测试（4 个真实 Python 子进程），
-  cargo test **78/78 + 1 ignored**，release 构建 + `--self-check` 通过；**事件 id 仍为内部数字（P3 再改）**，
-  未接 `__slots` 并发（P2）。
+  cargo test **78/78 + 1 ignored**，release 构建 + `--self-check` 通过；未接 `__slots` 并发（P2）。
+- **T-118 P3 子集**：`_id`/`engine:log`/`engine:progress` 改用前端 `cfg.id`（缺省 `job-<seq>`），
+  结果 id 同时接受字符串/数字；桥补 `onEngineProgress`；新增纯函数测试；cargo test **85/85 + 1 ignored**。
+  剩余 P2 并发与进度节流/UI 队列绑定。
 - **T-117 第一步 + UI 路由冒烟**：新增 `db_status/db_songs_list/db_songs_put/db_songs_delete/
   db_playlists_list/db_playlists_put`（JSON store，原子 rename，dataDir 可覆盖）；命令总数 **20**。
   smoke 增加 **uiRoutes**：`#/transcribe → #/resources → #/piano3d → #/music → #/home` 逐页渲染，
