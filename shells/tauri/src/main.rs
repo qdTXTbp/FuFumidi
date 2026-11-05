@@ -1985,6 +1985,7 @@ fn model_download_urls(id: &str) -> Option<(&'static str, &'static str, u64)> {
 fn model_download_zip(id: &str) -> Option<(&'static str, &'static str, &'static str, u64)> {
     Some(match id {
         "hft_transformer" => ("https://github.com/monologue82/Models/releases/download/models-extra-v1/hft-transformer-ismir2023.zip", "hft_transformer", "checkpoint/MAESTRO-V3/model_016_003.pkl", 18_000_000),
+        "audio_tagger" => ("https://cnb.cool/FuFuCloud-mirror/Models/-/releases/download/models-extra-v1/audio-tagger-20240415.zip", "audio-tagger", "model.int8.onnx", 19_000_000),
         "yourmt3" => ("https://cnb.cool/FuFuCloud-mirror/Models/-/releases/download/yourmt3-v1/yourmt3-runtime-20261020.zip", "yourmt3", "amt/logs/2024/ptf_all_cross_rebal5_mirst_xk2_edr005_attend_c_full_plus_b100/checkpoints/model.ckpt", 300_000_000),
         _ => return None,
     })
