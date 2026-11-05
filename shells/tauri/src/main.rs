@@ -1982,6 +1982,14 @@ fn model_download_urls(id: &str) -> Option<(&'static str, &'static str, u64)> {
     })
 }
 
+fn model_download_zip(id: &str) -> Option<(&'static str, &'static str, &'static str, u64)> {
+    Some(match id {
+        "hft_transformer" => ("https://github.com/monologue82/Models/releases/download/models-extra-v1/hft-transformer-ismir2023.zip", "hft_transformer", "checkpoint/MAESTRO-V3/model_016_003.pkl", 18_000_000),
+        "yourmt3" => ("https://cnb.cool/FuFuCloud-mirror/Models/-/releases/download/yourmt3-v1/yourmt3-runtime-20261020.zip", "yourmt3", "amt/logs/2024/ptf_all_cross_rebal5_mirst_xk2_edr005_attend_c_full_plus_b100/checkpoints/model.ckpt", 300_000_000),
+        _ => return None,
+    })
+}
+
 #[tauri::command]
 async fn model_download(req: serde_json::Value) -> serde_json::Value {
     let id = req.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -1989,6 +1997,28 @@ async fn model_download(req: serde_json::Value) -> serde_json::Value {
         if item.get("exists").and_then(|v| v.as_bool()) == Some(true) {
             return serde_json::json!({ "ok": true, "id": id, "existed": true, "path": item.get("path"), "size": item.get("size") });
         }
+    }
+    if let Some((url, rel, marker, min)) = model_download_zip(&id) {
+        let root = data_dir();
+        return tauri::async_runtime::spawn_blocking(move || {
+            let dest = root.join("models").join(rel);
+            if let Some(parent) = dest.parent() { if let Err(e) = std::fs::create_dir_all(parent) { return oto_err(&e.to_string()); } }
+            let part = root.join("models").join(format!(".{rel}.zip.part"));
+            let out = match Command::new("curl.exe").args(["-L", "--fail", "--retry", "2", "-C", "-", "-o", &part.display().to_string(), url]).creation_flags(0x08000000).output() {
+                Ok(o) => o, Err(e) => return oto_err(&e.to_string()),
+            };
+            if !out.status.success() { return serde_json::json!({ "ok": false, "id": id, "error": format!("下载失败：{}", String::from_utf8_lossy(&out.stderr).chars().take(400).collect::<String>()) }); }
+            let size = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
+            if size < min { return serde_json::json!({ "ok": false, "id": id, "error": format!("下载不完整：{size} < {min}") }); }
+            std::fs::create_dir_all(&dest).ok();
+            let out = match Command::new("tar.exe").args(["-xf", &part.display().to_string(), "-C", &dest.display().to_string()]).creation_flags(0x08000000).output() {
+                Ok(o) => o, Err(e) => return oto_err(&e.to_string()),
+            };
+            if !out.status.success() { return serde_json::json!({ "ok": false, "id": id, "error": format!("解压失败：{}", String::from_utf8_lossy(&out.stderr).chars().take(400).collect::<String>()) }); }
+            if !dest.join(marker).is_file() { return serde_json::json!({ "ok": false, "id": id, "error": format!("解压后缺标记文件：{marker}") }); }
+            let _ = std::fs::remove_file(&part);
+            serde_json::json!({ "ok": true, "id": id, "path": dest.display().to_string(), "size": size })
+        }).await.map_err(|e| e.to_string()).unwrap_or_else(|e| oto_err(&e));
     }
     let Some((url, rel, min)) = model_download_urls(&id) else {
         return serde_json::json!({ "ok": false, "id": id, "error": "该模型没有直链下载定义；请用资源中心手动放置到 data-root/models" });
