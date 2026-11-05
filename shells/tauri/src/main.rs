@@ -1892,8 +1892,22 @@ fn update_notes(tag: Option<String>) -> serde_json::Value {
 
 #[tauri::command]
 fn launch_updater(channel: Option<String>) -> serde_json::Value {
+    // 与旧 Electron 版同一路径：不依赖 Authenticode，直接拉起随包更新器。
+    // 更新器自己用 Ed25519 签名的 update-manifest.json 校验安装包；Authenticode 只影响 SmartScreen 信任。
+    let Some(dir) = exe_dir() else { return oto_err("无法定位安装目录") };
+    let updater = dir.join("FuFumidi.update.exe");
+    if updater.is_file() {
+        #[cfg(target_os = "windows")]
+        {
+            return match Command::new(&updater).args(["-I", "-O", "-D", &dir.display().to_string()]).creation_flags(0x00000008 | 0x08000000).spawn() {
+                Ok(_) => serde_json::json!({ "ok": true, "manual": false, "updater": updater.display().to_string() }),
+                Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
+            };
+        }
+    }
+    // 更新器缺失时才回退到发布页（便携版/手工部署）。
     let r = update_check_remote(channel.as_deref().unwrap_or("stable"));
-    let Some(url) = r.get("html").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) else { return serde_json::json!({ "ok": false, "error": "没有可用的发布页" }); };
+    let Some(url) = r.get("html").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) else { return serde_json::json!({ "ok": false, "error": "更新器不存在且没有发布页" }); };
     #[cfg(target_os = "windows")]
     { match Command::new("cmd").args(["/C", "start", "", url]).creation_flags(0x08000000).spawn() { Ok(_) => serde_json::json!({ "ok": true, "manual": true, "url": url }), Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }) } }
     #[cfg(not(target_os = "windows"))] { let _ = url; serde_json::json!({ "ok": false, "error": "not supported" }) }
@@ -1918,9 +1932,39 @@ fn plugin_save_path(app: AppHandle, name: Option<String>) -> serde_json::Value {
         Some(p) => serde_json::json!({ "ok": true, "file": p.display().to_string() }), None => serde_json::json!({ "canceled": true }),
     }
 }
+fn plugin_host_python() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("FUFUMIDI_PLUGIN_PYTHON") { if Path::new(&p).is_file() { return Some(PathBuf::from(p)); } }
+    let s = read_json(&settings_path());
+    if let Some(p) = s.get("plugin.host_python").and_then(|v| v.as_str()).filter(|p| !p.trim().is_empty()) {
+        if Path::new(p).is_file() { return Some(PathBuf::from(p)); }
+    }
+    let p = PathBuf::from("E:/Midi/_attic/envs/plugin-uv/Scripts/python.exe");
+    p.is_file().then_some(p)
+}
+
 #[tauri::command]
-fn plugin_render_file(_req: serde_json::Value) -> serde_json::Value {
-    oto_err("Tauri 版尚未接入 VST3 渲染宿主；请先用 Electron 版完成渲染")
+async fn plugin_render_file(req: serde_json::Value) -> Result<serde_json::Value, String> {
+    let plugin = req.get("plugin").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let input = req.get("input").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let output = req.get("output").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    if plugin.is_empty() || input.is_empty() || output.is_empty() { return Err("缺少插件/输入/输出路径".into()); }
+    if !Path::new(&input).is_file() { return Err("输入音频不存在".into()); }
+    let py = plugin_host_python().ok_or("插件宿主不可用（需配置 plugin.host_python）")?;
+    let script = engine_dir().ok_or("engine directory not found")?.join("plugin_render.py");
+    if !script.is_file() { return Err("engine/plugin_render.py 不存在".into()); }
+    let mut args = vec![script.display().to_string(), "fx".into(), "--plugin".into(), plugin, "--in".into(), input, "--out".into(), output];
+    if let Some(params) = req.get("params").filter(|v| v.is_object()) { args.extend(["--params".into(), params.to_string()]); }
+    if let Some(sr) = req.get("sampleRate").and_then(|v| v.as_u64()) { args.extend(["--sample-rate".into(), sr.to_string()]); }
+    tauri::async_runtime::spawn_blocking(move || {
+        let out = Command::new(&py).args(&args).creation_flags(0x08000000).output().map_err(|e| e.to_string())?;
+        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+        let last = stdout.lines().rev().find_map(|l| serde_json::from_str::<serde_json::Value>(l.trim()).ok());
+        match last {
+            Some(v) => Ok(v),
+            None => Ok(serde_json::json!({ "ok": false, "error": "插件宿主没有返回 JSON", "log": format!("{}{}", stderr, stdout).chars().take(1500).collect::<String>() })),
+        }
+    }).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
