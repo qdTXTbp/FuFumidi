@@ -1097,7 +1097,7 @@ fn rvc_catalog_from_api(body: &str) -> Result<serde_json::Value, String> {
 #[tauri::command]
 async fn rvc_refresh_catalog() -> serde_json::Value {
     tauri::async_runtime::spawn_blocking(move || {
-        let out = match Command::new("curl.exe").args(["-L", "--silent", "--show-error", "--max-time", "30", RVC_CATALOG_API]).output() {
+        let out = match Command::new("curl.exe").args(["-L", "--silent", "--show-error", "--max-time", "30", RVC_CATALOG_API]).creation_flags(0x08000000).output() {
             Ok(o) => o, Err(e) => return oto_err(&format!("curl 不可用: {e}")),
         };
         if !out.status.success() { return oto_err(&String::from_utf8_lossy(&out.stderr).chars().rev().take(400).collect::<String>().chars().rev().collect::<String>()); }
@@ -1161,7 +1161,7 @@ async fn plugins_catalog(channel: Option<String>) -> serde_json::Value {
         let url = format!("{}/api/store/manifest/{ch}", plugin_platform_base());
         let cache = data_dir().join(format!("plugins-manifest-{ch}.json"));
         let cached = || std::fs::read_to_string(&cache).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
-        let out = match Command::new("curl.exe").args(["-L", "--silent", "--show-error", "--max-time", "15", "-H", "accept: application/json", &url]).output() {
+        let out = match Command::new("curl.exe").args(["-L", "--silent", "--show-error", "--max-time", "15", "-H", "accept: application/json", &url]).creation_flags(0x08000000).output() {
             Ok(o) => o, Err(e) => {
                 return cached().map(|v| plugin_catalog_cache_reply(v, &url)).unwrap_or_else(|| oto_err(&format!("curl 不可用且无缓存: {e}")));
             }
@@ -1271,7 +1271,7 @@ async fn plugins_install_from_platform(slug: String, version: Option<String>) ->
         let zip_path = dir.join("package.zip");
         let mut url = format!("{}/api/store/plugins/{}/download?source=app", plugin_platform_base(), plugin_url_encode(slug.trim()));
         if let Some(v) = version.filter(|v| !v.trim().is_empty()) { url.push_str(&format!("&version={}", plugin_url_encode(v.trim()))); }
-        let out = match Command::new("curl.exe").args(["-f", "-L", "--silent", "--show-error", "--max-time", "120", "-H", "Accept: application/zip", "-o"]).arg(&zip_path).arg(&url).output() {
+        let out = match Command::new("curl.exe").args(["-f", "-L", "--silent", "--show-error", "--max-time", "120", "-H", "Accept: application/zip", "-o"]).arg(&zip_path).arg(&url).creation_flags(0x08000000).output() {
             Ok(o) => o, Err(e) => { let _ = std::fs::remove_dir_all(&dir); return oto_err(&format!("curl 不可用: {e}")); }
         };
         if !out.status.success() || !zip_path.is_file() { let _ = std::fs::remove_dir_all(&dir); return oto_err(&String::from_utf8_lossy(&out.stderr).chars().rev().take(400).collect::<String>().chars().rev().collect::<String>()); }
@@ -2328,7 +2328,7 @@ fn python_selfcheck() -> serde_json::Value {
     let Some(py) = python_path() else {
         return serde_json::json!({ "ok": false, "error": "python runtime not found（检查 resources/python 或 FUFUMIDI_PYTHON）" });
     };
-    match Command::new(&py).args(["-c", "import sys; print(sys.version.split()[0])"]).output() {
+    match Command::new(&py).args(["-c", "import sys; print(sys.version.split()[0])"]).creation_flags(0x08000000).output() {
         Ok(out) => serde_json::json!({
             "ok": out.status.success(),
             "python": py.display().to_string(),
@@ -2342,7 +2342,7 @@ fn python_selfcheck() -> serde_json::Value {
 #[tauri::command]
 fn renderer_ready(app: AppHandle) -> serde_json::Value {
     let ms = PROCESS_START.get().map(|s| s.elapsed().as_millis()).unwrap_or(0);
-    if let Some(w) = app.get_webview_window("main") { let _ = w.show(); let _ = w.set_focus(); }
+    if let Some(w) = app.get_webview_window("main") { let _ = w.center(); let _ = w.show(); let _ = w.set_focus(); }
     if let Some(s) = app.get_webview_window("splash") { let _ = s.close(); }
     tauri_log(&format!("renderer-ready elapsedMs={ms}"));
     serde_json::json!({ "ok": true, "elapsedMs": ms })
@@ -2601,7 +2601,7 @@ fn open_external(url: String) -> serde_json::Value {
     }
     #[cfg(target_os = "windows")]
     {
-        match Command::new("cmd").args(["/C", "start", "", u]).spawn() {
+        match Command::new("cmd").args(["/C", "start", "", u]).creation_flags(0x08000000).spawn() {
             Ok(_) => serde_json::json!({ "ok": true }),
             Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
         }
@@ -3679,7 +3679,7 @@ fn diag_health() -> serde_json::Value {
     let Some(engine) = engine_dir() else { return serde_json::json!({ "ok": false, "error": "engine not found" }); };
     let script = engine.join("health.py");
     if !script.exists() { return serde_json::json!({ "ok": false, "error": "health.py not found" }); }
-    match Command::new(&py).arg(&script).arg("--json").env("PYTHONIOENCODING", "utf-8").output() {
+    match Command::new(&py).arg(&script).arg("--json").env("PYTHONIOENCODING", "utf-8").creation_flags(0x08000000).output() {
         Ok(out) => {
             let stdout = String::from_utf8_lossy(&out.stdout).to_string();
             let stderr = String::from_utf8_lossy(&out.stderr).to_string();
@@ -5202,6 +5202,8 @@ fn pick_music_xml(app: AppHandle) -> Option<String> {
 /// gpu-enhancements/<kind>/site-packages 挂到 PYTHONPATH；没有增强包时显式
 /// FUFUMIDI_DISABLE_GPU=1，避免继承宿主环境里的旧 torch 造成 ABI/版本错配。
 fn apply_engine_env(cmd: &mut Command) {
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000);
     cmd.env("PYTHONIOENCODING", "utf-8")
         .env("PYTHONUTF8", "1")
         .env("FUFUMIDI_DATA_DIR", data_dir())
@@ -5707,6 +5709,14 @@ fn main() {
         return;
     }
     let argv: Vec<String> = std::env::args().collect();
+    if argv.iter().any(|a| a == "--db-check") {
+        let before = db_playlists_list();
+        let ok = db_playlists_put(serde_json::json!({ "id": "__diag_playlist__", "name": "诊断歌单", "songIds": [] }));
+        let after = db_playlists_list();
+        let _ = db_playlists_delete("__diag_playlist__".to_string());
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({ "dbPath": db_path().display().to_string(), "before": before, "putOk": ok, "after": after })).unwrap_or_default());
+        return;
+    }
     if argv.iter().any(|a| a == "--ds-check") {
         let c = diffsinger_catalog();
         let stats = c.get("stats").cloned().unwrap_or(serde_json::Value::Null);
@@ -5784,27 +5794,26 @@ fn main() {
             match tauri::WebviewWindowBuilder::new(app, "splash", tauri::WebviewUrl::App("splash.html".into()))
                 .title("FuFumidi").inner_size(640.0, 280.0).resizable(false).decorations(false)
                 .visible(true).focused(true).always_on_top(true).skip_taskbar(true).center().build()
-            {
-                Ok(w) => { let _ = w.show(); let _ = w.set_focus(); tauri_log("splash-created 640x280"); }
-                Err(e) => { tauri_log(&format!("splash-create-failed: {e}")); if let Some(w) = app.get_webview_window("main") { let _ = w.show(); } }
-            }
+            { Ok(w) => { let _ = w.show(); tauri_log("splash-created 640x280"); } Err(e) => tauri_log(&format!("splash-create-failed: {e}")) }
             let h = app.handle().clone();
-            // 主窗口由配置创建时可能盖在 splash 上；启动早期反复把 splash 提到最前。
-            let hs = app.handle().clone();
             std::thread::spawn(move || {
+                // 主窗先移到屏幕外加载（不能 hidden，否则 WebView2 会停渲染），
+                // 原生 splash 留在屏幕中央；renderer-ready 后再移回中央。
+                std::thread::sleep(std::time::Duration::from_millis(250));
+                if let Some(w) = h.get_webview_window("main") {
+                    let _ = w.set_position(tauri::PhysicalPosition::new(-10000, -10000));
+                    let _ = w.show();
+                }
                 for _ in 0..8 {
                     std::thread::sleep(std::time::Duration::from_millis(250));
-                    if let Some(s) = hs.get_webview_window("splash") {
-                        let _ = s.show();
-                        let _ = s.set_always_on_top(true);
-                        let _ = s.set_focus();
-                    }
+                    if let Some(s) = h.get_webview_window("splash") { let _ = s.show(); let _ = s.set_always_on_top(true); let _ = s.set_focus(); }
                 }
             });
+            let h2 = app.handle().clone();
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_secs(20));
-                if let Some(w) = h.get_webview_window("main") { let _ = w.show(); }
-                if let Some(s) = h.get_webview_window("splash") { let _ = s.close(); }
+                if let Some(w) = h2.get_webview_window("main") { let _ = w.center(); let _ = w.show(); }
+                if let Some(s) = h2.get_webview_window("splash") { let _ = s.close(); }
             });
             println!("[fufumidi-shell] {}", serde_json::to_string(&host_info_json()).unwrap_or_default());
             Ok(())
