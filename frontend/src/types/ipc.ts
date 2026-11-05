@@ -1414,6 +1414,7 @@ export interface FuBridge {
   dbKvGet(key: string): Promise<any>;
   dbKvSet(key: string, value: any): Promise<boolean>;
   dbSongsList(): Promise<DbSongItem[]>;
+  dbSongGet(id: string): Promise<any>;
   dbSongsPut(item: DbSongItem): Promise<boolean>;
   dbSongsDelete(id: string): Promise<boolean>;
   dbPlaylistsList(): Promise<any[]>;

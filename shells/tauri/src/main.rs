@@ -4918,9 +4918,24 @@ fn db_songs_list_blocking() -> Vec<serde_json::Value> {
     let Ok(mut stmt) = conn.prepare("SELECT data FROM songs ORDER BY updated_at DESC") else { return Vec::new() };
     let rows = stmt.query_map([], |r| r.get::<_, String>(0));
     match rows {
-        Ok(it) => it.flatten().filter_map(|s| serde_json::from_str::<serde_json::Value>(&s).ok()).collect(),
+        Ok(it) => it.flatten().filter_map(|s| {
+            let mut v = serde_json::from_str::<serde_json::Value>(&s).ok()?;
+            if let Some(o) = v.as_object_mut() {
+                // 列表只回元数据：61 MB 的 MIDI 字节数组改为按需 db_song_get。
+                o.remove("bytes");
+                o.insert("bytesOmitted".into(), serde_json::Value::Bool(true));
+            }
+            Some(v)
+        }).collect(),
         Err(_) => Vec::new(),
     }
+}
+
+#[tauri::command]
+fn db_song_get(id: String) -> serde_json::Value {
+    let Ok(conn) = open_db() else { return serde_json::Value::Null };
+    let text: String = conn.query_row("SELECT data FROM songs WHERE id=?1", params![id], |r| r.get(0)).unwrap_or_default();
+    serde_json::from_str(&text).unwrap_or(serde_json::Value::Null)
 }
 
 #[tauri::command]
@@ -5831,7 +5846,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             wallpaper_engine_detect, wallpaper_engine_inventory, wallpaper_engine_open_folder, wallpaper_engine_view, diffsinger_ms_catalog, diffsinger_ms_download, diffsinger_ms_cancel_download, model_download, model_cancel, model_pause, plugin_pick_file, plugin_pick_audio, plugin_save_path, plugin_render_file, renderer_ready, update_check, update_list, update_notes, launch_updater, load_settings, save_settings, update_sources, update_set_preferred_source, db_kv_get, db_kv_set,
-            tasks_list, tasks_cancel, tasks_clear_finished, db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, cover_singers, cover_pick_audio, cover_pick_dir, cover_open, cover_cancel, cover_run, video_export_begin, video_export_write, video_export_abort, video_export_end, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, wallpaper_set_desktop, gpu_status, gpu_uninstall, gpu_unified_memory_experiment, plugins_list, plugins_rescan, plugins_set_enabled, plugins_installed_list, plugins_platform_info, plugins_catalog, plugins_open_platform, plugins_install_from_platform, plugins_confirm_install, plugins_cancel_install, plugins_open_dir, plugins_open_docs, open_edit_guide, sf_workshop_list, sf_workshop_import, sf_workshop_delete, sf_workshop_open_dir, model_list, omr_engine_status, omr_engine_open_dir, omr_engine_remove, omr_lang_status, omr_lang_remove, omr_homr_status, omr_homr_remove, omr_sr_status, omr_sr_remove,
+            tasks_list, tasks_cancel, tasks_clear_finished, db_status, db_songs_list, db_song_get, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, cover_singers, cover_pick_audio, cover_pick_dir, cover_open, cover_cancel, cover_run, video_export_begin, video_export_write, video_export_abort, video_export_end, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, wallpaper_set_desktop, gpu_status, gpu_uninstall, gpu_unified_memory_experiment, plugins_list, plugins_rescan, plugins_set_enabled, plugins_installed_list, plugins_platform_info, plugins_catalog, plugins_open_platform, plugins_install_from_platform, plugins_confirm_install, plugins_cancel_install, plugins_open_dir, plugins_open_docs, open_edit_guide, sf_workshop_list, sf_workshop_import, sf_workshop_delete, sf_workshop_open_dir, model_list, omr_engine_status, omr_engine_open_dir, omr_engine_remove, omr_lang_status, omr_lang_remove, omr_homr_status, omr_homr_remove, omr_sr_status, omr_sr_remove,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,

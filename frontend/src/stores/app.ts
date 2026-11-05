@@ -140,6 +140,12 @@ async function dbSongsAll(): Promise<any[]> {
   }
   return [];
 }
+async function dbSongGet(id: string): Promise<any> {
+  if (bridge && typeof bridge.dbSongGet === 'function') {
+    try { return await bridge.dbSongGet(id); } catch (e) {}
+  }
+  return null;
+}
 async function dbSongPut(rec: any): Promise<void> {
   if (bridge && typeof bridge.dbSongsPut === 'function') {
     try { await bridge.dbSongsPut(rec); } catch (e) {}
@@ -754,7 +760,7 @@ export const useAppStore = defineStore('app', {
         (async () => {
           let bytes: any = item.__bytes;
           if (!bytes) { const r = await idbGet(STORE_SONGS, id); if (r && r.bytes) { bytes = new Uint8Array(r.bytes); item.__bytes = bytes; } }
-          if (!bytes) { try { const all = await dbSongsAll(); const r = all.find((x: any) => x.id === id); if (r && r.bytes) { bytes = new Uint8Array(r.bytes); item.__bytes = bytes; } } catch (e) {} }
+          if (!bytes) { try { const r = await dbSongGet(id); if (r && r.bytes) { bytes = new Uint8Array(r.bytes); item.__bytes = bytes; } } catch (e) {} }
           if (bytes) {
             try { if (audioUrl) URL.revokeObjectURL(audioUrl); } catch (e) {}
             audioUrl = URL.createObjectURL(new Blob([bytes]));
@@ -787,7 +793,7 @@ export const useAppStore = defineStore('app', {
         // 2) IndexedDB 原生字节（最可靠；形态可能是 Uint8Array 或早期版本存入的 ArrayBuffer，由 toBytes 统一）
         if (!item.song) { const r = await idbGet(STORE_SONGS, id); if (r && r.bytes) tryParse(r.bytes); }
         // 3) SQLite 字节（兜底，JSON 数字数组对较大 MIDI 可能丢失）
-        if (!item.song) { const all = await dbSongsAll(); const r = all.find((x: any) => x.id === id); if (r && r.bytes) tryParse(r.bytes); }
+        if (!item.song) { const r = await dbSongGet(id); if (r && r.bytes) tryParse(r.bytes); }
         // 4) 磁盘上的真实 .mid 文件（每个曲目都必须有；索引字节丢失时靠它救回）
         if (!item.song && item.meta && item.meta.path) {
           try { const b = await bridge?.readBinary(item.meta.path); if (b) tryParse(b); } catch (e) {}

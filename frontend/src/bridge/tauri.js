@@ -328,6 +328,7 @@ export function installTauriBridge() {
     dbKvGet: (key) => call('db_kv_get', { key }),
     dbKvSet: (key, value) => call('db_kv_set', { key, value }),
     dbSongsList: () => call('db_songs_list'),
+    dbSongGet: (id) => call('db_song_get', { id }),
     dbSongsPut: (item) => call('db_songs_put', { item }),
     dbSongsDelete: (id) => call('db_songs_delete', { id }),
     dbPlaylistsList: () => call('db_playlists_list'),
