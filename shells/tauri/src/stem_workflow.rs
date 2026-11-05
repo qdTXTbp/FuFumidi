@@ -2,6 +2,17 @@
 //!
 //! 与 Electron main/stem-workflow.js 同一顺序；失败返回 None，由 run_convert 回退整曲。
 use super::*;
+use std::sync::Mutex;
+
+static STEM_PID: Mutex<Option<u32>> = Mutex::new(None);
+fn remember(c: &std::process::Child) { if let Ok(mut g) = STEM_PID.lock() { *g = Some(c.id()); } }
+fn forget() { if let Ok(mut g) = STEM_PID.lock() { *g = None; } }
+pub fn cancel_running() {
+    let pid = STEM_PID.lock().ok().and_then(|g| *g);
+    if let Some(pid) = pid {
+        let _ = Command::new("taskkill").args(["/T", "/F", "/PID", &pid.to_string()]).creation_flags(0x08000000).output();
+    }
+}
 
 pub fn role_of(name: &str) -> &'static str {
     let s = name.to_ascii_lowercase();
@@ -29,13 +40,14 @@ fn run_worker(req: &serde_json::Value) -> Result<serde_json::Value, String> {
     cmd.current_dir(&eng).args(["music2midi.py", "worker"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).creation_flags(0x08000000);
     apply_engine_env(&mut cmd);
     let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    remember(&child);
     if let Some(mut stdin) = child.stdin.take() { use std::io::Write; if writeln!(stdin, "{}", req).is_err() { let _ = child.kill(); return Err("worker write failed".into()); } let _ = stdin.flush(); }
     let stdout = child.stdout.take().ok_or("worker stdout missing")?;
     let mut result = None;
     for line in BufReader::new(stdout).lines().map_while(Result::ok) {
         if let Some(rest) = line.trim().strip_prefix("###RESULT ") { result = serde_json::from_str::<serde_json::Value>(rest).ok(); break; }
     }
-    let _ = child.kill(); let _ = child.wait();
+    let _ = child.kill(); let _ = child.wait(); forget();
     result.ok_or_else(|| "worker did not return ###RESULT".to_string())
 }
 
@@ -60,7 +72,9 @@ pub fn run(req: &serde_json::Value, app: Option<&AppHandle>) -> Option<serde_jso
     let mut cmd = Command::new(&py);
     cmd.current_dir(&eng).args(["music2midi.py"]).args(&args).stdout(Stdio::piped()).stderr(Stdio::piped()).creation_flags(0x08000000);
     apply_engine_env(&mut cmd);
-    let out = cmd.output().ok()?;
+    let mut child = cmd.spawn().ok()?; remember(&child);
+    let out = child.wait_with_output().ok(); forget();
+    let out = out?;
     if !out.status.success() { return None; }
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     let sep_ok = stdout.lines().rev().find_map(|l| l.trim().strip_prefix("###RESULT ").and_then(|r| serde_json::from_str::<serde_json::Value>(r).ok())).and_then(|r| r.get("ok").and_then(|v| v.as_bool())) == Some(true);

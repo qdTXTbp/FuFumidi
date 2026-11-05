@@ -5595,6 +5595,7 @@ fn probe() -> serde_json::Value { engine_probe() }
 /// 4. 其余返回 no running worker：**cap>1 的未知 id 不猜、不误杀**。
 #[tauri::command]
 fn cancel(state: State<'_, WorkerState>, separation: State<'_, SeparationState>, id: Option<String>) -> serde_json::Value {
+    stem_workflow::cancel_running();
     if let Some(raw) = id.as_deref().filter(|x| x.starts_with("sep")) {
         let mut g = separation.0.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(mut job) = g.take() {
