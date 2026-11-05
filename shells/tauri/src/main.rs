@@ -5039,9 +5039,10 @@ fn db_playlists_put(item: serde_json::Value) -> bool {
 
 fn is_audio_ext(ext: &str) -> bool {
     matches!(ext.to_ascii_lowercase().as_str(),
-        "mp3" | "wav" | "flac" | "m4a" | "aac" | "ogg" | "oga" | "opus" | "wma"
+        "mp3" | "wav" | "wave" | "flac" | "m4a" | "aac" | "ogg" | "oga" | "opus" | "wma"
         | "mp4" | "mkv" | "avi" | "mov" | "webm" | "aiff" | "aif" | "au" | "snd"
-        | "caf" | "m4v" | "m4s" | "ts" | "mpg" | "mpeg" | "flv" | "3gp" | "amr" | "mka")
+        | "caf" | "m4v" | "m4s" | "ts" | "mpg" | "mpeg" | "flv" | "3gp" | "amr" | "mka"
+        | "wv" | "ape" | "alac" | "ac3" | "dts" | "m2ts" | "mts" | "wmv" | "ra" | "rm")
 }
 
 fn walk_audio_files(dir: &Path) -> Vec<String> {
@@ -5288,12 +5289,12 @@ fn pick_directory(app: AppHandle) -> Option<String> {
 
 #[tauri::command]
 fn pick_audio(app: AppHandle) -> Option<String> {
-    app.dialog().file().add_filter("Audio", &["mp3", "wav", "flac", "ogg", "m4a", "aac", "wma", "aiff", "aif", "opus", "mp4", "mkv", "webm"]).blocking_pick_file().and_then(file_path_string)
+    app.dialog().file().add_filter("Audio", &["mp3", "wav", "wave", "flac", "ogg", "oga", "m4a", "aac", "wma", "aiff", "aif", "opus", "mp4", "mkv", "webm", "mov", "avi", "wv", "ape", "alac", "ac3", "dts", "m2ts", "mts", "wmv", "ra", "rm", "mka", "caf", "au", "snd", "amr", "3gp", "ts", "m4s", "m4v"]).blocking_pick_file().and_then(file_path_string)
 }
 
 #[tauri::command]
 fn pick_audio_files(app: AppHandle) -> Option<Vec<String>> {
-    app.dialog().file().add_filter("Audio", &["mp3", "wav", "flac", "ogg", "m4a", "aac", "wma", "aiff", "aif", "opus", "mp4", "mkv", "webm"]).blocking_pick_files().map(|v| v.into_iter().filter_map(file_path_string).collect())
+    app.dialog().file().add_filter("Audio", &["mp3", "wav", "wave", "flac", "ogg", "oga", "m4a", "aac", "wma", "aiff", "aif", "opus", "mp4", "mkv", "webm", "mov", "avi", "wv", "ape", "alac", "ac3", "dts", "m2ts", "mts", "wmv", "ra", "rm", "mka", "caf", "au", "snd", "amr", "3gp", "ts", "m4s", "m4v"]).blocking_pick_files().map(|v| v.into_iter().filter_map(file_path_string).collect())
 }
 
 #[tauri::command]

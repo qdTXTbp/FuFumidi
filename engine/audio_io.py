@@ -21,6 +21,8 @@ AUDIO_EXTENSIONS = {
 }
 
 # 播放器（MIDI 播放页）可打开的 MIDI 文件扩展名
+AUDIO_EXTENSIONS.update({".wv", ".ape", ".alac", ".ac3", ".dts", ".m2ts", ".mts", ".wmv"})
+
 MIDI_EXTENSIONS = {".mid", ".midi", ".kar", ".rmi"}
 
 # 最近一次解码耗时（秒）：转录引擎完成后由 engine.transcribe 读取并上报 [计时] 日志
