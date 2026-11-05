@@ -277,3 +277,11 @@ Tauri 默认从 GitHub 下载 `nsis-3.13.zip`，本机直连超时。已把工�
 - 安装版 17,064,960 bytes，SHA-256 `03A8BEDF7F10B2406235D0659133A8F4E9EB978FDBE5F79AEBB6ECF3D4FA58E7`；
 - 安装目录 --self-check：dataDir=E:/Midi/FuFumidi/FuFumidiData；--update-check：latest=6.5.0-beta.1；
 - full E2E 41/41；cargo 121/121；clippy 0；splash 已由用户确认“暂时通过”。
+
+## 39. 2026-11-05 成品候选（用户确认无黑屏）
+
+- 安装版 17,457,664 bytes，SHA-256 `EEC6206AA507AABD6C64C7E389485678738FF7A6484B2311434AE2454B893138`；
+- 用户确认启动无黑屏；原版独立 splash + 主窗可见/置顶复位；
+- full acceptance ok:true（typecheck/audit/test:ui/hidden-e2e/video/cover/separate/cargo-test/clippy/release/sync/host/engine）；
+- hidden E2E 41/41；命令 186；DiffSinger 171 项目录；Wallpaper Engine 检测/清单；
+- 未完成：OMR 实际识谱 UI、UTAU 在线声库、VST 端到端、旧更新器实际替换验证、Wallpaper 动态逐项验证。

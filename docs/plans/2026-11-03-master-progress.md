@@ -604,3 +604,5 @@
 - **update 代码 clippy**：trim_start_matches(['v','V'])；clippy -D warnings 通过；cargo121。
 
 - **最终 synced release**：clippy 后 2m26/0 warning；engine 同步并复制安装；17,064,960 / 03A8BEDF…58E7；更新检查 latest 6.5.0-beta.1；full E2E 41/41。
+
+- **成品候选（用户确认无黑屏）**：原版 splash/主窗置顶复位；DiffSinger 171 目录；Wallpaper Engine 检测/清单/we:// viewer；模型下载；VST 宿主；full acceptance ok；安装版 EEC6206A/17,457,664；commit f870d566。
