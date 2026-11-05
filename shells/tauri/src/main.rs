@@ -2183,8 +2183,10 @@ fn python_selfcheck() -> serde_json::Value {
 }
 
 #[tauri::command]
-fn renderer_ready() -> serde_json::Value {
+fn renderer_ready(app: AppHandle) -> serde_json::Value {
     let ms = PROCESS_START.get().map(|s| s.elapsed().as_millis()).unwrap_or(0);
+    if let Some(w) = app.get_webview_window("main") { let _ = w.show(); let _ = w.set_focus(); }
+    if let Some(s) = app.get_webview_window("splash") { let _ = s.close(); }
     tauri_log(&format!("renderer-ready elapsedMs={ms}"));
     serde_json::json!({ "ok": true, "elapsedMs": ms })
 }
@@ -5605,6 +5607,19 @@ fn main() {
         ])
         .setup(move |app| {
             if let Some(listener) = listener { start_single_instance_listener(listener, app.handle().clone()); }
+            match tauri::WebviewWindowBuilder::new(app, "splash", tauri::WebviewUrl::App("splash.html".into()))
+                .title("FuFumidi").inner_size(640.0, 280.0).resizable(false).decorations(false)
+                .always_on_top(true).skip_taskbar(true).center().build()
+            {
+                Ok(_) => tauri_log("splash-created 640x280"),
+                Err(e) => { tauri_log(&format!("splash-create-failed: {e}")); if let Some(w) = app.get_webview_window("main") { let _ = w.show(); } }
+            }
+            let h = app.handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(20));
+                if let Some(w) = h.get_webview_window("main") { let _ = w.show(); }
+                if let Some(s) = h.get_webview_window("splash") { let _ = s.close(); }
+            });
             println!("[fufumidi-shell] {}", serde_json::to_string(&host_info_json()).unwrap_or_default());
             Ok(())
         })
