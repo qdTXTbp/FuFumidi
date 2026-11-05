@@ -1973,17 +1973,46 @@ async fn plugin_render_file(req: serde_json::Value) -> Result<serde_json::Value,
     }).await.map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
-fn model_download(req: serde_json::Value) -> serde_json::Value {
-    let id = req.get("id").and_then(|v| v.as_str()).unwrap_or("");
-    let Some(item) = model_list().into_iter().find(|m| m.get("id").and_then(|v| v.as_str()) == Some(id)) else {
-        return serde_json::json!({ "ok": false, "error": format!("未知模型：{id}") });
-    };
-    if item.get("exists").and_then(|v| v.as_bool()) == Some(true) {
-        return serde_json::json!({ "ok": true, "id": id, "existed": true, "path": item.get("path"), "size": item.get("size") });
-    }
-    serde_json::json!({ "ok": false, "id": id, "error": "本机未找到该模型；Tauri 版下载器尚未接入，请先用资源中心/Electron 下载后放入数据根 models" })
+fn model_download_urls(id: &str) -> Option<(&'static str, &'static str, u64)> {
+    Some(match id {
+        "piano_transcription" => ("https://zenodo.org/record/4034264/files/CRNN_note_F1%3D0.9677_pedal_F1%3D0.9186.pth?download=1", "piano_transcription/note_F1=0.9677_pedal_F1=0.9186.pth", 160_000_000),
+        "beat_this" => ("https://raw.githubusercontent.com/monologue82/Models/main/beat_this/beat_this-final0.ckpt", "hub/checkpoints/beat_this-final0.ckpt", 70_000_000),
+        "hnsep_240512" => ("https://cnb.cool/FuFuCloud-mirror/Models/-/releases/download/hnsep-v1/hnsep_240512.oudep", "hnsep/hnsep_240512.oudep", 50_000_000),
+        _ => return None,
+    })
 }
+
+#[tauri::command]
+async fn model_download(req: serde_json::Value) -> serde_json::Value {
+    let id = req.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    if let Some(item) = model_list().into_iter().find(|m| m.get("id").and_then(|v| v.as_str()) == Some(id.as_str())) {
+        if item.get("exists").and_then(|v| v.as_bool()) == Some(true) {
+            return serde_json::json!({ "ok": true, "id": id, "existed": true, "path": item.get("path"), "size": item.get("size") });
+        }
+    }
+    let Some((url, rel, min)) = model_download_urls(&id) else {
+        return serde_json::json!({ "ok": false, "id": id, "error": "该模型没有直链下载定义；请用资源中心手动放置到 data-root/models" });
+    };
+    let root = data_dir();
+    tauri::async_runtime::spawn_blocking(move || {
+        let dest = root.join("models").join(rel);
+        if let Some(parent) = dest.parent() { if let Err(e) = std::fs::create_dir_all(parent) { return oto_err(&e.to_string()); } }
+        let part = dest.with_extension("part");
+        let out = match Command::new("curl.exe").args(["-L", "--fail", "--retry", "2", "-C", "-", "-o", &part.display().to_string(), url]).creation_flags(0x08000000).output() {
+            Ok(o) => o, Err(e) => return oto_err(&e.to_string()),
+        };
+        if !out.status.success() { return serde_json::json!({ "ok": false, "id": id, "error": format!("下载失败：{}", String::from_utf8_lossy(&out.stderr).chars().take(400).collect::<String>()) }); }
+        let size = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
+        if size < min { return serde_json::json!({ "ok": false, "id": id, "error": format!("下载不完整：{size} < {min}") }); }
+        if let Err(e) = std::fs::rename(&part, &dest) { return oto_err(&e.to_string()); }
+        serde_json::json!({ "ok": true, "id": id, "path": dest.display().to_string(), "size": size })
+    }).await.map_err(|e| e.to_string()).unwrap_or_else(|e| oto_err(&e))
+}
+
+#[tauri::command]
+fn model_cancel(_id: Option<String>) -> serde_json::Value { serde_json::json!({ "ok": false, "error": "直链下载在独立线程执行，当前不支持中途取消" }) }
+#[tauri::command]
+fn model_pause(_id: Option<String>) -> serde_json::Value { serde_json::json!({ "ok": false, "error": "直链下载不支持暂停；重新下载会从 .part 断点续传" }) }
 
 fn data_root_overridden() -> bool {
     std::env::var("FUFUMIDI_DATA_ROOT").map(|p| !p.trim().is_empty()).unwrap_or(false)
@@ -5533,7 +5562,7 @@ fn main() {
         .manage(separation_state)
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
-            model_download, plugin_pick_file, plugin_pick_audio, plugin_save_path, plugin_render_file, renderer_ready, update_check, update_list, update_notes, launch_updater, load_settings, save_settings, update_sources, update_set_preferred_source, db_kv_get, db_kv_set,
+            model_download, model_cancel, model_pause, plugin_pick_file, plugin_pick_audio, plugin_save_path, plugin_render_file, renderer_ready, update_check, update_list, update_notes, launch_updater, load_settings, save_settings, update_sources, update_set_preferred_source, db_kv_get, db_kv_set,
             tasks_list, tasks_cancel, tasks_clear_finished, db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, cover_singers, cover_pick_audio, cover_pick_dir, cover_open, cover_cancel, cover_run, video_export_begin, video_export_write, video_export_abort, video_export_end, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, wallpaper_set_desktop, gpu_status, gpu_uninstall, gpu_unified_memory_experiment, plugins_list, plugins_rescan, plugins_set_enabled, plugins_installed_list, plugins_platform_info, plugins_catalog, plugins_open_platform, plugins_install_from_platform, plugins_confirm_install, plugins_cancel_install, plugins_open_dir, plugins_open_docs, open_edit_guide, sf_workshop_list, sf_workshop_import, sf_workshop_delete, sf_workshop_open_dir, model_list, omr_engine_status, omr_engine_open_dir, omr_engine_remove, omr_lang_status, omr_lang_remove, omr_homr_status, omr_homr_remove, omr_sr_status, omr_sr_remove,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
