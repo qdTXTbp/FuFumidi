@@ -404,7 +404,8 @@ function pushNoteCommand(build, ti, noteCount) {
     mutate 在命令工厂之前执行；before 必须先于 mutate 捕获。 */
 function editNotesWithCommand(arr, fields, label, mutate) {
   const tr = curTrack(); if (!tr || !arr || !arr.length) return 0;
-  const singleTrack = arr.every((n) => tr.notes.includes(n));
+  const noteSet = new Set(tr.notes);
+  const singleTrack = arr.every((n) => noteSet.has(n));
   if (!singleTrack) {
     pushState(label);
     mutate();
@@ -418,10 +419,11 @@ function editNotesWithCommand(arr, fields, label, mutate) {
   });
   mutate();
   afterEdit();
+  const noteIndex = new Map(tr.notes.map((n, i) => [n, i]));
   const updates = before.map((x) => {
     const after = {};
     for (const f of fields) after[f] = x.n[f];
-    return { idx: tr.notes.indexOf(x.n), note: x.n, before: x.vals, after };
+    return { idx: noteIndex.get(x.n) ?? -1, note: x.n, before: x.vals, after };
   }).filter((u) => u.idx >= 0);
   if (updates.length) pushNoteCommand(() => makeUpdateNotesCommand(tr, updates, label), props.trackIndex, tr.notes.length);
   return arr.length;
