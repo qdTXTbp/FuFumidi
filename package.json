@@ -92,6 +92,7 @@
     "tauri:cover-engine-smoke": "node scripts/tauri/cover-engine-smoke.mjs",
     "tauri:separate-smoke": "node scripts/tauri/separate-cli-smoke.mjs",
     "tauri:acceptance": "node scripts/tauri/acceptance.mjs",
+    "tauri:sign": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/tauri/sign-release.ps1",
     "tauri:sf-registry": "node scripts/tauri/gen-soundfont-registry.mjs"
   },
   "dependencies": {
