@@ -5783,12 +5783,24 @@ fn main() {
             if let Some(listener) = listener { start_single_instance_listener(listener, app.handle().clone()); }
             match tauri::WebviewWindowBuilder::new(app, "splash", tauri::WebviewUrl::App("splash.html".into()))
                 .title("FuFumidi").inner_size(640.0, 280.0).resizable(false).decorations(false)
-                .always_on_top(true).skip_taskbar(true).center().build()
+                .visible(true).focused(true).always_on_top(true).skip_taskbar(true).center().build()
             {
-                Ok(_) => tauri_log("splash-created 640x280"),
+                Ok(w) => { let _ = w.show(); let _ = w.set_focus(); tauri_log("splash-created 640x280"); }
                 Err(e) => { tauri_log(&format!("splash-create-failed: {e}")); if let Some(w) = app.get_webview_window("main") { let _ = w.show(); } }
             }
             let h = app.handle().clone();
+            // 主窗口由配置创建时可能盖在 splash 上；启动早期反复把 splash 提到最前。
+            let hs = app.handle().clone();
+            std::thread::spawn(move || {
+                for _ in 0..8 {
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                    if let Some(s) = hs.get_webview_window("splash") {
+                        let _ = s.show();
+                        let _ = s.set_always_on_top(true);
+                        let _ = s.set_focus();
+                    }
+                }
+            });
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_secs(20));
                 if let Some(w) = h.get_webview_window("main") { let _ = w.show(); }

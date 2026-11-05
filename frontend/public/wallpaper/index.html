@@ -1,0 +1,36 @@
+<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000}#wp{position:fixed;inset:0}#fb{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;display:none}video{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;display:none}</style></head><body><div id="wp"></div><img id="fb" alt=""><video id="vid" playsinline muted loop></video><script src="engine.js"></script><script>
+(function(){
+ var q=new URLSearchParams(location.search), id=q.get('id')||'';
+ var base='we://localhost/'+encodeURIComponent(id)+'/';
+ var fb=document.getElementById('fb'), vid=document.getElementById('vid'), host=document.getElementById('wp');
+ function report(kind,msg){try{parent.postMessage({type:'fufumidi-wallpaper',kind:kind,msg:msg||''},'*')}catch(e){}}
+ window.addEventListener('message',function(e){try{var d=e.data||{};if(d.type==='fufumidi-wallpaper-ctl'){if(d.action==='pause'){if(window.__inst)window.__inst.pause();vid.pause();}else if(d.action==='resume'){if(window.__inst)window.__inst.resume();vid.play().catch(function(){});}}}catch(err){}});
+ document.addEventListener('visibilitychange',function(){try{if(document.hidden){if(window.__inst)window.__inst.pause();vid.pause();}else if(window.__inst)window.__inst.resume();}catch(e){}});
+ fetch(base+'project.json').then(function(r){return r.json()}).then(function(p){
+   var type=String(p.type||'scene').toLowerCase();
+   if(p.preview){fb.src=new URL(p.preview,base).href;fb.style.display='block';}
+   if(type==='video'){
+     vid.style.display='block';fb.style.display='none';
+     vid.src=new URL(p.file||p.video||'',base).href;vid.play().catch(function(){});report('ready');return;
+   }
+   if(type==='web'){
+     var entry=new URL(p.file||p.url||'index.html',base).href;
+     var dir=entry.replace(/[?#].*$/,'').replace(/\/[^/]*$/,'');
+     var src={key:dir,project:function(){return Promise.resolve({type:'web'})},webEntry:function(){return Promise.resolve({url:entry})},scenePkg:function(){return Promise.reject(new Error('web'))}};
+     if(!window.WebWallGL){report('error','WebWallGL load failed');return;}
+     var inst=window.__inst=window.WebWallGL.createScene(host,{fit:'cover',fps:30,volume:0,renderDpr:1});
+     inst.on('ready',function(){try{inst.resume()}catch(e){}report('ready')});
+     inst.on('error',function(e){report('error',String(e&&e.message||e))});
+     inst.load(src).then(function(){try{inst.resume()}catch(e){}report('ready')}).catch(function(e){report('error',String(e&&e.message||e))});
+     return;
+   }
+   if(type!=='scene'){report('ready');return;}
+   if(!window.WebWallGL){report('error','WebWallGL load failed');return;}
+   fb.style.display='none';
+   var inst=window.__inst=window.WebWallGL.createScene(host,{fit:'cover',fps:30,volume:0,renderDpr:1});
+   inst.on('ready',function(){try{inst.resume()}catch(e){}report('ready')});
+   inst.on('error',function(e){fb.style.display='block';report('error',String(e&&e.message||e))});
+   inst.load(window.WebWallGL.httpSource(base)).then(function(){try{inst.resume()}catch(e){}report('ready')}).catch(function(e){fb.style.display='block';report('error',String(e&&e.message||e))});
+ }).catch(function(e){report('error',String(e&&e.message||e))});
+})();
+</script></body></html>
