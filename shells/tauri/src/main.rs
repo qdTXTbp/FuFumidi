@@ -1899,6 +1899,30 @@ fn launch_updater(channel: Option<String>) -> serde_json::Value {
     #[cfg(not(target_os = "windows"))] { let _ = url; serde_json::json!({ "ok": false, "error": "not supported" }) }
 }
 
+#[tauri::command]
+fn plugin_pick_file(app: AppHandle) -> serde_json::Value {
+    match app.dialog().file().set_title("选择 VST3 插件").add_filter("VST3", &["vst3", "dll"]).blocking_pick_file().and_then(file_path_string) {
+        Some(p) => serde_json::json!({ "ok": true, "file": p }), None => serde_json::json!({ "canceled": true }),
+    }
+}
+#[tauri::command]
+fn plugin_pick_audio(app: AppHandle) -> serde_json::Value {
+    match app.dialog().file().set_title("选择 VST 渲染输入").add_filter("音频", &["wav", "flac", "mp3", "m4a", "aiff"]).blocking_pick_file().and_then(file_path_string) {
+        Some(p) => serde_json::json!({ "ok": true, "file": p }), None => serde_json::json!({ "canceled": true }),
+    }
+}
+#[tauri::command]
+fn plugin_save_path(app: AppHandle, name: Option<String>) -> serde_json::Value {
+    let n = name.unwrap_or_else(|| "vst3-render.wav".to_string());
+    match app.dialog().file().set_title("VST 渲染输出").set_file_name(n).add_filter("WAV", &["wav"]).blocking_save_file().and_then(|p| p.into_path().ok()) {
+        Some(p) => serde_json::json!({ "ok": true, "file": p.display().to_string() }), None => serde_json::json!({ "canceled": true }),
+    }
+}
+#[tauri::command]
+fn plugin_render_file(_req: serde_json::Value) -> serde_json::Value {
+    oto_err("Tauri 版尚未接入 VST3 渲染宿主；请先用 Electron 版完成渲染")
+}
+
 fn data_root_overridden() -> bool {
     std::env::var("FUFUMIDI_DATA_ROOT").map(|p| !p.trim().is_empty()).unwrap_or(false)
 }
@@ -5447,7 +5471,7 @@ fn main() {
         .manage(separation_state)
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
-            renderer_ready, update_check, update_list, update_notes, launch_updater, load_settings, save_settings, update_sources, update_set_preferred_source, db_kv_get, db_kv_set,
+            plugin_pick_file, plugin_pick_audio, plugin_save_path, plugin_render_file, renderer_ready, update_check, update_list, update_notes, launch_updater, load_settings, save_settings, update_sources, update_set_preferred_source, db_kv_get, db_kv_set,
             tasks_list, tasks_cancel, tasks_clear_finished, db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, cover_singers, cover_pick_audio, cover_pick_dir, cover_open, cover_cancel, cover_run, video_export_begin, video_export_write, video_export_abort, video_export_end, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, wallpaper_set_desktop, gpu_status, gpu_uninstall, gpu_unified_memory_experiment, plugins_list, plugins_rescan, plugins_set_enabled, plugins_installed_list, plugins_platform_info, plugins_catalog, plugins_open_platform, plugins_install_from_platform, plugins_confirm_install, plugins_cancel_install, plugins_open_dir, plugins_open_docs, open_edit_guide, sf_workshop_list, sf_workshop_import, sf_workshop_delete, sf_workshop_open_dir, model_list, omr_engine_status, omr_engine_open_dir, omr_engine_remove, omr_lang_status, omr_lang_remove, omr_homr_status, omr_homr_remove, omr_sr_status, omr_sr_remove,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,

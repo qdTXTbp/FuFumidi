@@ -257,6 +257,12 @@ export function installTauriBridge() {
       srStatus: () => call('omr_sr_status'),
       srRemove: () => call('omr_sr_remove'),
     },
+    plugin: {
+      pickFile: () => call('plugin_pick_file'),
+      pickAudio: () => call('plugin_pick_audio'),
+      savePath: (name) => call('plugin_save_path', { name: name || '' }),
+      renderFile: (req) => call('plugin_render_file', { req: req || {} }),
+    },
     plugins: {
       list: () => call('plugins_list'),
       setEnabled: (id, enabled) => call('plugins_set_enabled', { id, enabled }),
