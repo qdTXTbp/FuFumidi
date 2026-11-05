@@ -2,6 +2,7 @@
 import { onMounted, onBeforeUnmount, watch, defineAsyncComponent } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { navHistory, readSession, writeSession, parseDeepLink } from './core/nav_history.js';
+import { mediaUrl } from './core/media';
 import Icon from './components/Icon.vue';
 import SideBar from './components/SideBar.vue';
 import PrimaryRail from './components/PrimaryRail.vue';
@@ -101,12 +102,7 @@ watch(wpEnabled, (on) => {
   if (on) wpTimer = setInterval(wpWatchdog, 500);
 }, { immediate: true });
 onBeforeUnmount(() => clearInterval(wpTimer));
-function wpFileUrl(p) {
-  if (!p) return '';
-  if (/^(https?:|file:|data:)/i.test(p)) return p;
-  const norm = String(p).replace(/\\/g, '/');
-  return 'file:///' + norm.replace(/^([A-Za-z]):/, '$1:');
-}
+function wpFileUrl(p) { return mediaUrl(p); }
 async function refreshWeWallpaper(id) {
   const req = ++weReq;
   if (!id || !bridge || !bridge.wallpaperEngine) { wpWeUrl.value = ''; return; }

@@ -8,6 +8,7 @@
 //   里的动态壁纸（视频）当瀑布流背景。与应用整窗背景（App.vue 的 custom_wallpaper）**互相独立**：
 //   两处各挑各的，谁也不覆盖谁。
 import { reactive, ref } from 'vue';
+import { mediaUrl } from '../core/media';
 import { defineStore } from 'pinia';
 import { t } from '../core/i18n.js';
 import { useAppStore } from './app';
@@ -80,12 +81,7 @@ function decode(src: string): Promise<HTMLImageElement | null> {
 }
 
 /** 动态壁纸：路径 → 可播放 URL。本地路径转 file://，http(s) 原样透传（在线壁纸直接流） */
-function wallFileUrl(p: string) {
-  if (!p) return '';
-  if (/^(https?:|file:|data:)/i.test(p)) return p;
-  const norm = String(p).replace(/\\/g, '/');
-  return 'file:///' + norm.replace(/^([A-Za-z]):/, '$1:');
-}
+function wallFileUrl(p: string) { return mediaUrl(p); }
 function baseName(p: string) {
   return String(p || '').split(/[\\/]/).pop() || '';
 }

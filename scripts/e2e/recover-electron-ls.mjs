@@ -12,5 +12,7 @@ for(let i=0;i<100;i++){try{const list=await (await fetch('http://127.0.0.1:'+por
 if(!target){console.error('no target');child.kill();process.exit(1);}
 const ws=new WebSocket(target.webSocketDebuggerUrl);await new Promise(r=>ws.addEventListener('open',r,{once:true}));
 let id=0;const evalp=(expr)=>new Promise((resolve,reject)=>{const n=++id;const h=e=>{const m=JSON.parse(e.data);if(m.id===n){ws.removeEventListener('message',h);resolve(m.result&&m.result.result&&m.result.result.value);}};ws.addEventListener('message',h);ws.send(JSON.stringify({id:n,method:'Runtime.evaluate',params:{expression:expr,returnByValue:true,awaitPromise:true}}));setTimeout(()=>reject(new Error('timeout')),10000);});
-const raw=await evalp("localStorage.getItem('fufumidi_playlists_v1')");const active=await evalp("localStorage.getItem('fufumidi_active_playlist')");fs.writeFileSync('E:/Midi/_attic/electron-playlists.json',JSON.stringify({raw,active},null,2));console.log('written', raw ? JSON.parse(raw).length : 0, active);
+const allKeys=await evalp("JSON.stringify(Object.fromEntries(Object.keys(localStorage).filter(k=>k.startsWith('fufumidi_')).map(k=>[k,localStorage.getItem(k)])))");
+const raw=await evalp("localStorage.getItem('fufumidi_playlists_v1')");const active=await evalp("localStorage.getItem('fufumidi_active_playlist')");fs.writeFileSync('E:/Midi/_attic/electron-playlists.json',JSON.stringify({raw,active},null,2));
+fs.writeFileSync('E:/Midi/_attic/electron-seed.json',allKeys||'{}');console.log('written', raw ? JSON.parse(raw).length : 0, active);
 ws.close();child.kill();

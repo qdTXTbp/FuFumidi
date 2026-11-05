@@ -2251,6 +2251,46 @@ fn we_read_file(rel: &str) -> Option<(Vec<u8>, &'static str)> {
     Some((data, mime))
 }
 
+fn media_mime(p: &Path) -> &'static str {
+    match p.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase().as_str() {
+        "mp4" => "video/mp4", "webm" => "video/webm", "mov" => "video/quicktime", "mkv" => "video/x-matroska",
+        "mp3" => "audio/mpeg", "wav" => "audio/wav", "flac" => "audio/flac", "m4a" => "audio/mp4", "ogg" => "audio/ogg",
+        "png" => "image/png", "jpg"|"jpeg" => "image/jpeg", "gif" => "image/gif", "webp" => "image/webp", _ => "application/octet-stream",
+    }
+}
+fn media_start() {
+    use std::io::{Read, Seek, SeekFrom, Write};
+    let listener = match std::net::TcpListener::bind("127.0.0.1:47821") { Ok(l) => l, Err(_) => return };
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut s) = stream else { continue };
+            let mut buf = [0u8; 8192];
+            let n = Read::read(&mut s, &mut buf).unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..n]);
+            let first = req.lines().next().unwrap_or("");
+            let path = first.split_whitespace().nth(1).unwrap_or("");
+            let Some(q) = path.split_once("?path=").map(|x| x.1) else { let _ = Write::write_all(&mut s, b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"); continue; };
+            let q = q.split('&').next().unwrap_or(q);
+            let file = PathBuf::from(String::from_utf8_lossy(&pct_decode(q)).to_string());
+            if !file.is_file() { let _ = Write::write_all(&mut s, b"HTTP/1.1 404 Not Found\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"); continue; }
+            let mime = media_mime(&file);
+            let total = std::fs::metadata(&file).map(|m| m.len()).unwrap_or(0);
+            let range = req.lines().find(|l| l.to_ascii_lowercase().starts_with("range:")).and_then(|l| l.split('=').nth(1)).and_then(|r| r.split('-').next()).and_then(|x| x.trim().parse::<u64>().ok());
+            let start = range.unwrap_or(0).min(total.saturating_sub(1));
+            let mut f = match std::fs::File::open(&file) { Ok(f) => f, Err(_) => continue };
+            if f.seek(SeekFrom::Start(start)).is_err() { continue; }
+            let mut data = Vec::new(); let _ = f.take(total - start).read_to_end(&mut data);
+            let head = if range.is_some() {
+                format!("HTTP/1.1 206 Partial Content\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nContent-Range: bytes {start}-{}/{total}\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n", data.len(), total - 1)
+            } else {
+                format!("HTTP/1.1 200 OK\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n", total)
+            };
+            let _ = Write::write_all(&mut s, head.as_bytes());
+            let _ = Write::write_all(&mut s, &data);
+        }
+    });
+}
+
 fn data_root_overridden() -> bool {
     std::env::var("FUFUMIDI_DATA_ROOT").map(|p| !p.trim().is_empty()).unwrap_or(false)
 }
@@ -5858,6 +5898,7 @@ fn main() {
         ])
         .setup(move |app| {
             if let Some(listener) = listener { start_single_instance_listener(listener, app.handle().clone()); }
+            media_start();
             match tauri::WebviewWindowBuilder::new(app, "splash", tauri::WebviewUrl::App("splash.html".into()))
                 .title("FuFumidi").inner_size(640.0, 280.0).resizable(false).decorations(false)
                 .visible(true).focused(true).always_on_top(true).skip_taskbar(true).center().build()
