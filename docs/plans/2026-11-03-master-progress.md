@@ -602,3 +602,5 @@
 - **GitHub 更新检查**：update_check/list/notes/launch_updater；CLI 实测 latest=6.5.0-beta.1；launch 只打开发布页；未签名/不自动装；安装版 05b19f82/17,064,448。
 
 - **update 代码 clippy**：trim_start_matches(['v','V'])；clippy -D warnings 通过；cargo121。
+
+- **最终 synced release**：clippy 后 2m26/0 warning；engine 同步并复制安装；17,064,960 / 03A8BEDF…58E7；更新检查 latest 6.5.0-beta.1；full E2E 41/41。

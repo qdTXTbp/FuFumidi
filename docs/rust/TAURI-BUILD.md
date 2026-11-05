@@ -270,3 +270,10 @@ Tauri 默认从 GitHub 下载 `nsis-3.13.zip`，本机直连超时。已把工�
 ### update 代码 clippy 修复
 
 - tag 去前缀改为 trim_start_matches(['v','V'])，clippy -D warnings 通过。
+
+## 37. 2026-11-05 最终 synced release
+
+- clippy 修复后重新 release：2m26s、0 warning；同步 engine 并复制到安装目录；
+- 安装版 17,064,960 bytes，SHA-256 `03A8BEDF7F10B2406235D0659133A8F4E9EB978FDBE5F79AEBB6ECF3D4FA58E7`；
+- 安装目录 --self-check：dataDir=E:/Midi/FuFumidi/FuFumidiData；--update-check：latest=6.5.0-beta.1；
+- full E2E 41/41；cargo 121/121；clippy 0；splash 已由用户确认“暂时通过”。

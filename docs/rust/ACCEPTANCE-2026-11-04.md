@@ -123,8 +123,8 @@ cargo build --release --offline
 ## 9. Release 产物指纹
 
 - 文件：`poc/tauri-poc/target/release/fufumidi-shell.exe`
-- 大小：**17,064,448 bytes**
-- SHA-256：`05b19f821b8cf6050ce9bcae53e4176bbe3ab7dcd511d72057506cda31752a06`
+- 大小：**17,064,960 bytes**
+- SHA-256：`03A8BEDF7F10B2406235D0659133A8F4E9EB978FDBE5F79AEBB6ECF3D4FA58E7`
 - Authenticode：**NotSigned**（未签名；符合当前外部前置未采购的状态）
 
 ## 10. 转录/分轨恢复（2026-11-04 夜间）
