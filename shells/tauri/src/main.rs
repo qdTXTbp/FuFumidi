@@ -2045,6 +2045,80 @@ fn model_cancel(_id: Option<String>) -> serde_json::Value { serde_json::json!({ 
 #[tauri::command]
 fn model_pause(_id: Option<String>) -> serde_json::Value { serde_json::json!({ "ok": false, "error": "直链下载不支持暂停；重新下载会从 .part 断点续传" }) }
 
+fn diffsinger_catalog() -> serde_json::Value {
+    let raw = include_str!("../../../renderer/dist/diffsinger-ms-catalog.json");
+    let mut v: serde_json::Value = serde_json::from_str(raw).unwrap_or_else(|_| serde_json::json!({ "ok": false, "error": "catalog JSON 解析失败" }));
+    let root = data_dir().join("diffsinger-voicebanks");
+    if let Some(works) = v.get_mut("works").and_then(|x| x.as_array_mut()) {
+        for w in works {
+            for c in w.get_mut("categories").and_then(|x| x.as_array_mut()).into_iter().flatten() {
+                for m in c.get_mut("models").and_then(|x| x.as_array_mut()).into_iter().flatten() {
+                    let name = m.get("name").and_then(|x| x.as_str()).unwrap_or("");
+                    let installed = root.join(name).is_dir();
+                    if let Some(o) = m.as_object_mut() { o.insert("installed".into(), serde_json::Value::Bool(installed)); }
+                }
+            }
+        }
+    }
+    v
+}
+
+#[tauri::command]
+fn diffsinger_ms_catalog() -> serde_json::Value { diffsinger_catalog() }
+
+fn diffsinger_find_cfg(dir: &Path, depth: u8) -> Option<PathBuf> {
+    if depth == 0 { return None; }
+    for e in std::fs::read_dir(dir).ok()?.flatten() {
+        let p = e.path();
+        if p.is_file() && p.file_name().and_then(|n| n.to_str()) == Some("dsconfig.yaml") { return Some(dir.to_path_buf()); }
+        if p.is_dir() { if let Some(x) = diffsinger_find_cfg(&p, depth - 1) { return Some(x); } }
+    }
+    None
+}
+
+#[tauri::command]
+async fn diffsinger_ms_download(req: serde_json::Value) -> serde_json::Value {
+    let name = req.get("name").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let path = req.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    if name.is_empty() || path.is_empty() { return oto_err("缺少声库名称/路径"); }
+    let cat = diffsinger_catalog();
+    let rec = cat.get("works").and_then(|w| w.as_array()).into_iter().flatten()
+        .flat_map(|w| w.get("categories").and_then(|c| c.as_array()).into_iter().flatten())
+        .flat_map(|c| c.get("models").and_then(|m| m.as_array()).into_iter().flatten())
+        .find(|m| m.get("path").and_then(|p| p.as_str()) == Some(path.as_str())).cloned();
+    let Some(rec) = rec else { return oto_err("目录中不存在该声库条目") };
+    if rec.get("placeholder").and_then(|v| v.as_bool()) == Some(true) { return oto_err("上游仅为占位文件，暂不可下载") }
+    let Some(url) = rec.get("url").and_then(|v| v.as_str()).map(|s| s.to_string()) else { return oto_err("声库条目缺少下载地址") };
+    let size_hint = rec.get("size").and_then(|v| v.as_u64()).unwrap_or(0);
+    let safe = name.chars().map(|c| if r#""\/:*?"<>|"#.contains(c) { '_' } else { c }).collect::<String>();
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = data_dir();
+        let tmp = root.join("temp").join("diffsinger-dl");
+        if let Err(e) = std::fs::create_dir_all(&tmp) { return oto_err(&e.to_string()); }
+        let zip = tmp.join(format!("ms-{}.zip", safe));
+        let out = match Command::new("curl.exe").args(["-L", "--fail", "--retry", "2", "-C", "-", "-o", &zip.display().to_string(), &url]).creation_flags(0x08000000).output() { Ok(o) => o, Err(e) => return oto_err(&e.to_string()) };
+        if !out.status.success() { return serde_json::json!({ "ok": false, "error": format!("下载失败：{}", String::from_utf8_lossy(&out.stderr).chars().take(400).collect::<String>()) }); }
+        let stage = tmp.join(format!("ms-{}-extract", safe));
+        let _ = std::fs::remove_dir_all(&stage);
+        if let Err(e) = std::fs::create_dir_all(&stage) { return oto_err(&e.to_string()); }
+        let out = match Command::new("tar.exe").args(["-xf", &zip.display().to_string(), "-C", &stage.display().to_string()]).creation_flags(0x08000000).output() { Ok(o) => o, Err(e) => return oto_err(&e.to_string()) };
+        if !out.status.success() { return serde_json::json!({ "ok": false, "error": format!("解压失败：{}", String::from_utf8_lossy(&out.stderr).chars().take(400).collect::<String>()) }); }
+        let Some(cfg_dir) = diffsinger_find_cfg(&stage, 4) else { return oto_err("声库包中没有 dsconfig.yaml") };
+        let vb = root.join("diffsinger-voicebanks");
+        let _ = std::fs::create_dir_all(&vb);
+        let mut final_dir = vb.join(&safe);
+        let mut i = 2;
+        while final_dir.exists() { final_dir = vb.join(format!("{safe}_{i}")); i += 1; }
+        if let Err(e) = std::fs::rename(&cfg_dir, &final_dir) { return oto_err(&e.to_string()); }
+        let _ = std::fs::remove_file(&zip);
+        let _ = std::fs::remove_dir_all(&stage);
+        serde_json::json!({ "ok": true, "name": safe, "dir": final_dir.display().to_string(), "sizeHint": size_hint })
+    }).await.map_err(|e| e.to_string()).unwrap_or_else(|e| oto_err(&e))
+}
+
+#[tauri::command]
+fn diffsinger_ms_cancel_download(_name: Option<String>) -> serde_json::Value { serde_json::json!({ "ok": false, "error": "直链下载在独立线程执行，当前不支持中途取消" }) }
+
 fn data_root_overridden() -> bool {
     std::env::var("FUFUMIDI_DATA_ROOT").map(|p| !p.trim().is_empty()).unwrap_or(false)
 }
@@ -5595,7 +5669,7 @@ fn main() {
         .manage(separation_state)
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
-            model_download, model_cancel, model_pause, plugin_pick_file, plugin_pick_audio, plugin_save_path, plugin_render_file, renderer_ready, update_check, update_list, update_notes, launch_updater, load_settings, save_settings, update_sources, update_set_preferred_source, db_kv_get, db_kv_set,
+            diffsinger_ms_catalog, diffsinger_ms_download, diffsinger_ms_cancel_download, model_download, model_cancel, model_pause, plugin_pick_file, plugin_pick_audio, plugin_save_path, plugin_render_file, renderer_ready, update_check, update_list, update_notes, launch_updater, load_settings, save_settings, update_sources, update_set_preferred_source, db_kv_get, db_kv_set,
             tasks_list, tasks_cancel, tasks_clear_finished, db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, cover_singers, cover_pick_audio, cover_pick_dir, cover_open, cover_cancel, cover_run, video_export_begin, video_export_write, video_export_abort, video_export_end, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, wallpaper_set_desktop, gpu_status, gpu_uninstall, gpu_unified_memory_experiment, plugins_list, plugins_rescan, plugins_set_enabled, plugins_installed_list, plugins_platform_info, plugins_catalog, plugins_open_platform, plugins_install_from_platform, plugins_confirm_install, plugins_cancel_install, plugins_open_dir, plugins_open_docs, open_edit_guide, sf_workshop_list, sf_workshop_import, sf_workshop_delete, sf_workshop_open_dir, model_list, omr_engine_status, omr_engine_open_dir, omr_engine_remove, omr_lang_status, omr_lang_remove, omr_homr_status, omr_homr_remove, omr_sr_status, omr_sr_remove,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
