@@ -2174,7 +2174,7 @@ fn wallpaper_engine_view(id: Option<String>) -> serde_json::Value {
     for it in we_inventory_items() {
         if it.get("id").and_then(|v| v.as_str()) == Some(id.as_str()) {
             let id = it.get("id").and_then(|v| v.as_str()).unwrap_or("");
-            return serde_json::json!({ "ok": true, "url": format!("/wallpaper/index.html?id={id}"), "item": it });
+            return serde_json::json!({ "ok": true, "url": format!("/wallpaper/index.html?id={id}&wePort={}", we_http_port()), "item": it });
         }
     }
     oto_err("未找到该 Wallpaper Engine 项目")
@@ -2200,6 +2200,44 @@ fn we_serve(rel: &str) -> tauri::http::Response<Vec<u8>> {
     let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     let mime = match ext.as_str() { "json" => "application/json", "html"|"htm" => "text/html", "js" => "text/javascript", "css" => "text/css", "png" => "image/png", "jpg"|"jpeg" => "image/jpeg", "gif" => "image/gif", "webp" => "image/webp", "svg" => "image/svg+xml", "mp4" => "video/mp4", "webm" => "video/webm", "woff2" => "font/woff2", "woff" => "font/woff", "ttf" => "font/ttf", _ => "application/octet-stream" };
     tauri::http::Response::builder().status(200).header("Content-Type", mime).header("Access-Control-Allow-Origin", "*").header("Cache-Control", "no-cache").body(data).unwrap()
+}
+
+static WE_PORT: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+fn we_http_port() -> u16 {
+    *WE_PORT.get_or_init(|| {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind we http");
+        let port = listener.local_addr().map(|a| a.port()).unwrap_or(0);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut s) = stream else { continue };
+                let mut buf = [0u8; 8192];
+                let n = std::io::Read::read(&mut s, &mut buf).unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]);
+                let path = req.lines().next().and_then(|l| l.split_whitespace().nth(1)).unwrap_or("/");
+                let rel = path.trim_start_matches('/');
+                let (body, mime) = match we_read_file(rel) {
+                    Some((b, m)) => (b, m),
+                    None => (Vec::new(), "text/plain"),
+                };
+                let status = if body.is_empty() { "404 Not Found" } else { "200 OK" };
+                let head = format!("HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n", body.len());
+                let _ = std::io::Write::write_all(&mut s, head.as_bytes());
+                let _ = std::io::Write::write_all(&mut s, &body);
+            }
+        });
+        port
+    })
+}
+fn we_read_file(rel: &str) -> Option<(Vec<u8>, &'static str)> {
+    let root = we_root()?;
+    let decoded = String::from_utf8_lossy(&pct_decode(rel)).replace('\\', "/");
+    if decoded.split('/').any(|s| s == "..") { return None; }
+    let file = root.join(decoded.trim_start_matches('/'));
+    if !file.is_file() { return None; }
+    let data = std::fs::read(&file).ok()?;
+    let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    let mime = match ext.as_str() { "json" => "application/json", "html"|"htm" => "text/html", "js" => "text/javascript", "css" => "text/css", "png" => "image/png", "jpg"|"jpeg" => "image/jpeg", "gif" => "image/gif", "webp" => "image/webp", "svg" => "image/svg+xml", "mp4" => "video/mp4", "webm" => "video/webm", "woff2" => "font/woff2", "woff" => "font/woff", "ttf" => "font/ttf", _ => "application/octet-stream" };
+    Some((data, mime))
 }
 
 fn data_root_overridden() -> bool {

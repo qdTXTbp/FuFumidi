@@ -101,7 +101,7 @@ export const usePlaylistStore = defineStore('playlist', {
         for (const p of this.playlists) dbPlaylistPut(p);
         return false;
       }
-      if (!hasLocal || (this.playlists.length <= 1 && this.playlists[0]?.id === 'default' && !this.playlists[0]?.songIds?.length)) {
+      if (!hasLocal || (this.playlists.length <= 1 && this.playlists[0]?.id === 'default' && db.length > 1)) {
         // localStorage 为空，或只剩一个空默认歌单：从 SQLite 恢复（Electron 迁移/清缓存后的恢复路径）。
         this.playlists = db;
         if (!db.some(p => p.id === this.activePlaylistId)) {
