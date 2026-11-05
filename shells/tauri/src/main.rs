@@ -2119,6 +2119,66 @@ async fn diffsinger_ms_download(req: serde_json::Value) -> serde_json::Value {
 #[tauri::command]
 fn diffsinger_ms_cancel_download(_name: Option<String>) -> serde_json::Value { serde_json::json!({ "ok": false, "error": "直链下载在独立线程执行，当前不支持中途取消" }) }
 
+fn we_dirs() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for root in [r"C:\Program Files (x86)\Steam", r"C:\Program Files\Steam", r"D:\Steam", r"E:\Steam"] {
+        let p = PathBuf::from(root);
+        if p.join("steamapps").is_dir() { out.push(p); }
+    }
+    out
+}
+fn we_file_url(p: &Path) -> String { format!("file:///{}", p.display().to_string().replace('\\', "/").replace(' ', "%20")) }
+fn we_scan_item(dir: &Path) -> Option<serde_json::Value> {
+    let pj = dir.join("project.json");
+    let text = std::fs::read_to_string(&pj).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let title = v.get("title").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let ty = v.get("type").and_then(|x| x.as_str()).unwrap_or("scene").to_string();
+    let preview = v.get("preview").and_then(|x| x.as_str()).unwrap_or("");
+    let pp = if preview.is_empty() { dir.join("preview.jpg") } else { dir.join(preview) };
+    let preview_url = pp.is_file().then(|| we_file_url(&pp));
+    Some(serde_json::json!({ "id": dir.file_name().and_then(|n| n.to_str()).unwrap_or(""), "title": title, "type": ty, "preview": preview_url, "dir": dir.display().to_string(), "file": we_file_url(&pj) }))
+}
+fn we_inventory_items() -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    for root in we_dirs() {
+        let ws = root.join("steamapps").join("workshop").join("content").join("431960");
+        let Ok(rd) = std::fs::read_dir(&ws) else { continue };
+        for e in rd.flatten() { if let Some(v) = we_scan_item(&e.path()) { out.push(v); } }
+    }
+    out.sort_by(|a, b| a.get("title").and_then(|v| v.as_str()).unwrap_or("").cmp(b.get("title").and_then(|v| v.as_str()).unwrap_or("")));
+    out
+}
+#[tauri::command]
+fn wallpaper_engine_detect() -> serde_json::Value {
+    let libs = we_dirs().into_iter().map(|p| p.display().to_string()).collect::<Vec<_>>();
+    let install = libs.first().cloned().unwrap_or_default();
+    serde_json::json!({ "installed": !libs.is_empty(), "installDir": install, "libraries": libs })
+}
+#[tauri::command]
+fn wallpaper_engine_inventory(_force: Option<bool>) -> serde_json::Value {
+    let d = wallpaper_engine_detect();
+    let items = we_inventory_items();
+    serde_json::json!({ "ok": true, "installed": d.get("installed"), "items": items, "error": if items.is_empty() { "未发现 Wallpaper Engine 项目（Steam 创意工坊 431960）" } else { "" } })
+}
+#[tauri::command]
+fn wallpaper_engine_open_folder(_id: Option<String>) -> serde_json::Value {
+    let Some(root) = we_dirs().into_iter().next() else { return oto_err("未检测到 Wallpaper Engine") };
+    let ws = root.join("steamapps").join("workshop").join("content").join("431960");
+    let dir = if ws.is_dir() { ws } else { root };
+    match Command::new("explorer.exe").arg(dir.display().to_string()).creation_flags(0x08000000).spawn() { Ok(_) => serde_json::json!({ "ok": true, "dir": dir.display().to_string() }), Err(e) => oto_err(&e.to_string()) }
+}
+#[tauri::command]
+fn wallpaper_engine_view(id: Option<String>) -> serde_json::Value {
+    let id = id.unwrap_or_default();
+    for it in we_inventory_items() {
+        if it.get("id").and_then(|v| v.as_str()) == Some(id.as_str()) {
+            if let Some(u) = it.get("file").and_then(|v| v.as_str()) { return serde_json::json!({ "ok": true, "url": u, "item": it }); }
+        }
+    }
+    oto_err("未找到该 Wallpaper Engine 项目")
+}
+
 fn data_root_overridden() -> bool {
     std::env::var("FUFUMIDI_DATA_ROOT").map(|p| !p.trim().is_empty()).unwrap_or(false)
 }
@@ -5624,6 +5684,10 @@ fn main() {
         return;
     }
     let argv: Vec<String> = std::env::args().collect();
+    if argv.iter().any(|a| a == "--we-check") {
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({ "detect": wallpaper_engine_detect(), "inventory": wallpaper_engine_inventory(None) })).unwrap_or_default());
+        return;
+    }
     if argv.iter().any(|a| a == "--update-check") {
         println!("{}", serde_json::to_string_pretty(&update_check_remote("beta")).unwrap_or_default());
         return;
@@ -5669,7 +5733,7 @@ fn main() {
         .manage(separation_state)
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
-            diffsinger_ms_catalog, diffsinger_ms_download, diffsinger_ms_cancel_download, model_download, model_cancel, model_pause, plugin_pick_file, plugin_pick_audio, plugin_save_path, plugin_render_file, renderer_ready, update_check, update_list, update_notes, launch_updater, load_settings, save_settings, update_sources, update_set_preferred_source, db_kv_get, db_kv_set,
+            wallpaper_engine_detect, wallpaper_engine_inventory, wallpaper_engine_open_folder, wallpaper_engine_view, diffsinger_ms_catalog, diffsinger_ms_download, diffsinger_ms_cancel_download, model_download, model_cancel, model_pause, plugin_pick_file, plugin_pick_audio, plugin_save_path, plugin_render_file, renderer_ready, update_check, update_list, update_notes, launch_updater, load_settings, save_settings, update_sources, update_set_preferred_source, db_kv_get, db_kv_set,
             tasks_list, tasks_cancel, tasks_clear_finished, db_status, db_songs_list, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, cover_singers, cover_pick_audio, cover_pick_dir, cover_open, cover_cancel, cover_run, video_export_begin, video_export_write, video_export_abort, video_export_end, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, wallpaper_set_desktop, gpu_status, gpu_uninstall, gpu_unified_memory_experiment, plugins_list, plugins_rescan, plugins_set_enabled, plugins_installed_list, plugins_platform_info, plugins_catalog, plugins_open_platform, plugins_install_from_platform, plugins_confirm_install, plugins_cancel_install, plugins_open_dir, plugins_open_docs, open_edit_guide, sf_workshop_list, sf_workshop_import, sf_workshop_delete, sf_workshop_open_dir, model_list, omr_engine_status, omr_engine_open_dir, omr_engine_remove, omr_lang_status, omr_lang_remove, omr_homr_status, omr_homr_remove, omr_sr_status, omr_sr_remove,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,

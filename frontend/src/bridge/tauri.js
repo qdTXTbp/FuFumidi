@@ -199,6 +199,12 @@ export function installTauriBridge() {
     setFullScreen: (on) => call('set_full_screen', { on: !!on }),
     openDataRoot: (sub) => call('open_data_root', { sub }),
     cleanTemp: () => call('clean_temp'),
+    wallpaperEngine: {
+      detect: () => call('wallpaper_engine_detect'),
+      inventory: (force) => call('wallpaper_engine_inventory', { force: !!force }),
+      openFolder: () => call('wallpaper_engine_open_folder'),
+      view: (id) => call('wallpaper_engine_view', { id }),
+    },
     diffsingerMsCatalog: () => call('diffsinger_ms_catalog'),
     diffsingerMsDownload: (req) => call('diffsinger_ms_download', { req: req || {} }),
     diffsingerMsCancelDownload: (name) => call('diffsinger_ms_cancel_download', { name }),
