@@ -2275,13 +2275,21 @@ fn media_start() {
             if !file.is_file() { let _ = Write::write_all(&mut s, b"HTTP/1.1 404 Not Found\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"); continue; }
             let mime = media_mime(&file);
             let total = std::fs::metadata(&file).map(|m| m.len()).unwrap_or(0);
-            let range = req.lines().find(|l| l.to_ascii_lowercase().starts_with("range:")).and_then(|l| l.split('=').nth(1)).and_then(|r| r.split('-').next()).and_then(|x| x.trim().parse::<u64>().ok());
-            let start = range.unwrap_or(0).min(total.saturating_sub(1));
+            let range_hdr = req.lines().find(|l| l.to_ascii_lowercase().starts_with("range:")).and_then(|l| l.split('=').nth(1));
+            let (start, end) = match range_hdr {
+                Some(r) => {
+                    let mut it = r.split('-');
+                    let s = it.next().and_then(|x| x.trim().parse::<u64>().ok()).unwrap_or(0).min(total.saturating_sub(1));
+                    let e = it.next().and_then(|x| x.trim().parse::<u64>().ok()).unwrap_or(total.saturating_sub(1)).min(total.saturating_sub(1));
+                    (s, e.max(s))
+                }
+                None => (0, total.saturating_sub(1)),
+            };
             let mut f = match std::fs::File::open(&file) { Ok(f) => f, Err(_) => continue };
             if f.seek(SeekFrom::Start(start)).is_err() { continue; }
-            let mut data = Vec::new(); let _ = f.take(total - start).read_to_end(&mut data);
-            let head = if range.is_some() {
-                format!("HTTP/1.1 206 Partial Content\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nContent-Range: bytes {start}-{}/{total}\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n", data.len(), total - 1)
+            let mut data = Vec::new(); let _ = f.take(end - start + 1).read_to_end(&mut data);
+            let head = if range_hdr.is_some() {
+                format!("HTTP/1.1 206 Partial Content\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nContent-Range: bytes {start}-{end}/{total}\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n", data.len())
             } else {
                 format!("HTTP/1.1 200 OK\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n", total)
             };
