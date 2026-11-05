@@ -17,6 +17,7 @@ rusqlite = { version = "0.40.2", features = ["bundled"] }
 fufumidi-core = { version = "0.3.0", path = "../../crates/fufumidi-core" }
 zip = "4.2.0"
 sha2 = "0.10.9"
+sha1 = "0.10.7"
 
 [profile.release]
 codegen-units = 1

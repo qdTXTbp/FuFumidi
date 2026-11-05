@@ -594,7 +594,7 @@ function selectSamePitch() {
 /* 复制粘贴克隆 */
 let clipNotes = null;
 function copySelected() {
-  clipNotes = [...selection].map(n => ({ start: n.start, end: n.end, midi: n.midi, vel: n.vel }));
+  clipNotes = [...selection].map(n => ({ start: n.start, end: n.end, midi: n.midi, vel: n.vel, muted: !!n.muted }));
   return clipNotes.length;
 }
 function pasteAt(tick) {

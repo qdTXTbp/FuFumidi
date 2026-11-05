@@ -2285,9 +2285,10 @@ function miniClick(e) {
 
 /* ---------------- 快捷键 ---------------- */
 function onKey(e) {
-  if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
   const mod = e.ctrlKey || e.metaKey;
   const key = (e.key || '').toLowerCase();
+  const editable = !!(e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName));
+  if (editable && !(mod && (key === 's' || (e.shiftKey && key === 'p')))) return;
   if (mod && key === 'z') { e.preventDefault(); if (e.shiftKey) redo(); else undo(); return; }
   if (mod && key === 'y') { e.preventDefault(); redo(); return; }
   if (mod && e.key === 'a') { e.preventDefault(); selectAll(); return; }

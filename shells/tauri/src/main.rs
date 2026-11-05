@@ -2127,6 +2127,14 @@ fn we_dirs() -> Vec<PathBuf> {
     }
     out
 }
+fn we_legacy_id(dir: &Path) -> String {
+    let mut h = sha1::Sha1::new();
+    sha1::Digest::update(&mut h, dir.to_string_lossy().to_lowercase().as_bytes());
+    let d = sha1::Digest::finalize(h);
+    let mut out = String::new();
+    for b in d { out.push_str(&format!("{b:02x}")); }
+    out.chars().take(16).collect()
+}
 fn we_file_url(p: &Path) -> String { format!("file:///{}", p.display().to_string().replace('\\', "/").replace(' ', "%20")) }
 fn we_scan_item(dir: &Path) -> Option<serde_json::Value> {
     let pj = dir.join("project.json");
@@ -2137,7 +2145,7 @@ fn we_scan_item(dir: &Path) -> Option<serde_json::Value> {
     let preview = v.get("preview").and_then(|x| x.as_str()).unwrap_or("");
     let pp = if preview.is_empty() { dir.join("preview.jpg") } else { dir.join(preview) };
     let preview_url = pp.is_file().then(|| we_file_url(&pp));
-    Some(serde_json::json!({ "id": dir.file_name().and_then(|n| n.to_str()).unwrap_or(""), "title": title, "type": ty, "preview": preview_url, "dir": dir.display().to_string(), "file": we_file_url(&pj) }))
+    Some(serde_json::json!({ "id": dir.file_name().and_then(|n| n.to_str()).unwrap_or(""), "legacyId": we_legacy_id(dir), "title": title, "type": ty, "preview": preview_url, "dir": dir.display().to_string(), "file": we_file_url(&pj) }))
 }
 fn we_inventory_items() -> Vec<serde_json::Value> {
     let mut out = Vec::new();
@@ -2172,7 +2180,7 @@ fn wallpaper_engine_open_folder(_id: Option<String>) -> serde_json::Value {
 fn wallpaper_engine_view(id: Option<String>) -> serde_json::Value {
     let id = id.unwrap_or_default();
     for it in we_inventory_items() {
-        if it.get("id").and_then(|v| v.as_str()) == Some(id.as_str()) {
+        if it.get("id").and_then(|v| v.as_str()) == Some(id.as_str()) || it.get("legacyId").and_then(|v| v.as_str()) == Some(id.as_str()) {
             let id = it.get("id").and_then(|v| v.as_str()).unwrap_or("");
             return serde_json::json!({ "ok": true, "url": format!("/wallpaper/index.html?id={id}&wePort={}", we_http_port()), "item": it });
         }
@@ -2229,11 +2237,14 @@ fn we_http_port() -> u16 {
     })
 }
 fn we_read_file(rel: &str) -> Option<(Vec<u8>, &'static str)> {
-    let root = we_root()?;
     let decoded = String::from_utf8_lossy(&pct_decode(rel)).replace('\\', "/");
     if decoded.split('/').any(|s| s == "..") { return None; }
-    let file = root.join(decoded.trim_start_matches('/'));
-    if !file.is_file() { return None; }
+    let mut found = None;
+    for root in we_dirs() {
+        let file = root.join("steamapps").join("workshop").join("content").join("431960").join(decoded.trim_start_matches('/'));
+        if file.is_file() { found = Some(file); break; }
+    }
+    let file = found?;
     let data = std::fs::read(&file).ok()?;
     let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     let mime = match ext.as_str() { "json" => "application/json", "html"|"htm" => "text/html", "js" => "text/javascript", "css" => "text/css", "png" => "image/png", "jpg"|"jpeg" => "image/jpeg", "gif" => "image/gif", "webp" => "image/webp", "svg" => "image/svg+xml", "mp4" => "video/mp4", "webm" => "video/webm", "woff2" => "font/woff2", "woff" => "font/woff", "ttf" => "font/ttf", _ => "application/octet-stream" };
@@ -2380,6 +2391,7 @@ fn python_selfcheck() -> serde_json::Value {
 #[tauri::command]
 fn renderer_ready(app: AppHandle) -> serde_json::Value {
     let ms = PROCESS_START.get().map(|s| s.elapsed().as_millis()).unwrap_or(0);
+    MAIN_READY.store(true, std::sync::atomic::Ordering::SeqCst);
     if let Some(w) = app.get_webview_window("main") { let _ = w.center(); let _ = w.show(); let _ = w.set_focus(); }
     if let Some(s) = app.get_webview_window("splash") { let _ = s.close(); }
     tauri_log(&format!("renderer-ready elapsedMs={ms}"));
@@ -5709,6 +5721,7 @@ fn engine_self_check() -> serde_json::Value {
     }
 }
 static PROCESS_START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+static MAIN_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// 无窗口排障日志：Tauri 启动/退出/panic 追加到数据根 logs/tauri-start.log。
 fn tauri_log(msg: &str) {
@@ -5838,6 +5851,7 @@ fn main() {
                 // 主窗先移到屏幕外加载（不能 hidden，否则 WebView2 会停渲染），
                 // 原生 splash 留在屏幕中央；renderer-ready 后再移回中央。
                 std::thread::sleep(std::time::Duration::from_millis(250));
+                if MAIN_READY.load(std::sync::atomic::Ordering::SeqCst) { return; }
                 if let Some(w) = h.get_webview_window("main") {
                     let _ = w.set_position(tauri::PhysicalPosition::new(-10000, -10000));
                     let _ = w.show();
@@ -5850,6 +5864,7 @@ fn main() {
             let h2 = app.handle().clone();
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_secs(20));
+                if MAIN_READY.load(std::sync::atomic::Ordering::SeqCst) { return; }
                 if let Some(w) = h2.get_webview_window("main") { let _ = w.center(); let _ = w.show(); }
                 if let Some(s) = h2.get_webview_window("splash") { let _ = s.close(); }
             });

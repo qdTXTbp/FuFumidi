@@ -746,7 +746,7 @@ onMounted(() => {
   // settings 尽早加载（同步 active_soundfont 引用）：restoreSongs→selectSong→ensureAudio
   // 会读该引用选择音色库，曾因晚于音频初始化导致重启后回退内置音色（另有 localStorage 兜底）
   loadWallpaper();
-  Promise.resolve(restoreSongs()).finally(() => {
+  Promise.resolve(playlistStore.hydrateFromDb()).then(() => restoreSongs()).finally(() => {
       // 渲染层把曲库/主题/会话恢复完后再通知主进程关闭 splash；
       // splash 的时长由此与真实加载时间挂钩，而不是固定秒数。
       try {
@@ -760,7 +760,6 @@ onMounted(() => {
     try { window.__fufumidiSplashDone && window.__fufumidiSplashDone(); } catch (e) {}
   });
   setTimeout(restoreSessionView, 350);   // 等首屏路由/曲库恢复稳定后再套用会话
-  playlistStore.hydrateFromDb();
   initGlobal();
   if (bridge && bridge.onGpuProgress) offGpuProg = bridge.onGpuProgress(onGpuProgressGlobal);
   // 模型下载进度（顶部通知条）
