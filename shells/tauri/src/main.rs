@@ -5873,6 +5873,7 @@ fn main() {
                     let _ = w.show();
                 }
                 for _ in 0..8 {
+                    if MAIN_READY.load(std::sync::atomic::Ordering::SeqCst) { break; }
                     std::thread::sleep(std::time::Duration::from_millis(250));
                     if let Some(s) = h.get_webview_window("splash") { let _ = s.show(); let _ = s.set_always_on_top(true); let _ = s.set_focus(); }
                 }
