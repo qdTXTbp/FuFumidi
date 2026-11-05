@@ -72,7 +72,7 @@ pub fn run(req: &serde_json::Value, app: Option<&AppHandle>) -> Option<serde_jso
     let mut cmd = Command::new(&py);
     cmd.current_dir(&eng).args(["music2midi.py"]).args(&args).stdout(Stdio::piped()).stderr(Stdio::piped()).creation_flags(0x08000000);
     apply_engine_env(&mut cmd);
-    let mut child = cmd.spawn().ok()?; remember(&child);
+    let child = cmd.spawn().ok()?; remember(&child);
     let out = child.wait_with_output().ok(); forget();
     let out = out?;
     if !out.status.success() { return None; }
