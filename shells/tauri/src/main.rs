@@ -2173,10 +2173,33 @@ fn wallpaper_engine_view(id: Option<String>) -> serde_json::Value {
     let id = id.unwrap_or_default();
     for it in we_inventory_items() {
         if it.get("id").and_then(|v| v.as_str()) == Some(id.as_str()) {
-            if let Some(u) = it.get("file").and_then(|v| v.as_str()) { return serde_json::json!({ "ok": true, "url": u, "item": it }); }
+            let id = it.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            return serde_json::json!({ "ok": true, "url": format!("/wallpaper/index.html?id={id}"), "item": it });
         }
     }
     oto_err("未找到该 Wallpaper Engine 项目")
+}
+
+fn we_root() -> Option<PathBuf> { we_dirs().into_iter().next().map(|r| r.join("steamapps").join("workshop").join("content").join("431960")) }
+fn pct_decode(s: &str) -> Vec<u8> {
+    let b = s.as_bytes(); let mut out = Vec::new(); let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() { if let Ok(v) = u8::from_str_radix(&s[i+1..i+3], 16) { out.push(v); i += 3; continue; } }
+        out.push(b[i]); i += 1;
+    }
+    out
+}
+fn we_serve(rel: &str) -> tauri::http::Response<Vec<u8>> {
+    let bad = |code: u16| tauri::http::Response::builder().status(code).header("Access-Control-Allow-Origin", "*").body(Vec::new()).unwrap();
+    let Some(root) = we_root() else { return bad(404) };
+    let decoded = String::from_utf8_lossy(&pct_decode(rel)).replace('\\', "/");
+    if decoded.split('/').any(|s| s == "..") { return bad(403); }
+    let file = root.join(decoded.trim_start_matches('/'));
+    if !file.is_file() { return bad(404); }
+    let Ok(data) = std::fs::read(&file) else { return bad(500) };
+    let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    let mime = match ext.as_str() { "json" => "application/json", "html"|"htm" => "text/html", "js" => "text/javascript", "css" => "text/css", "png" => "image/png", "jpg"|"jpeg" => "image/jpeg", "gif" => "image/gif", "webp" => "image/webp", "svg" => "image/svg+xml", "mp4" => "video/mp4", "webm" => "video/webm", "woff2" => "font/woff2", "woff" => "font/woff", "ttf" => "font/ttf", _ => "application/octet-stream" };
+    tauri::http::Response::builder().status(200).header("Content-Type", mime).header("Access-Control-Allow-Origin", "*").header("Cache-Control", "no-cache").body(data).unwrap()
 }
 
 fn data_root_overridden() -> bool {
@@ -5684,6 +5707,15 @@ fn main() {
         return;
     }
     let argv: Vec<String> = std::env::args().collect();
+    if argv.iter().any(|a| a == "--ds-check") {
+        let c = diffsinger_catalog();
+        let stats = c.get("stats").cloned().unwrap_or(serde_json::Value::Null);
+        let works = c.get("works").and_then(|w| w.as_array()).map(|a| a.len()).unwrap_or(0);
+        let mut installed = 0;
+        if let Some(ws) = c.get("works").and_then(|w| w.as_array()) { for w in ws { for cat in w.get("categories").and_then(|x| x.as_array()).into_iter().flatten() { for m in cat.get("models").and_then(|x| x.as_array()).into_iter().flatten() { if m.get("installed").and_then(|v| v.as_bool()) == Some(true) { installed += 1; } } } } }
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({ "works": works, "stats": stats, "installed": installed })).unwrap_or_default());
+        return;
+    }
     if argv.iter().any(|a| a == "--we-check") {
         println!("{}", serde_json::to_string_pretty(&serde_json::json!({ "detect": wallpaper_engine_detect(), "inventory": wallpaper_engine_inventory(None) })).unwrap_or_default());
         return;
@@ -5724,6 +5756,10 @@ fn main() {
     let separation_state = SeparationState(Arc::new(Mutex::new(None)));
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .register_uri_scheme_protocol("we", |_app, request| {
+            let path = request.uri().path().trim_start_matches('/');
+            we_serve(path)
+        })
         .manage(state)
         .manage(pending_open)
         .manage(zoom_state)
