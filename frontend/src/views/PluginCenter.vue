@@ -93,6 +93,7 @@ async function doInstall() {
     await load();
     await bridge.plugins.setEnabled?.(r.id, true);
     await bridge.plugins.rescan?.();
+    await reloadPluginHost();
   } catch (e: any) { toast(String((e && e.message) || e), 'bad'); }
   finally { busySlug.value = ''; }
 }
@@ -104,15 +105,40 @@ function cancel() {
 }
 
 /* ---------------- 已安装（原「设置 → 插件」页） ---------------- */
+/** 日志区统一出口：Tauri 的 plugins:log 事件与 JS 宿主的 fufumidi:plugin-log 都写到这里 */
+function appendPluginLog(line: string) {
+  pluginLog.value = (pluginLog.value ? pluginLog.value + '\n' : '') + line;
+  if (pluginLog.value.length > 8000) pluginLog.value = pluginLog.value.slice(-8000);
+}
+/** 窗口级插件日志（JS 宿主在 Web Worker 里跑插件，无法走 Tauri 事件通道） */
+function onHostLog(e: Event) {
+  const detail: any = (e as CustomEvent).detail || {};
+  if (detail.line != null) appendPluginLog(String(detail.line));
+}
+/**
+ * 让 JS 插件宿主重新读取插件列表并启停 Worker。
+ * Rust 的 plugins_rescan / plugins_set_enabled 只维护清单与 enabled 状态，
+ * 真正执行 CommonJS 入口的是前端宿主 —— 所以每次清单变化都要 reload 一次。
+ */
+async function reloadPluginHost() {
+  const h = (window as any).__fufumidi_plugin_host;
+  if (!h || typeof h.reload !== 'function') return;
+  try { await h.reload(); } catch (e) { /* 插件宿主异常只影响插件，不让插件中心报错 */ }
+}
 async function loadLocal() {
   if (!bridge || !bridge.plugins) return;
   try { localPlugins.value = await bridge.plugins.list() || []; } catch (e) { localPlugins.value = []; }
 }
 async function togglePlugin(p: any) {
-  try { await bridge.plugins.setEnabled(p.id, p.enabled); } catch (e) { p.enabled = !p.enabled; }
+  try {
+    const r = await bridge.plugins.setEnabled(p.id, p.enabled);
+    if (r && r.ok === false) throw new Error(r.error || '切换失败');
+    await reloadPluginHost();
+  } catch (e) { p.enabled = !p.enabled; }
 }
 async function rescanPlugins() {
   try { localPlugins.value = await bridge.plugins.rescan() || []; } catch (e) { /* 忽略 */ }
+  await reloadPluginHost();
   toast(t('已重新扫描插件目录'), 'ok');
 }
 function openPluginDir() { if (bridge.plugins.openDir) bridge.plugins.openDir(); }
@@ -142,12 +168,16 @@ onMounted(async () => {
   if (bridge.plugins.onLog) {
     offLog = bridge.plugins.onLog((p: any) => {
       const line = p && p.line != null ? String(p.line) : JSON.stringify(p || '');
-      pluginLog.value = (pluginLog.value ? pluginLog.value + '\n' : '') + line;
-      if (pluginLog.value.length > 8000) pluginLog.value = pluginLog.value.slice(-8000);
+      appendPluginLog(line);
     });
   }
+  // JS 插件宿主（Web Worker）的日志：window 级 CustomEvent，见 src/plugins/host.ts
+  try { window.addEventListener('fufumidi:plugin-log', onHostLog); } catch (e) {}
 });
-onBeforeUnmount(() => { if (offLog) { try { offLog(); } catch (e) {} offLog = null; } });
+onBeforeUnmount(() => {
+  if (offLog) { try { offLog(); } catch (e) {} offLog = null; }
+  try { window.removeEventListener('fufumidi:plugin-log', onHostLog); } catch (e) {}
+});
 </script>
 
 <template>

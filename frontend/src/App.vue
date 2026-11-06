@@ -37,6 +37,7 @@ import { getAppVersion, cmpVersion, getUpdateChannel } from './core/version.js';
 import { getBuiltinChangeLogs, fetchRemoteChangeLog } from './core/changelog.js';
 import { applyTheme, loadTheme } from './core/theme.js';
 import { viewFromPath } from './router';
+import { ensurePluginHost } from './plugins/host';
 
 const app = useAppStore();
 const state = app;
@@ -229,6 +230,58 @@ const toggleLoop = () => app.toggleLoop();
 const toggleMetro = () => app.toggleMetro();
 
 const bridge = window.fuBridge;
+
+/* ---------------- 第三方插件宿主（Tauri 用 Web Worker 跑 CommonJS 入口） ----------------
+   App 只做两件事：
+     1) 启动时 ensurePluginHost()：激活已启用插件、注入它们的 renderer 脚本；
+     2) 把插件 ctx.ui.notify 的 __toast 事件接到应用统一提示出口（app.toast）。
+   插件日志由 PluginCenter 订阅 window 的 fufumidi:plugin-log 显示。
+   插件平台整体不可用（没装插件 / 旧环境）时 ensure 内部只记日志，不影响应用。 */
+function pluginToastKind(type) {
+  const s = String(type || '').toLowerCase();
+  if (s === 'err' || s === 'error') return 'error';
+  if (s === 'warn' || s === 'warning') return 'warn';
+  if (s === 'ok') return 'ok';
+  return 'info';
+}
+/** ctx.app.getSongMeta() 的数据源：与 Electron 主进程同一份轻量元信息 */
+function pluginSongMeta() {
+  try {
+    const cur = app.currentSong;
+    const song = cur && cur.song;
+    if (!song) return null;
+    const tracks = Array.isArray(song.tracks) ? song.tracks : [];
+    return {
+      fileName: String(cur.name || cur.id || ''),
+      trackCount: tracks.length,
+      totalTicks: Number(song.totalTicks) || 0,
+      totalSec: Number(song.totalSec) || Number(app.totalSec) || 0,
+      bpm: Number(app.tempo) || 0,
+    };
+  } catch (e) { return null; }
+}
+function onPluginUiEvent(ev) {
+  const detail = (ev && ev.detail) || {};
+  if (detail.name !== '__toast') return;
+  const payload = detail.payload || {};
+  const text = String(payload.text == null ? '' : payload.text).trim();
+  if (!text) return;
+  try { app.toast(text, pluginToastKind(payload.type)); } catch (e) {}
+}
+let offPluginSongWatch = null;
+function setupPluginHost() {
+  try { window.addEventListener('fufumidi:plugin-ui', onPluginUiEvent); } catch (e) {}
+  // 曲目切换 → 把最新 song meta 推给插件（ctx.app.getSongMeta 不读到启动时的空快照）
+  try {
+    offPluginSongWatch = watch(
+      [() => app.currentId, () => (app.songs || []).length],
+      () => {
+        try { window.__fufumidi_plugin_host?.setSongMeta?.(pluginSongMeta()); } catch (e) {}
+      },
+    );
+  } catch (e) {}
+  try { void ensurePluginHost({ getSongMeta: pluginSongMeta }); } catch (e) {}
+}
 
 /* 字号 / 密度 / 全局缩放：取值域与落点都在 core/display.js（设置面板用的是同一份），
    这里只负责"启动时先按 localStorage 应用一次"（防闪烁）。 */
@@ -757,6 +810,7 @@ onMounted(() => {
   });
   setTimeout(restoreSessionView, 350);   // 等首屏路由/曲库恢复稳定后再套用会话
   initGlobal();
+  setupPluginHost();
   if (bridge && bridge.onGpuProgress) offGpuProg = bridge.onGpuProgress(onGpuProgressGlobal);
   // 模型下载进度（顶部通知条）：订阅在共享 store 里做一次，资源中心也用同一份数据
   dlStore.ensureEvents();
@@ -805,6 +859,8 @@ app.setSkipNotice((from, to) => app.toast(t('已跳过 ') + Math.round(to - from
   window.addEventListener('beforeunload', onBeforeUnload);
 });
 onBeforeUnmount(() => {
+  try { window.removeEventListener('fufumidi:plugin-ui', onPluginUiEvent); } catch (e) {}
+  if (offPluginSongWatch) { try { offPluginSongWatch(); } catch (e) {} offPluginSongWatch = null; }
   stopTickLoop();
   if (offGpuProg) { try { offGpuProg(); } catch (e) {} offGpuProg = null; }
   if (offUpdateProg) { try { offUpdateProg(); } catch (e) {} offUpdateProg = null; }

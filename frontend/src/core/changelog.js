@@ -4,6 +4,13 @@
 import { cmpVersion } from './version.js';
 
 const CHANGELOG = {
+  // 6.5.0-alpha.3：S6 收尾 —— 插件 JS 宿主、DiffSinger 声库/组件、资源下载实测。
+  '6.5.0-alpha.3': [
+    '插件 · Tauri 端补齐 JavaScript 插件宿主：CommonJS 入口、命令注册、事件、设置、引擎调用与界面脚本注入，插件中心安装后即可启用。',
+    '声库 · DiffSinger 组件安装（ONNX Runtime / 声码器）、公开声库下载、ModelScope 声库安装/取消/进度，与 UTAU 声库统一管理。',
+    '资源 · 音色工坊 / UTAU 声库 / GPU 增强包 / OMR 组件的真实下载与安装链路完成无头冒烟。',
+    '修复 · Tauri 命令参数命名（camelCase）导致的双击打开、重命名、工程打开、壁纸导入等调用失效。',
+  ],
   // 6.5.0-alpha.2：Tauri 移植补齐资源中心下载链与资源管理（v6.4.4 全量对齐）。
   '6.5.0-alpha.2': [
     '资源中心 · 基础模型下载规格与 6.4.4 全量对齐：URL / 国内镜像 / 最小体积 / SHA-256 / 分卷大小逐项一致，镜像失败自动回退。',

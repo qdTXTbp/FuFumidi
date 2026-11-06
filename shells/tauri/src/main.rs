@@ -29,6 +29,8 @@ mod worker_pool;
 mod stem_workflow;
 mod model_service;
 mod resource_extras;
+mod plugin_runtime;
+mod diffsinger_service;
 
 fn exe_dir() -> Option<PathBuf> {
     std::env::current_exe().ok()?.parent().map(|p| p.to_path_buf())
@@ -161,6 +163,38 @@ fn model_cancel(state: State<'_, model_service::ModelDlState>, id: Option<String
 
 #[tauri::command]
 fn model_pause(state: State<'_, model_service::ModelDlState>, id: Option<String>) -> serde_json::Value { model_service::pause(&state, id) }
+
+
+
+/* ---------------- DiffSinger 模块（实现见 diffsinger_service） ---------------- */
+#[tauri::command]
+fn diffsinger_status(opts: Option<serde_json::Value>) -> serde_json::Value { diffsinger_service::status(opts.unwrap_or(serde_json::Value::Null)) }
+#[tauri::command]
+fn diffsinger_set_enabled(on: bool) -> serde_json::Value { diffsinger_service::set_enabled(on) }
+#[tauri::command(async)]
+fn diffsinger_install_runtime(app: AppHandle) -> serde_json::Value { diffsinger_service::install_runtime(&app) }
+#[tauri::command]
+fn diffsinger_cancel_runtime_install() -> serde_json::Value { diffsinger_service::cancel_runtime_install() }
+#[tauri::command(async)]
+fn diffsinger_uninstall_runtime(opts: Option<serde_json::Value>) -> serde_json::Value { diffsinger_service::uninstall_runtime(opts.unwrap_or(serde_json::Value::Null)) }
+#[tauri::command]
+fn diffsinger_list_voicebanks() -> serde_json::Value { diffsinger_service::list_voicebanks() }
+#[tauri::command(async)]
+fn diffsinger_import_voicebank_zip(app: AppHandle, direct_path: Option<String>) -> serde_json::Value { diffsinger_service::import_voicebank_zip(&app, direct_path) }
+#[tauri::command]
+fn diffsinger_delete_voicebank(dir: String) -> serde_json::Value { diffsinger_service::delete_voicebank(dir) }
+#[tauri::command]
+fn diffsinger_voicebank_registry() -> serde_json::Value { diffsinger_service::voicebank_registry() }
+#[tauri::command(async)]
+fn diffsinger_download_voicebank(app: AppHandle, id: String) -> serde_json::Value { diffsinger_service::download_voicebank(&app, id) }
+#[tauri::command]
+fn diffsinger_cancel_voicebank_download(id: Option<String>) -> serde_json::Value { diffsinger_service::cancel_voicebank_download(id) }
+
+/* ---------------- 插件 JS 宿主支撑（实现见 plugin_runtime） ---------------- */
+#[tauri::command]
+fn plugins_bundle(id: String) -> serde_json::Value { plugin_runtime::bundle(&id) }
+#[tauri::command(async)]
+fn plugin_engine_run(app: AppHandle, args: Vec<String>, script: Option<String>, timeout_ms: Option<u64>, plugin_dir: Option<String>, plugin_id: Option<String>) -> serde_json::Value { plugin_runtime::engine_run(&app, args, script, timeout_ms, plugin_dir, plugin_id) }
 
 /* ---------------- S6 资源扩展：薄包装（实现见 resource_extras） ---------------- */
 #[tauri::command(async)]
@@ -2022,7 +2056,8 @@ fn diffsinger_catalog() -> serde_json::Value {
 #[tauri::command]
 fn diffsinger_ms_catalog() -> serde_json::Value { diffsinger_catalog() }
 
-fn diffsinger_find_cfg(dir: &Path, depth: u8) -> Option<PathBuf> {
+#[allow(dead_code)]
+pub(crate) fn diffsinger_find_cfg(dir: &Path, depth: u8) -> Option<PathBuf> {
     if depth == 0 { return None; }
     for e in std::fs::read_dir(dir).ok()?.flatten() {
         let p = e.path();
@@ -2033,47 +2068,12 @@ fn diffsinger_find_cfg(dir: &Path, depth: u8) -> Option<PathBuf> {
 }
 
 #[tauri::command]
-async fn diffsinger_ms_download(req: serde_json::Value) -> serde_json::Value {
-    let name = req.get("name").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
-    let path = req.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    if name.is_empty() || path.is_empty() { return oto_err("缺少声库名称/路径"); }
-    let cat = diffsinger_catalog();
-    let rec = cat.get("works").and_then(|w| w.as_array()).into_iter().flatten()
-        .flat_map(|w| w.get("categories").and_then(|c| c.as_array()).into_iter().flatten())
-        .flat_map(|c| c.get("models").and_then(|m| m.as_array()).into_iter().flatten())
-        .find(|m| m.get("path").and_then(|p| p.as_str()) == Some(path.as_str())).cloned();
-    let Some(rec) = rec else { return oto_err("目录中不存在该声库条目") };
-    if rec.get("placeholder").and_then(|v| v.as_bool()) == Some(true) { return oto_err("上游仅为占位文件，暂不可下载") }
-    let Some(url) = rec.get("url").and_then(|v| v.as_str()).map(|s| s.to_string()) else { return oto_err("声库条目缺少下载地址") };
-    let size_hint = rec.get("size").and_then(|v| v.as_u64()).unwrap_or(0);
-    let safe = name.chars().map(|c| if r#""\/:*?"<>|"#.contains(c) { '_' } else { c }).collect::<String>();
-    tauri::async_runtime::spawn_blocking(move || {
-        let root = data_dir();
-        let tmp = root.join("temp").join("diffsinger-dl");
-        if let Err(e) = std::fs::create_dir_all(&tmp) { return oto_err(&e.to_string()); }
-        let zip = tmp.join(format!("ms-{}.zip", safe));
-        let out = match Command::new("curl.exe").args(["-L", "--fail", "--retry", "2", "-C", "-", "-o", &zip.display().to_string(), &url]).creation_flags(0x08000000).output() { Ok(o) => o, Err(e) => return oto_err(&e.to_string()) };
-        if !out.status.success() { return serde_json::json!({ "ok": false, "error": format!("下载失败：{}", String::from_utf8_lossy(&out.stderr).chars().take(400).collect::<String>()) }); }
-        let stage = tmp.join(format!("ms-{}-extract", safe));
-        let _ = std::fs::remove_dir_all(&stage);
-        if let Err(e) = std::fs::create_dir_all(&stage) { return oto_err(&e.to_string()); }
-        let out = match Command::new("tar.exe").args(["-xf", &zip.display().to_string(), "-C", &stage.display().to_string()]).creation_flags(0x08000000).output() { Ok(o) => o, Err(e) => return oto_err(&e.to_string()) };
-        if !out.status.success() { return serde_json::json!({ "ok": false, "error": format!("解压失败：{}", String::from_utf8_lossy(&out.stderr).chars().take(400).collect::<String>()) }); }
-        let Some(cfg_dir) = diffsinger_find_cfg(&stage, 4) else { return oto_err("声库包中没有 dsconfig.yaml") };
-        let vb = root.join("diffsinger-voicebanks");
-        let _ = std::fs::create_dir_all(&vb);
-        let mut final_dir = vb.join(&safe);
-        let mut i = 2;
-        while final_dir.exists() { final_dir = vb.join(format!("{safe}_{i}")); i += 1; }
-        if let Err(e) = std::fs::rename(&cfg_dir, &final_dir) { return oto_err(&e.to_string()); }
-        let _ = std::fs::remove_file(&zip);
-        let _ = std::fs::remove_dir_all(&stage);
-        serde_json::json!({ "ok": true, "name": safe, "dir": final_dir.display().to_string(), "sizeHint": size_hint })
-    }).await.map_err(|e| e.to_string()).unwrap_or_else(|e| oto_err(&e))
+async fn diffsinger_ms_download(app: AppHandle, req: serde_json::Value) -> serde_json::Value {
+    diffsinger_service::ms_download(&app, req)
 }
 
 #[tauri::command]
-fn diffsinger_ms_cancel_download(_name: Option<String>) -> serde_json::Value { serde_json::json!({ "ok": false, "error": "直链下载在独立线程执行，当前不支持中途取消" }) }
+fn diffsinger_ms_cancel_download(name: Option<String>) -> serde_json::Value { diffsinger_service::ms_cancel(name) }
 
 fn we_dirs() -> Vec<PathBuf> {
     let mut out = Vec::new();
@@ -2264,7 +2264,7 @@ fn legacy_dir() -> Option<PathBuf> {
 }
 
 /// 设置文件：显式 env → 旧 Electron 位置的 settings.json（双构建共享）→ 当前数据根。
-fn settings_path() -> PathBuf {
+pub(crate) fn settings_path() -> PathBuf {
     if let Ok(p) = std::env::var("FUFUMIDI_SETTINGS_FILE") {
         if !p.trim().is_empty() { return PathBuf::from(p); }
     }
@@ -2350,7 +2350,7 @@ fn tail(s: &str, n: usize) -> String {
     v[v.len().saturating_sub(n)..].iter().collect()
 }
 
-fn read_json(path: &Path) -> serde_json::Value {
+pub(crate) fn read_json(path: &Path) -> serde_json::Value {
     match std::fs::read_to_string(path) {
         Ok(s) => serde_json::from_str(&s).unwrap_or(serde_json::json!({})),
         Err(_) => serde_json::json!({}),
@@ -3043,7 +3043,7 @@ fn sf_workshop_open_dir() -> serde_json::Value {
 }
 
 
-fn plugin_dirs(settings: &serde_json::Value) -> Vec<String> {
+pub(crate) fn plugin_dirs(settings: &serde_json::Value) -> Vec<String> {
     let mut dirs: Vec<String> = Vec::new();
     if let Some(a) = settings.get("plugin.dirs").and_then(|v| v.as_array()) { for v in a { if let Some(s) = v.as_str() { if !s.trim().is_empty() { dirs.push(s.to_string()); } } } }
     if let Ok(env) = std::env::var("FUFUMIDI_PLUGIN_DIRS") { for s in env.split(';') { if !s.trim().is_empty() { dirs.push(s.trim().to_string()); } } }
@@ -3051,38 +3051,37 @@ fn plugin_dirs(settings: &serde_json::Value) -> Vec<String> {
     dirs
 }
 
-fn plugins_from_output(stdout: &str, enabled: &[String]) -> Vec<serde_json::Value> {
-    let mut out = Vec::new();
-    for line in stdout.lines().rev() {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(line.trim()) {
-            if let Some(arr) = v.get("plugins").and_then(|x| x.as_array()) {
-                for p in arr {
-                    let mut o = p.clone();
-                    let id = o.get("id").and_then(|x| x.as_str()).unwrap_or("").to_string();
-                    if let Some(m) = o.as_object_mut() { m.insert("enabled".into(), serde_json::json!(enabled.iter().any(|e| e == &id))); }
-                    out.push(o);
-                }
-                break;
-            }
+fn run_plugins_list() -> Vec<serde_json::Value> {
+    // 纯 Rust 扫描：不依赖 Python（纯 Tauri 环境也必须能列出插件）。
+    // 命令列表以 manifest.commands 声明为准；运行期真实注册由前端 JS 宿主负责。
+    let settings = read_json(&settings_path());
+    let enabled: Vec<String> = settings.get("plugins_enabled").and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect()).unwrap_or_default();
+    let mut out: Vec<serde_json::Value> = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+    for root in plugin_dirs(&settings) {
+        let Ok(rd) = std::fs::read_dir(&root) else { continue };
+        for e in rd.flatten() {
+            let dir = e.path();
+            if !dir.is_dir() { continue; }
+            let Ok(text) = std::fs::read_to_string(dir.join("plugin.json")) else { continue };
+            let Ok(m) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
+            let id = m.get("id").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+            if id.is_empty() || id.len() > 128 || seen.contains(&id) { continue; }
+            seen.push(id.clone());
+            let commands = m.get("commands").cloned().unwrap_or_else(|| serde_json::json!([]));
+            out.push(serde_json::json!({
+                "id": id,
+                "name": m.get("name").and_then(|v| v.as_str()).unwrap_or(&id),
+                "version": m.get("version").and_then(|v| v.as_str()).unwrap_or(""),
+                "author": m.get("author").and_then(|v| v.as_str()).unwrap_or(""),
+                "description": m.get("description").and_then(|v| v.as_str()).unwrap_or(""),
+                "enabled": enabled.iter().any(|x| x == &id),
+                "commands": commands,
+            }));
         }
     }
     out
-}
-
-fn run_plugins_list() -> Vec<serde_json::Value> {
-    let settings = read_json(&settings_path());
-    let enabled: Vec<String> = settings.get("plugins_enabled").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect()).unwrap_or_default();
-    let Some(py) = python_path() else { return Vec::new(); };
-    let Some(engine) = engine_dir() else { return Vec::new(); };
-    let script = engine.join("plugin_render.py");
-    if !script.exists() { return Vec::new(); }
-    let mut cmd = Command::new(&py);
-    cmd.arg(&script).arg("list");
-    for d in plugin_dirs(&settings) { cmd.arg("--dir").arg(d); }
-    match cmd.creation_flags(0x08000000).output() {
-        Ok(o) => plugins_from_output(&String::from_utf8_lossy(&o.stdout), &enabled),
-        Err(_) => Vec::new(),
-    }
 }
 
 #[tauri::command]
@@ -5862,7 +5861,7 @@ fn main() {
             host_info, app_version, ping, python_selfcheck, engine_probe,
             wallpaper_engine_detect, wallpaper_engine_inventory, wallpaper_engine_open_folder, wallpaper_engine_view, diffsinger_ms_catalog, diffsinger_ms_download, diffsinger_ms_cancel_download, model_download, model_cancel, model_pause, plugin_pick_file, plugin_pick_audio, plugin_save_path, plugin_render_file, renderer_ready, update_check, update_list, update_notes, launch_updater, load_settings, save_settings, update_sources, update_set_preferred_source, db_kv_get, db_kv_set,
             tasks_list, tasks_cancel, tasks_clear_finished, db_status, db_songs_list, db_song_get, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, cover_singers, cover_pick_audio, cover_pick_dir, cover_open, cover_cancel, cover_run, video_export_begin, video_export_write, video_export_abort, video_export_end, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, wallpaper_set_desktop, gpu_status, gpu_uninstall, gpu_unified_memory_experiment, plugins_list, plugins_rescan, plugins_set_enabled, plugins_installed_list, plugins_platform_info, plugins_catalog, plugins_open_platform, plugins_install_from_platform, plugins_confirm_install, plugins_cancel_install, plugins_open_dir, plugins_open_docs, open_edit_guide, sf_workshop_list, sf_workshop_import, sf_workshop_delete, sf_workshop_open_dir, model_list, omr_engine_status, omr_engine_open_dir, omr_engine_remove, omr_lang_status, omr_lang_remove, omr_homr_status, omr_homr_remove, omr_sr_status, omr_sr_remove,
-            dep_install, sf_workshop_download, sf_workshop_cancel, gpu_list_packages, gpu_package_url, gpu_download_package, gpu_import_local, gpu_install_auto, gpu_cancel_install, utau_voicebank_registry, utau_download_voicebank, utau_cancel_voicebank_download, omr_engine_install, omr_lang_install, omr_homr_install, omr_sr_install, omr_cancel_install, plugins_invoke, update_download, update_open, wallpaper_download, export_score_png_zip, export_score_pdf, transcode_video, check_update,
+            plugins_bundle, plugin_engine_run, diffsinger_status, diffsinger_set_enabled, diffsinger_install_runtime, diffsinger_cancel_runtime_install, diffsinger_uninstall_runtime, diffsinger_list_voicebanks, diffsinger_import_voicebank_zip, diffsinger_delete_voicebank, diffsinger_voicebank_registry, diffsinger_download_voicebank, diffsinger_cancel_voicebank_download, dep_install, sf_workshop_download, sf_workshop_cancel, gpu_list_packages, gpu_package_url, gpu_download_package, gpu_import_local, gpu_install_auto, gpu_cancel_install, utau_voicebank_registry, utau_download_voicebank, utau_cancel_voicebank_download, omr_engine_install, omr_lang_install, omr_homr_install, omr_sr_install, omr_cancel_install, plugins_invoke, update_download, update_open, wallpaper_download, export_score_png_zip, export_score_pdf, transcode_video, check_update,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
@@ -6252,11 +6251,6 @@ mod check_midi_tests {
 
     #[test]
     fn plugins_parse_and_enable() {
-        let fixture = "{\"ok\": true, \"plugins\": [{\"id\": \"a\"}, {\"id\": \"b\"}]}";
-        let list = super::plugins_from_output(fixture, &["a".to_string()]);
-        assert_eq!(list.len(), 2);
-        assert_eq!(list[0]["enabled"], true);
-        assert_eq!(list[1]["enabled"], false);
         let root = tmpdir("plugins-settings");
         let sp = root.join("settings.json");
         std::fs::write(&sp, "{}").unwrap();

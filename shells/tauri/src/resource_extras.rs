@@ -522,7 +522,7 @@ fn dl_download(job: &Arc<Job>, peer: Option<&Peer>, spec: &DlSpec) -> Result<u64
     let part = part_of(spec.dest);
     // 总字节优先问服务器（Content-Length 是事实；注册表里的 size 只是展示用估计值）。
     let mut total = 0u64;
-    for u in spec.urls.iter().take(2) {
+    for u in spec.urls.iter().take(8) {
         if let Some(n) = http_head_total(u) {
             if n > 0 {
                 total = n;
@@ -1555,8 +1555,12 @@ fn gpu_root() -> PathBuf {
     data_dir().join("gpu-enhancements")
 }
 
+fn gpu_dir_at(root: &Path, kind: &str) -> PathBuf {
+    root.join(kind)
+}
+
 fn gpu_dir(kind: &str) -> PathBuf {
-    gpu_root().join(kind)
+    gpu_dir_at(&gpu_root(), kind)
 }
 
 fn current_python_minor() -> String {
@@ -1566,24 +1570,30 @@ fn current_python_minor() -> String {
     }
 }
 
-fn gpu_manifest(kind: &str) -> Option<Value> {
-    let p = gpu_dir(kind).join("manifest.json");
+fn gpu_manifest_at(root: &Path, kind: &str) -> Option<Value> {
+    let p = gpu_dir_at(root, kind).join("manifest.json");
     if !p.is_file() {
         return None;
     }
     serde_json::from_str::<Value>(&std::fs::read_to_string(p).ok()?).ok()
 }
 
-fn gpu_installed_kinds() -> Vec<String> {
+fn gpu_installed_kinds_at(root: &Path) -> Vec<String> {
     GPU_KINDS
         .iter()
-        .filter(|k| gpu_dir(k).join("site-packages").is_dir() && gpu_manifest(k).is_some())
+        .filter(|k| {
+            gpu_dir_at(root, k).join("site-packages").is_dir() && gpu_manifest_at(root, k).is_some()
+        })
         .map(|k| k.to_string())
         .collect()
 }
 
-fn write_gpu_manifest(kind: &str, meta: &Value) -> Result<(), String> {
-    let dir = gpu_dir(kind);
+fn gpu_installed_kinds() -> Vec<String> {
+    gpu_installed_kinds_at(&gpu_root())
+}
+
+fn write_gpu_manifest_at(root: &Path, kind: &str, meta: &Value) -> Result<(), String> {
+    let dir = gpu_dir_at(root, kind);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let mut m = json!({
         "kind": kind,
@@ -1597,12 +1607,16 @@ fn write_gpu_manifest(kind: &str, meta: &Value) -> Result<(), String> {
     write_json_file(&dir.join("manifest.json"), &m)
 }
 
+fn write_gpu_manifest(kind: &str, meta: &Value) -> Result<(), String> {
+    write_gpu_manifest_at(&gpu_root(), kind, meta)
+}
+
 /// 原子安装 site-packages：先复制到临时目录再改名，避免半装状态被引擎加载。
-fn gpu_install_site(kind: &str, src_site: &Path, meta: &Value) -> Result<PathBuf, String> {
+fn gpu_install_site_at(root: &Path, kind: &str, src_site: &Path, meta: &Value) -> Result<PathBuf, String> {
     if !src_site.is_dir() {
         return Err("缺少 site-packages 目录".to_string());
     }
-    let final_dir = gpu_dir(kind);
+    let final_dir = gpu_dir_at(root, kind);
     let tmp_dir = PathBuf::from(format!("{}.tmp-{}", final_dir.display(), std::process::id()));
     remove_path(&tmp_dir);
     let tmp_site = tmp_dir.join("site-packages");
@@ -1625,6 +1639,10 @@ fn gpu_install_site(kind: &str, src_site: &Path, meta: &Value) -> Result<PathBuf
     std::fs::rename(&tmp_dir, &final_dir)
         .map_err(|e| format!("安装到 {} 失败：{e}", final_dir.display()))?;
     Ok(final_dir)
+}
+
+fn gpu_install_site(kind: &str, src_site: &Path, meta: &Value) -> Result<PathBuf, String> {
+    gpu_install_site_at(&gpu_root(), kind, src_site, meta)
 }
 
 fn is_gpu_asset(name: &str) -> bool {
@@ -1858,22 +1876,42 @@ pub fn gpu_package_url(kind: String) -> Value {
         .cloned()
         .unwrap_or_default();
     let needle = format!("gpu-{k}");
-    let hit = assets.iter().find(|a| {
+    let single = assets.iter().find(|a| {
         a.get("name")
             .and_then(|v| v.as_str())
             .map(|n| n.to_ascii_lowercase().contains(&needle) && n.to_ascii_lowercase().ends_with(".zip"))
             .unwrap_or(false)
     });
-    match hit {
-        Some(a) => json!({
+    if let Some(a) = single {
+        return json!({
             "ok": true,
+            "split": false,
             "url": asset_url(a),
             "name": a.get("name").and_then(|v| v.as_str()).unwrap_or(""),
             "size": asset_size(a),
             "kind": k,
-        }),
-        None => json!({ "ok": false, "error": format!("未找到 GPU 增强包资产：fufumidi-gpu-{k}.zip") }),
+        });
     }
+    // 当前 Release 的 cuda / rocm 只有分卷包（fufumidi-gpu-cuda.zip.001 / …partN）：
+    // 没有单文件 zip 时返回分卷信息（files 列表），而不是硬报「未找到」。
+    let parts = split_parts_for(&assets, &k);
+    if !parts.is_empty() {
+        let total: u64 = parts.iter().map(asset_size).sum();
+        return json!({
+            "ok": true,
+            "split": true,
+            "kind": k,
+            "url": asset_url(&parts[0]),
+            "name": format!("fufumidi-gpu-{k}-parts (split)"),
+            "size": total,
+            "files": parts.iter().map(|a| json!({
+                "name": a.get("name").and_then(|v| v.as_str()).unwrap_or(""),
+                "url": asset_url(a),
+                "size": asset_size(a),
+            })).collect::<Vec<_>>(),
+        });
+    }
+    json!({ "ok": false, "error": format!("未找到 GPU 增强包资产：fufumidi-gpu-{k}.zip（也没有分卷包）") })
 }
 
 fn gh_release_tag(url: &str) -> Option<String> {
@@ -2208,7 +2246,7 @@ pub fn gpu_download_package(app: &AppHandle, opts: Value) -> Value {
     })
 }
 
-fn gpu_import_local_inner(req: &Value) -> Result<Value, String> {
+fn gpu_import_local_inner(req: &Value, install_root: &Path, temp_base: &Path) -> Result<Value, String> {
     let paths = gpu_paths_from_req(req);
     if paths.is_empty() {
         return Err("本地文件不存在".to_string());
@@ -2226,7 +2264,7 @@ fn gpu_import_local_inner(req: &Value) -> Result<Value, String> {
     if !gpu_kind_ok(&kind) {
         return Err("无法识别增强包类型，请先选择 CUDA / ROCm / XPU 包或分卷".to_string());
     }
-    let work = data_dir().join("temp").join("fufumidi-gpu-import");
+    let work = temp_base.join("fufumidi-gpu-import");
     remove_path(&work);
     std::fs::create_dir_all(&work).map_err(|e| format!("创建临时目录失败：{e}"))?;
     let (site, split) = gpu_zip_to_site(&paths, &work, None)?;
@@ -2236,7 +2274,7 @@ fn gpu_import_local_inner(req: &Value) -> Result<Value, String> {
         "split": split,
         "requiresPython": "3.12",
     });
-    let final_dir = gpu_install_site(&kind, &site, &meta)?;
+    let final_dir = gpu_install_site_at(install_root, &kind, &site, &meta)?;
     remove_path(&work);
     let cur = current_python_minor();
     Ok(json!({
@@ -2257,7 +2295,7 @@ pub fn gpu_import_local(_app: &AppHandle, req: Value) -> Value {
     let Some(_job) = job_begin("gpu") else {
         return json!({ "ok": false, "error": "GPU 增强包任务正在进行中（下载或安装），请先取消或等待完成" });
     };
-    let r = gpu_import_local_inner(&req);
+    let r = gpu_import_local_inner(&req, &gpu_root(), &data_dir().join("temp"));
     job_end("gpu");
     match r {
         Ok(v) => v,
@@ -2651,11 +2689,14 @@ fn homr_site() -> PathBuf {
 fn homr_exe() -> PathBuf {
     homr_venv().join("Scripts").join("homr.exe")
 }
-fn sr_dir() -> PathBuf {
-    omr_root().join("waifu2x")
+fn sr_dir_at(root: &Path) -> PathBuf {
+    root.join("waifu2x")
 }
-fn sr_exe() -> PathBuf {
-    sr_dir().join("waifu2x-ncnn-vulkan.exe")
+fn sr_dir() -> PathBuf {
+    sr_dir_at(&omr_root())
+}
+fn sr_exe_at(root: &Path) -> PathBuf {
+    sr_dir_at(root).join("waifu2x-ncnn-vulkan.exe")
 }
 
 fn lang_catalog_json() -> Value {
@@ -2746,12 +2787,12 @@ fn homr_status() -> Value {
     })
 }
 
-fn sr_status() -> Value {
-    let exe_bytes = file_len(&sr_exe());
+fn sr_status_at(root: &Path) -> Value {
+    let exe_bytes = file_len(&sr_exe_at(root));
     let mut models: Vec<Value> = Vec::new();
     let mut model_bytes = 0u64;
     for name in SR_MODELS {
-        let dir = sr_dir().join(name);
+        let dir = sr_dir_at(root).join(name);
         let bytes = dir_size(&dir);
         model_bytes += bytes;
         models.push(json!({ "name": name, "installed": bytes > 1024 * 1024, "bytes": bytes }));
@@ -2761,14 +2802,32 @@ fn sr_status() -> Value {
         "ok": true,
         "installed": installed,
         "version": SR_VERSION,
-        "dir": sr_dir().display().to_string(),
-        "exe": sr_exe().display().to_string(),
+        "dir": sr_dir_at(root).display().to_string(),
+        "exe": sr_exe_at(root).display().to_string(),
         "models": models,
         "bytes": exe_bytes + model_bytes,
         "missing": models.iter().filter(|m| m["installed"].as_bool() != Some(true)).count(),
         "license": "MIT（waifu2x-ncnn-vulkan · nihui）",
         "upstream": SR_UPSTREAM,
     })
+}
+
+fn sr_status() -> Value {
+    sr_status_at(&omr_root())
+}
+
+/// 把 waifu2x 的 zip 解包并搬到 sr_root（zip 里多一层 waifu2x-ncnn-vulkan-<版本>-windows/）。
+fn install_sr_from_zip(zip: &Path, sr_root: &Path, stage: &Path, job: Option<&Arc<Job>>) -> Result<(), String> {
+    let _ = std::fs::create_dir_all(sr_root);
+    remove_path(stage);
+    safe_extract_zip(zip, stage, job, false)?;
+    let inner = std::fs::read_dir(stage)
+        .ok()
+        .and_then(|rd| rd.flatten().map(|e| e.path()).find(|p| p.is_dir()));
+    let src = inner.unwrap_or_else(|| stage.to_path_buf());
+    let copied = copy_tree(&src, sr_root);
+    remove_path(stage);
+    copied.map(|_| ())
 }
 
 fn venv_python(venv: &Path) -> PathBuf {
@@ -2849,6 +2908,15 @@ fn lang_urls(code: &str) -> Vec<String> {
     ]
 }
 
+fn omr_msi_urls() -> Vec<String> {
+    vec![
+        format!("https://ghfast.top/{OMR_MSI_URL}"),
+        format!("https://gh-proxy.com/{OMR_MSI_URL}"),
+        format!("https://gh.jasonzeng.dev/{OMR_MSI_URL}"),
+        OMR_MSI_URL.to_string(),
+    ]
+}
+
 fn sr_urls() -> Vec<String> {
     vec![
         format!("https://gh-proxy.com/{SR_UPSTREAM}"),
@@ -2884,12 +2952,7 @@ pub fn omr_engine_install(app: &AppHandle) -> Value {
     let app2 = app.clone();
     run_job(&app2, job, OMR_EVENT, move |app3, job3| {
         let peer = Peer::new(app3, OMR_EVENT, json!({ "phase": "download", "text": "下载识谱引擎…" }));
-        let urls = vec![
-            format!("https://ghfast.top/{OMR_MSI_URL}"),
-            format!("https://gh-proxy.com/{OMR_MSI_URL}"),
-            format!("https://gh.jasonzeng.dev/{OMR_MSI_URL}"),
-            OMR_MSI_URL.to_string(),
-        ];
+        let urls = omr_msi_urls();
         let spec = DlSpec {
             urls: &urls,
             dest: &msi,
@@ -3079,33 +3142,14 @@ pub fn omr_sr_install(app: &AppHandle) -> Value {
             }
         }
         omr_emit(app3, "sr-unzip", 94, "解压超分辨率组件…");
-        remove_path(&tmp_dst);
-        match safe_extract_zip(&tmp_zip, &tmp_dst, Some(job3), false) {
-            Ok(_) => {}
-            Err(e) if e == "__canceled" => {
-                remove_path(&tmp_zip);
-                remove_path(&tmp_dst);
+        if let Err(e) = install_sr_from_zip(&tmp_zip, &sr_dir(), &tmp_dst, Some(job3)) {
+            remove_path(&tmp_zip);
+            if e == "__canceled" {
                 return json!({ "ok": false, "canceled": true, "error": "已取消解压" });
             }
-            Err(e) => {
-                remove_path(&tmp_zip);
-                remove_path(&tmp_dst);
-                return json!({ "ok": false, "error": format!("解压失败：{e}") });
-            }
-        }
-        // zip 里多一层 waifu2x-ncnn-vulkan-<版本>-windows/，把里面内容挪到 sr_dir 根下
-        let inner = std::fs::read_dir(&tmp_dst).ok().and_then(|rd| {
-            rd.flatten()
-                .map(|e| e.path())
-                .find(|p| p.is_dir())
-        });
-        let src = inner.unwrap_or_else(|| tmp_dst.clone());
-        let copy_err = copy_tree(&src, &sr_dir()).err();
-        remove_path(&tmp_zip);
-        remove_path(&tmp_dst);
-        if let Some(e) = copy_err {
             return json!({ "ok": false, "error": format!("安装超分辨率组件失败：{e}") });
         }
+        remove_path(&tmp_zip);
         let st = sr_status();
         if st["installed"].as_bool() != Some(true) {
             return json!({ "ok": false, "error": "解压后没找到 waifu2x-ncnn-vulkan.exe" });
@@ -3955,5 +3999,371 @@ mod tests {
         assert!(list.iter().any(|u| u.contains("cnb.cool")));
         assert!(list.iter().any(|u| u.starts_with("https://ghfast.top/https://github.com/")));
         assert!(list.iter().any(|u| u.starts_with("https://github.com/")));
+    }
+
+    /* ---------------- S6 验证用：可复用的测试辅助 ---------------- */
+
+    fn s6_print(case: &str, started: Instant, v: Value) {
+        let ms = started.elapsed().as_millis() as u64;
+        let mut o = v;
+        if let Some(m) = o.as_object_mut() {
+            m.insert("case".to_string(), json!(case));
+            m.insert("ms".to_string(), json!(ms));
+        }
+        println!("###S6 {}", o);
+    }
+
+    /// 真下载（不经过命令层，避免依赖 AppHandle）：与生产同一份 dl_download。
+    fn s6_dl(urls: &[String], dest: &Path, min: u64, max: u64, expect: u64, exact: bool) -> Result<u64, String> {
+        let job = Job::new("s6-test");
+        let spec = DlSpec {
+            urls,
+            dest,
+            label: "s6-test",
+            min_size: min,
+            max_size: max,
+            expect_total: expect,
+            verify_exact: exact,
+            pct_lo: 0,
+            pct_hi: 99,
+        };
+        dl_download(&job, None, &spec).map_err(|e| match e {
+            JobFail::Canceled => "canceled".to_string(),
+            JobFail::Failed(m) => m,
+        })
+    }
+
+    fn s6_file_url(p: &Path) -> String {
+        format!(
+            "file:///{}",
+            p.display().to_string().replace('\\', "/").replace(' ', "%20")
+        )
+    }
+
+    /// 逐个候选源 HEAD，返回第一个真实字节数。
+    fn s6_head(urls: &[String]) -> Option<(u64, String)> {
+        for u in urls {
+            if let Some(n) = http_head_total(u) {
+                if n > 0 {
+                    return Some((n, u.clone()));
+                }
+            }
+        }
+        None
+    }
+
+    #[cfg(target_os = "windows")]
+    fn s6_range_download(url: &str, bytes: u64, dest: &Path) -> Result<u64, String> {
+        let mut cmd = Command::new("curl.exe");
+        hidden(&mut cmd)
+            .args([
+                "--ssl-no-revoke",
+                "-sS",
+                "-L",
+                "--fail",
+                "-m",
+                "180",
+                "-r",
+                &format!("0-{}", bytes.saturating_sub(1)),
+                "-o",
+            ])
+            .arg(dest)
+            .arg(url);
+        let out = cmd.output().map_err(|e| e.to_string())?;
+        if !out.status.success() {
+            return Err(tail_chars(&String::from_utf8_lossy(&out.stderr), 240));
+        }
+        Ok(file_len(dest))
+    }
+
+    /// 断点续传（无网络）：预置半个 .part，验证 -C - 续传后内容与源一致、.part 被改名。
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn s6_local_resume_keeps_bytes_and_renames_part() {
+        let root = tmp_dir("resume");
+        let src = root.join("src.bin");
+        let data: Vec<u8> = (0..204_800u32).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&src, &data).unwrap();
+        let dest = root.join("dst.bin");
+        std::fs::write(part_of(&dest), &data[..102_400]).unwrap();
+        let n = s6_dl(&[s6_file_url(&src)], &dest, 200_000, u64::MAX, 0, false).expect("resume");
+        assert_eq!(n, 204_800);
+        assert_eq!(std::fs::read(&dest).unwrap(), data, "续传后内容必须与源一致");
+        assert!(!part_of(&dest).exists(), ".part 应在成功后改名");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// GPU 本地导入全流程（无网络）：合成 zip → 安全解压 → site-packages → manifest；
+    /// 另用含 ../ 的恶意 zip 验证拒绝（且不会在目标外落文件）。
+    #[test]
+    fn s6_gpu_import_synthetic_zip_installs_and_rejects_traversal() {
+        use std::io::Write as _;
+        let root = tmp_dir("gpu-import");
+        let zip_path = root.join("fufumidi-gpu-test.zip");
+        {
+            let f = std::fs::File::create(&zip_path).unwrap();
+            let mut zw = zip::ZipWriter::new(f);
+            let opts = zip::write::SimpleFileOptions::default();
+            for (name, body) in [
+                ("site-packages/torch/__init__.py", "print('torch stub')\n"),
+                ("site-packages/torch/_C.cp312-win_amd64.pyd", "stub"),
+                ("site-packages/onnxruntime/__init__.py", "x"),
+            ] {
+                zw.start_file(name, opts).unwrap();
+                zw.write_all(body.as_bytes()).unwrap();
+            }
+            zw.finish().unwrap();
+        }
+        let install_root = root.join("gpu-enhancements");
+        let temp_base = root.join("temp");
+        std::fs::create_dir_all(&temp_base).unwrap();
+        let req = json!({ "paths": [zip_path.display().to_string()], "kind": "cuda" });
+        let v = gpu_import_local_inner(&req, &install_root, &temp_base).expect("import ok");
+        assert_eq!(v["ok"], json!(true));
+        assert_eq!(v["split"], json!(false));
+        assert!(install_root.join("cuda/site-packages/torch/__init__.py").is_file());
+        assert!(install_root.join("cuda/manifest.json").is_file());
+        assert!(gpu_installed_kinds_at(&install_root).contains(&"cuda".to_string()));
+
+        let evil = root.join("evil.zip");
+        {
+            let f = std::fs::File::create(&evil).unwrap();
+            let mut zw = zip::ZipWriter::new(f);
+            let opts = zip::write::SimpleFileOptions::default();
+            zw.start_file("../evil.txt", opts).unwrap();
+            zw.write_all(b"x").unwrap();
+            zw.finish().unwrap();
+        }
+        let req2 = json!({ "paths": [evil.display().to_string()], "kind": "cuda" });
+        let err = gpu_import_local_inner(&req2, &install_root, &temp_base).expect_err("traversal");
+        assert!(err.contains("不安全路径"), "unexpected err: {err}");
+        assert!(!root.join("evil.txt").exists(), "不能在目标目录外落文件");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// SR 安装逻辑（无网络）：合成 waifu2x 结构的 zip → 解包 → 校验 exe/模型/status。
+    /// 与 omr_sr_install 共用 install_sr_from_zip / sr_status_at，因此不依赖外网也能验证安装路径。
+    #[test]
+    fn s6_sr_install_from_synthetic_zip() {
+        use std::io::Write as _;
+        let root = tmp_dir("sr-install");
+        let zip = root.join("waifu2x.zip");
+        {
+            let f = std::fs::File::create(&zip).unwrap();
+            let mut zw = zip::ZipWriter::new(f);
+            let opts = zip::write::SimpleFileOptions::default();
+            for (name, len) in [
+                ("waifu2x-ncnn-vulkan-20250915-windows/waifu2x-ncnn-vulkan.exe", 1_048_577usize),
+                ("waifu2x-ncnn-vulkan-20250915-windows/models-cunet/x.param", 1_048_577usize),
+                ("waifu2x-ncnn-vulkan-20250915-windows/models-cunet/x.bin", 16usize),
+            ] {
+                zw.start_file(name, opts).unwrap();
+                zw.write_all(&vec![0u8; len]).unwrap();
+            }
+            zw.finish().unwrap();
+        }
+        let sr_root = sr_dir_at(&root);
+        let stage = root.join("stage");
+        install_sr_from_zip(&zip, &sr_root, &stage, None).expect("install sr");
+        assert!(sr_exe_at(&root).is_file(), "exe 必须在 sr 根下");
+        assert!(file_len(&sr_exe_at(&root)) > 1024 * 1024);
+        assert!(!stage.exists(), "临时解包目录应清理");
+        let st = sr_status_at(&root);
+        assert_eq!(st["installed"], json!(true), "sr status: {st}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /* ---------------- S6 验证用：真实网络冒烟（全部 #[ignore]） ---------------- */
+
+    /// SF2：从注册表真实下载 florestan-subset.sf2，校验 RIFF 头 + 注册表 min/max。
+    #[cfg(target_os = "windows")]
+    #[test]
+    #[ignore = "需要外网：cargo test --offline -- --ignored s6_sf_real"]
+    fn s6_sf_real() {
+        let (root, t0) = (tmp_dir("s6-sf"), Instant::now());
+        let it = sf_find("florestan").expect("registry entry florestan");
+        let (min, max) = sf_min_max(&it);
+        let urls = sf_candidate_urls(&it);
+        let dest = root.join(sf_file_name(&it));
+        let expect = it.get("size").and_then(|v| v.as_u64()).unwrap_or(0);
+        let n = s6_dl(&urls, &dest, min, max, expect, false).expect("sf download");
+        let head = std::fs::read(&dest).unwrap();
+        let riff = head.len() >= 4 && &head[..4] == b"RIFF";
+        assert!(riff, "SF2 应以 RIFF 开头");
+        assert!((min..=max).contains(&n), "size {n} outside [{min},{max}]");
+        s6_print(
+            "sf",
+            t0,
+            json!({
+                "ok": true, "bytes": n, "urls": urls.len(), "riff": riff, "min": min,
+                "max": if max == u64::MAX { Value::Null } else { json!(max) },
+            }),
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// UTAU：选注册表里最小的 chenzhe（GitHub 归档 ~26MB），真实下载 → 解包 → oto.ini 校验。
+    #[cfg(target_os = "windows")]
+    #[test]
+    #[ignore = "需要外网：cargo test --offline -- --ignored s6_utau_real"]
+    fn s6_utau_real() {
+        let (root, t0) = (tmp_dir("s6-utau"), Instant::now());
+        let entry = vb_entry("chenzhe").expect("voicebank chenzhe");
+        let urls = vb_archive_urls(entry);
+        let zip = root.join("voicebank.zip");
+        let n = s6_dl(&urls, &zip, 200_000, u64::MAX, 0, false).expect("utau archive");
+        let stage = root.join("stage");
+        let job = Job::new("s6-test");
+        let files = extract_voicebank_archive(&zip, &stage, entry.subdir, &job).expect("extract");
+        let oto = find_oto(&stage, 0).expect("oto.ini");
+        let has_char = vb_character_txt(&oto);
+        assert!(files > 0, "解包文件数为 0");
+        assert!(n > 1_000_000, "归档太小：{n}");
+        s6_print("utau", t0, json!({
+            "ok": true, "bytes": n, "files": files, "id": entry.id,
+            "name": entry.name, "characterTxt": has_char,
+            "otoAt": oto.display().to_string(),
+        }));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// GPU：真实发现 gpu-v2 分卷包；gpu_package_url 返回分卷信息；
+    /// GitHub/CNB 两个源的真实长度都要与资产声明一致；Range 拉 1MiB 验证是 ZIP 分卷。
+    #[cfg(target_os = "windows")]
+    #[test]
+    #[ignore = "需要外网：cargo test --offline -- --ignored s6_gpu_sources_real"]
+    fn s6_gpu_sources_real() {
+        let (root, t0) = (tmp_dir("s6-gpu"), Instant::now());
+        let list = gpu_list_packages();
+        assert_eq!(list["ok"], json!(true), "gpu_list_packages: {list}");
+        let packages = list["packages"].as_array().cloned().unwrap_or_default();
+        assert!(!packages.is_empty(), "应至少发现一个 GPU 增强包");
+        let cuda = packages
+            .iter()
+            .find(|p| p["kind"] == json!("cuda"))
+            .expect("cuda package");
+        assert_eq!(cuda["split"], json!(true), "当前 gpu-v2 的 cuda 是分卷包");
+        let files = cuda["files"].as_array().cloned().unwrap_or_default();
+        assert!(files.len() >= 2, "分卷数应 >= 2");
+        let first = &files[0];
+        let furl = first["url"].as_str().unwrap_or("");
+        let fsize = first["size"].as_u64().unwrap_or(0);
+        let top = gpu_package_url("cuda".to_string());
+        assert_eq!(top["ok"], json!(true), "gpu_package_url: {top}");
+        assert_eq!(top["split"], json!(true));
+        assert_eq!(top["files"].as_array().map(|a| a.len()).unwrap_or(0), files.len());
+        let gh_len = http_head_total(furl);
+        assert_eq!(gh_len, Some(fsize), "GitHub 资产长度与 API 不一致");
+        let cnb = gpu_candidate_urls(furl, first["name"].as_str().unwrap_or(""))
+            .into_iter()
+            .find(|u| u.contains("cnb.cool/"))
+            .expect("cnb mirror url");
+        let cnb_len = http_head_total(&cnb);
+        assert_eq!(cnb_len, Some(fsize), "CNB 镜像长度与资产声明不一致");
+        let probe = root.join("first-1mb.bin");
+        let got = s6_range_download(&cnb, 1024 * 1024, &probe).expect("range download");
+        let head = std::fs::read(&probe).unwrap();
+        let zip_magic = head.len() >= 4 && &head[..4] == b"PK\x03\x04";
+        assert_eq!(got, 1024 * 1024);
+        assert!(zip_magic, "分卷应以 ZIP 头 PK\\x03\\x04 开头");
+        s6_print("gpu-sources", t0, json!({
+            "ok": true, "packages": packages.len(), "tag": list["tag"], "kind": "cuda",
+            "kinds": packages.iter().map(|p| p.get("kind").cloned().unwrap_or(Value::Null)).collect::<Vec<_>>(),
+            "names": packages.iter().map(|p| p.get("name").cloned().unwrap_or(Value::Null)).collect::<Vec<_>>(),
+            "parts": files.len(), "firstPart": first["name"], "declared": fsize,
+            "github": gh_len, "cnb": cnb_len, "rangeBytes": got, "zipMagic": zip_magic,
+        }));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// OMR：真实下载完整版 tessdata eng，min 5MB（fast 版会被拒）。
+    #[cfg(target_os = "windows")]
+    #[test]
+    #[ignore = "需要外网：cargo test --offline -- --ignored s6_omr_lang_real"]
+    fn s6_omr_lang_real() {
+        let (root, t0) = (tmp_dir("s6-omr-lang"), Instant::now());
+        let urls = lang_urls("eng");
+        let dest = root.join("eng.traineddata");
+        let n = s6_dl(&urls, &dest, LANG_MIN_BYTES, u64::MAX, 0, false).expect("lang download");
+        assert!(n >= LANG_MIN_BYTES);
+        s6_print("omr-lang", t0, json!({ "ok": true, "bytes": n, "min": LANG_MIN_BYTES, "code": "eng", "urls": urls.len() }));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// OMR：真实下载 waifu2x-ncnn-vulkan，解包到临时 root，校验 exe/模型。
+    #[cfg(target_os = "windows")]
+    #[test]
+    #[ignore = "需要外网：cargo test --offline -- --ignored s6_omr_sr_real"]
+    fn s6_omr_sr_real() {
+        let (root, t0) = (tmp_dir("s6-omr-sr"), Instant::now());
+        let urls = sr_urls();
+        let zip = root.join(SR_ZIP_NAME);
+        let n = s6_dl(&urls, &zip, SR_MIN_BYTES, u64::MAX, 0, false).expect("sr download");
+        let sr_root = sr_dir_at(&root);
+        let stage = root.join("unzip");
+        install_sr_from_zip(&zip, &sr_root, &stage, None).expect("sr install");
+        let st = sr_status_at(&root);
+        assert_eq!(st["installed"], json!(true), "sr status: {st}");
+        let exe_bytes = file_len(&sr_exe_at(&root));
+        assert!(exe_bytes > 1024 * 1024);
+        let models = st["models"].as_array().cloned().unwrap_or_default();
+        let models_ok = models.iter().filter(|m| m["installed"] == json!(true)).count();
+        assert!(models_ok >= 1);
+        s6_print("omr-sr", t0, json!({
+            "ok": true, "bytes": n, "exeBytes": exe_bytes, "installedModels": models_ok, "totalModels": models.len(),
+        }));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// OMR：真实下载 Audiveris MSI，校验大小与 SHA-256（严格不执行 msiexec）。
+    #[cfg(target_os = "windows")]
+    #[test]
+    #[ignore = "需要外网：cargo test --offline -- --ignored s6_omr_engine_real"]
+    fn s6_omr_engine_real() {
+        let (root, t0) = (tmp_dir("s6-omr-msi"), Instant::now());
+        let urls = omr_msi_urls();
+        let dest = root.join(OMR_MSI_NAME);
+        let n = s6_dl(&urls, &dest, OMR_MSI_BYTES, OMR_MSI_BYTES, OMR_MSI_BYTES, true).expect("msi download");
+        assert_eq!(n, OMR_MSI_BYTES);
+        let sha = sha256_file(&dest).expect("sha256");
+        assert!(sha.eq_ignore_ascii_case(OMR_MSI_SHA256), "sha256 mismatch: {sha}");
+        s6_print("omr-engine", t0, json!({
+            "ok": true, "bytes": n, "expected": OMR_MSI_BYTES, "sha256": sha, "urls": urls.len(),
+        }));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// homr：三个权重都 HEAD 出体积，真实下载最小的一个（<=60MB）并解包校验 .onnx。
+    #[cfg(target_os = "windows")]
+    #[test]
+    #[ignore = "需要外网：cargo test --offline -- --ignored s6_homr_weight_real"]
+    fn s6_homr_weight_real() {
+        let (root, t0) = (tmp_dir("s6-homr"), Instant::now());
+        let mut best: Option<(u64, String, String, String)> = None;
+        let mut heads: Vec<Value> = Vec::new();
+        for (zip, dir, file) in HOMR_WEIGHTS {
+            let urls = homr_ckpt_urls(zip);
+            let got = s6_head(&urls);
+            heads.push(json!({ "zip": zip, "bytes": got.as_ref().map(|x| x.0), "via": got.as_ref().map(|x| x.1.clone()) }));
+            if let Some((n, url)) = got {
+                if best.as_ref().map(|(b, _, _, _)| n < *b).unwrap_or(true) {
+                    best = Some((n, url, dir.to_string(), file.to_string()));
+                }
+            }
+        }
+        let (size, url, dir, file) = best.expect("至少一个权重可 HEAD");
+        assert!(size <= 60 * 1024 * 1024, "最小权重也超过 60MB：{size}");
+        let zip_path = root.join("weight.zip");
+        let n = s6_dl(&[url], &zip_path, 1024 * 1024, u64::MAX, size, true).expect("weight download");
+        assert_eq!(n, size);
+        let target = root.join("weights");
+        let job = Job::new("s6-test");
+        safe_extract_zip(&zip_path, &target, Some(&job), false).expect("unzip weight");
+        let found = find_subdir(&target, &dir, 2).map(|d| d.join(&file)).unwrap_or_else(|| target.join(&file));
+        assert!(file_len(&found) > 1024 * 1024, "解包后 .onnx 不存在或过小：{}", found.display());
+        s6_print("homr-weight", t0, json!({
+            "ok": true, "weightBytes": n, "file": file, "heads": heads,
+        }));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
