@@ -210,7 +210,7 @@ pub const SPECS: &[ModelSpec] = &[
         dest: "hub/checkpoints/beat_this-final0.ckpt",
         note: "MuScriptor 转录时值对齐 · final0 · 约 81 MB · 多源并行加速下载",
         min_size: 70_000_000,
-        size: 0,
+        size: 81_058_141,
         sha256: Some("8c328b45f59d8dd3dff219253ff6a8d6482be57d0133a29140e2febbf8eb8331"),
         marker: None,
         dl: Dl::File {
@@ -728,32 +728,52 @@ fn urls_of(spec: &ModelSpec) -> Vec<String> {
     }
 }
 
+fn remote_size(url: &str) -> Option<u64> {
+    let out = Command::new("curl.exe").creation_flags(0x08000000)
+        .args(["-sSIL", "--max-time", "20", url]).output().ok()?;
+    if !out.status.success() { return None; }
+    let s = String::from_utf8_lossy(&out.stdout);
+    s.lines().filter_map(|l| {
+        let l = l.trim();
+        if !l.to_ascii_lowercase().starts_with("content-length:") { return None; }
+        l.split(':').nth(1)?.trim().parse::<u64>().ok()
+    }).next_back()
+}
+
 fn download_file(app: Option<&AppHandle>, job: &ModelJob, spec: &ModelSpec, dest: &Path) -> Result<u64, String> {
     let part = dest.with_extension("part");
-    let total = if spec.size > 0 { spec.size } else { spec.min_size };
     let urls = urls_of(spec);
     if urls.is_empty() { return Err("没有下载地址".into()); }
+    let total = if spec.size > 0 { spec.size } else { urls.iter().find_map(|u| remote_size(u)).unwrap_or(0) };
     let mut last = String::new();
-    let mut ok = false;
-    for (i, url) in urls.iter().enumerate() {
-        let label = format!("下载中（源 {}/{}）", i + 1, urls.len());
-        match curl_to_part(app, job, spec.id, url, &part, 0, 0, total, &label) {
-            Ok(_) => { ok = true; last.clear(); break; }
-            Err(e) if e == "__paused" || e == "__canceled" => return Err(e),
-            Err(e) => last = e,
+    for attempt in 0..2 {
+        let mut ok = false;
+        for (i, url) in urls.iter().enumerate() {
+            let label = format!("下载中（源 {}/{}）", i + 1, urls.len());
+            match curl_to_part(app, job, spec.id, url, &part, total, 0, total, &label) {
+                Ok(_) => { ok = true; last.clear(); break; }
+                Err(e) if e == "__paused" || e == "__canceled" => return Err(e),
+                Err(e) => last = e,
+            }
+        }
+        let n = file_len(&part);
+        let size_bad = total > 0 && n != total;
+        let sha_bad = match spec.sha256 { Some(want) => sha256_file(&part).map(|got| !got.eq_ignore_ascii_case(want)).unwrap_or(true), None => false };
+        if ok && !size_bad && !sha_bad && n >= spec.min_size && n > 0 {
+            if dest.exists() { let _ = std::fs::remove_file(dest); }
+            std::fs::rename(&part, dest).map_err(|e| e.to_string())?;
+            finish_emit(app, spec.id, n);
+            return Ok(n);
+        }
+        let why = if size_bad { format!("大小不符：{n}/{total}") } else if sha_bad { "SHA-256 校验失败".to_string() } else { format!("下载不完整：{n} bytes {last}") };
+        let _ = std::fs::remove_file(&part);
+        if attempt == 0 {
+            emit_progress(app, spec.id, 0, total, false, &format!("{why}，重新下载…"), 0, Value::Null);
+        } else {
+            return Err(why);
         }
     }
-    if !ok && file_len(&part) == 0 { return Err(if last.is_empty() { "下载失败".into() } else { last }); }
-    let n = file_len(&part);
-    if n < spec.min_size { let _ = std::fs::remove_file(&part); return Err(format!("下载文件不完整：{n} bytes")); }
-    if let Some(want) = spec.sha256 {
-        let got = sha256_file(&part).ok_or("SHA-256 读取失败")?;
-        if got != want { let _ = std::fs::remove_file(&part); return Err("SHA-256 校验失败（已丢弃，请重试）".into()); }
-    }
-    if dest.exists() { let _ = std::fs::remove_file(dest); }
-    std::fs::rename(&part, dest).map_err(|e| e.to_string())?;
-    finish_emit(app, spec.id, n);
-    Ok(n)
+    Err("下载失败".into())
 }
 
 fn download_zip(app: Option<&AppHandle>, job: &ModelJob, spec: &ModelSpec, dest: &Path) -> Result<u64, String> {

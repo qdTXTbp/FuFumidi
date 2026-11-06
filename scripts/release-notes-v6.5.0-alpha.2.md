@@ -11,7 +11,7 @@
 ### S2c 基础模型下载规格全量对齐
 - 11 个基础模型（钢琴、hFT、MIROS、YourMT3+、MuScriptor ×3、Beat This!、Audio Tagger、Aria-AMT、hnsep）
   的 URL、国内镜像顺序、minSize、清单大小、SHA-256、解包标记与 6.4.4 逐项对齐。
-- GitHub 资产优先走 CNB 镜像，失败自动回退 ghfast / gh-proxy / raw；单文件支持 `.part` 断点续传。
+- GitHub 资产优先走 CNB 镜像，失败自动回退 ghfast / gh-proxy / raw；单文件支持 `.part` 断点续传，断点大小或 SHA 不符时自动丢弃重下一次。
 - Zip 包安全解包（拒绝 `..` / 绝对路径），SHA 或标记文件不符时拒绝安装。
 
 ### S3 MSST 分卷下载
@@ -63,9 +63,9 @@
 
 ## 发布状态（2026-11-06 23:0x）
 
-- 代码已提交并推送到 GitHub：`feat/audio-tagger-auto-probe` @ `3379542d`。
+- 代码已提交并推送到 GitHub：`feat/audio-tagger-auto-probe`。
 - 安装包已归档：`E:\Midi\安装包\FuFumidi_6.5.0-alpha.2_x64-setup.exe`
-  （251,795,966 B，SHA-256 `569E95E1028855C301DDC438BB9AC2C7A389FD76C194E5979B56561503510E07`）。
+  （251,816,390 B，SHA-256 `0332BF8380B02D220B89D4AD10C917EC92C8A56604B919B0FF0805F70F7EC7CE`）。
 - 同一文件另存为 `FuFumidi.Install.6.5.0-alpha.2.exe` 供更新器识别（需要资产名包含 install）。
 - **未上传 Release 资产**：当前环境没有 GitHub / CNB token；且远端 `v6.5.0-alpha.2` 标签与 Release
   已被 2026-10-30 的旧 alpha.2 占用（资产为旧的 FuFumidi.Install.exe）。建议下一次上传使用
