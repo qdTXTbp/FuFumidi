@@ -190,6 +190,18 @@ fn model_list() -> Vec<serde_json::Value> {
     push_model(&mut items, "audio_tagger", "Audio Tagger / CED", "transcribe", tagger, 100_000, "instrument tags");
     push_model(&mut items, "hnsep", "hnsep (Worldline v11)", "transcribe", dir.join("hnsep"), 100_000, "harmonic separation");
     push_model(&mut items, "htdemucs4_6stems", "HTDemucs4 6stems", "separate", dir.join("multi/htdemucs4_6stems"), 1_000_000, "6-stem separation");
+    // P1: Electron 的 MSST 目录有几十个分离/修复模型；Tauri 不能只列 13 条，
+    // 否则已下载的 multi/vocal/single/vr 权重在资源中心全部显示为“缺失”。
+    for (tag, kind, label) in [("multi", "separate", "multi-stem"), ("vocal", "separate", "vocal"), ("single", "separate", "single-stem"), ("vr", "separate", "vr")] {
+        if let Ok(rd) = std::fs::read_dir(dir.join(tag)) {
+            for e in rd.flatten() {
+                let p = e.path();
+                let name = p.file_stem().and_then(|s| s.to_str()).unwrap_or("model").to_string();
+                let id = format!("{tag}:{name}");
+                push_model(&mut items, &id, &name, kind, p, 1_000_000, label);
+            }
+        }
+    }
     items
 }
 
