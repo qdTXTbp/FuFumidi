@@ -2023,7 +2023,18 @@ async fn model_download(req: serde_json::Value) -> serde_json::Value {
             return serde_json::json!({ "ok": true, "id": id, "existed": true, "path": item.get("path"), "size": item.get("size") });
         }
     }
-    if id.starts_with("msst:") || id == "muscriptor_small" || id == "muscriptor_medium" || id == "muscriptor_large" {
+    if id == "miros" {
+        let Some(py) = python_path() else { return oto_err("Python 不存在") };
+        let Some(eng) = engine_dir() else { return oto_err("引擎目录不存在") };
+        let script = eng.join("miros_fetch.py"); let root = data_dir();
+        return tauri::async_runtime::spawn_blocking(move || {
+            match Command::new(py).args([script.display().to_string(), root.display().to_string()]).creation_flags(0x08000000).output() {
+                Ok(o) => String::from_utf8_lossy(&o.stdout).lines().rev().find_map(|l| serde_json::from_str::<serde_json::Value>(l.trim()).ok()).unwrap_or_else(|| oto_err("miros downloader no JSON")),
+                Err(e) => oto_err(&e.to_string()),
+            }
+        }).await.map_err(|e| e.to_string()).unwrap_or_else(|e| oto_err(&e));
+    }
+if id.starts_with("msst:") || id == "muscriptor_small" || id == "muscriptor_medium" || id == "muscriptor_large" {
         let Some(py) = python_path() else { return oto_err("Python 不存在") };
         let Some(eng) = engine_dir() else { return oto_err("引擎目录不存在") };
         let script = eng.join("msst_fetch.py");
