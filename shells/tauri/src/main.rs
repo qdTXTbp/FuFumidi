@@ -1997,6 +1997,23 @@ async fn plugin_render_file(req: serde_json::Value) -> Result<serde_json::Value,
     }).await.map_err(|e| e.to_string())?
 }
 
+fn expected_sha256(id: &str) -> Option<&'static str> {
+    Some(match id {
+        "beat_this" => "8c328b45f59d8dd3dff219253ff6a8d6482be57d0133a29140e2febbf8eb8331",
+        "hft_transformer" => "bb3c88758e4802e6b3881ccb6dc7927417fb43f76980df3739ab2bbc418d70c5",
+        "audio_tagger" => "e2fa9affc4d42bcf6f8400e4d0def0dcdefd95202819b1b90cf75d1123653295",
+        "yourmt3" => "82054845789bf380317cd3ab77dedc6622ee969e58216d7b8289691ae8011c46",
+        "hnsep_240512" => "8f8c1046d0cacd40363e6f71d48bc1663e06a01d4625af0569055648d771ff92",
+        _ => return None,
+    })
+}
+fn sha256_file(path: &Path) -> Option<String> {
+    let out = Command::new("certutil").args(["-hashfile", &path.display().to_string(), "SHA256"]).creation_flags(0x08000000).output().ok()?;
+    if !out.status.success() { return None; }
+    let s = String::from_utf8_lossy(&out.stdout);
+    s.lines().find(|l| l.trim().len() == 64 && l.trim().chars().all(|c| c.is_ascii_hexdigit())).map(|l| l.trim().to_ascii_lowercase())
+}
+
 fn model_download_urls(id: &str) -> Option<(&'static str, &'static str, u64)> {
     Some(match id {
         "piano_transcription" => ("https://zenodo.org/record/4034264/files/CRNN_note_F1%3D0.9677_pedal_F1%3D0.9186.pth?download=1", "piano_transcription/note_F1=0.9677_pedal_F1=0.9186.pth", 160_000_000),
@@ -2065,6 +2082,7 @@ if id.starts_with("msst:") || id == "muscriptor_small" || id == "muscriptor_medi
             if !out.status.success() { return serde_json::json!({ "ok": false, "id": id, "error": format!("下载失败：{}", String::from_utf8_lossy(&out.stderr).chars().take(400).collect::<String>()) }); }
             let size = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
             if size < min { return serde_json::json!({ "ok": false, "id": id, "error": format!("下载不完整：{size} < {min}") }); }
+            if let Some(want) = expected_sha256(&id) { if sha256_file(&part).as_deref() != Some(want) { return serde_json::json!({ "ok": false, "id": id, "error": "SHA-256 校验失败" }); } }
             std::fs::create_dir_all(&dest).ok();
             let out = match Command::new("tar.exe").args(["-xf", &part.display().to_string(), "-C", &dest.display().to_string()]).creation_flags(0x08000000).output() {
                 Ok(o) => o, Err(e) => return oto_err(&e.to_string()),
@@ -2089,6 +2107,7 @@ if id.starts_with("msst:") || id == "muscriptor_small" || id == "muscriptor_medi
         if !out.status.success() { return serde_json::json!({ "ok": false, "id": id, "error": format!("下载失败：{}", String::from_utf8_lossy(&out.stderr).chars().take(400).collect::<String>()) }); }
         let size = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
         if size < min { return serde_json::json!({ "ok": false, "id": id, "error": format!("下载不完整：{size} < {min}") }); }
+        if let Some(want) = expected_sha256(&id) { if sha256_file(&part).as_deref() != Some(want) { return serde_json::json!({ "ok": false, "id": id, "error": "SHA-256 校验失败" }); } }
         if let Err(e) = std::fs::rename(&part, &dest) { return oto_err(&e.to_string()); }
         serde_json::json!({ "ok": true, "id": id, "path": dest.display().to_string(), "size": size })
     }).await.map_err(|e| e.to_string()).unwrap_or_else(|e| oto_err(&e))
