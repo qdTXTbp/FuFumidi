@@ -30,7 +30,7 @@ def main():
     man = get_json(); meta = (man.get(tag) or {}).get(key)
     if not meta:
         for k, v in (man.get(tag) or {}).items():
-            if os.path.splitext(str(v.get("model", "")))[0] == key: meta = v; key = k; break
+            if os.path.splitext(str(v.get("model", "")))[0].lower().replace("-", "_") == key.lower().replace("-", "_"): meta = v; key = k; break
     if not meta: raise SystemExit("manifest entry not found: %s/%s" % (tag, key))
     model = meta.get("model") or "model.safetensors"; n = int(meta.get("parts") or 0)
     if not n: raise SystemExit("parts missing")
