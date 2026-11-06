@@ -2796,7 +2796,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.tr-view { overflow-x: hidden; max-width: 900px; padding: var(--page-pad-y) var(--page-pad-x) var(--page-pad-b); }
+.tr-view { overflow-x: hidden; overflow-y: auto; scrollbar-gutter: stable; min-height: 0; max-width: 900px; padding: var(--page-pad-y) var(--page-pad-x) var(--page-pad-b); }
 .warn-tag { color: var(--amber); border-color: rgba(245, 158, 11, 0.4); background: rgba(245, 158, 11, 0.1); }
 .tr-drop-card { padding: 16px; display: flex; flex-direction: column; gap: var(--sp-3); }
 .tr-drop { display: flex; align-items: center; gap: var(--sp-4); padding: 22px; border: 1.5px dashed var(--border-strong); border-radius: var(--r-lg); background: var(--canvas); cursor: pointer; transition: border-color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out), transform var(--motion-base) var(--ease-out), box-shadow var(--motion-base) var(--ease-out); }
