@@ -202,6 +202,18 @@ fn model_list() -> Vec<serde_json::Value> {
             }
         }
     }
+    // 6.4.4 的 MSST 目录是资源中心的主体；Tauri 也必须列出未下载条目。
+    if let Ok(cat) = serde_json::from_str::<Vec<serde_json::Value>>(include_str!("../../../frontend/public/models-msst-catalog.json")) {
+        for m in cat {
+            let file = m.get("file").and_then(|v| v.as_str()).unwrap_or("");
+            let tag = m.get("tag").and_then(|v| v.as_str()).unwrap_or("");
+            let desc = m.get("desc").and_then(|v| v.as_str()).unwrap_or("");
+            if file.is_empty() || tag.is_empty() { continue; }
+            let stem = Path::new(file).file_stem().and_then(|s| s.to_str()).unwrap_or(file);
+            let id = format!("msst:{stem}");
+            push_model(&mut items, &id, stem, "separate", dir.join(tag).join(stem), 1_000_000, desc);
+        }
+    }
     items
 }
 
