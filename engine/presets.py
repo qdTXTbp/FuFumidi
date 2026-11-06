@@ -167,15 +167,13 @@ def _builtin_presets():
             "params": {
                 **basic,
                 "model": "muscriptor", "model_size": "medium",
-                # 6.2.1 的分段自动探测；音色稳定功能已移除
-                "muscriptor_instruments": "probe_segments",
-                "auto_bpm": True,
-                "temperature": 1.0, "cfg_coef": 1.0, "beam_size": 1,
-                "prelude_forcing": True,
-                "precision": "fp32",
-                "max_note_hold": 0,       # ★ 不截断：僵尸音改由**音频证据**收尾（见 engine_muscriptor 的 _make_pitch_evidence）
-                # ★ 2026-10-21：静音分段与「识别片段长度」均已移除（分块转录，块间质量参差）。
-                #   MuScriptor 一律用上游训练/推理块长 5s；跨块延音由 _stitch_chunk_boundaries 缝合。
+                # ★ 2026-11-01：全面回退 4.3.x 转录逻辑（用户报障「muscriptor 无法转录」）。
+                #   预设只保留模型选择 —— 乐器组探测（probe_segments）/ 生成参数
+                #   （temperature/cfg_coef/beam_size/precision）/ prelude_forcing /
+                #   max_note_hold 一律不传：引擎默认走 4.3.x 裸路径
+                #   （engine_muscriptor 的 FUFUMIDI_MS_MODERN 分支），旧版 muscriptor
+                #   包上的任何多余 kwargs 都是 TypeError 隐患。
+                #   auto_bpm 来自 basic（engine.py 层的后处理，与转录逻辑无关）。
             },
         },
         "钢琴 · 最优": {"mode": "piano", "params": {**piano, "model": "piano_pt"}},

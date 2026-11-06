@@ -618,10 +618,10 @@ const WEB_BUILTIN_PRESETS = () => {
       model: 'miros' } },
     { name: 'MuScriptor · 最优', mode: 'universal', params: { ...basic,
       model: 'muscriptor', model_size: 'medium',
-      // 与 engine/presets.py 逐键一致：6.2.1 分段自动探测 + 默认自动 BPM
-      muscriptor_instruments: 'probe_segments', auto_bpm: true,
-      temperature: 1.0, cfg_coef: 1.0, beam_size: 1, prelude_forcing: true,
-      precision: 'fp32' } },
+      // ★ 2026-11-01：与 engine/presets.py 一致，全面回退 4.3.x 转录逻辑 ——
+      // 预设只保留模型选择；乐器组探测/生成参数/prelude_forcing 一律不传
+      // （引擎默认走 4.3.x 兼容路径，多余 kwargs 在旧版 muscriptor 包上是 TypeError）。
+      } },
     { name: '钢琴 · 最优', mode: 'piano', params: { ...piano, model: 'piano_pt' } },
     { name: 'Aria-AMT · 最优', mode: 'piano', params: { ...piano, model: 'aria' } },
     { name: 'Transkun · 最优', mode: 'piano', params: { ...piano, model: 'transkun' } },

@@ -36,6 +36,13 @@ import engine_muscriptor as M  # noqa: E402
 CAP = 15.0
 
 
+@pytest.fixture(autouse=True)
+def _modern_pipeline(monkeypatch):
+    """cap/证据删除逻辑只存在于新流水线 —— 2026-11-01 起默认走 4.3.x 兼容路径
+    （零 kwargs 裸调用，不经过自定义事件流），这里显式打开调试开关再测。"""
+    monkeypatch.setenv("FUFUMIDI_MS_MODERN", "1")
+
+
 class _Dev:
     type = "cpu"
 

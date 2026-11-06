@@ -777,6 +777,112 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
 
     _dev_type = getattr(getattr(model, "_device", None), "type", "") or ""
 
+    # ★★ 2026-11-01：全面回退 4.3.x 转录逻辑（用户报障「muscriptor 无法转录」）。
+    #   6.x 的默认路径在模型调用前叠加了一整串补丁层：音频链预处理 → 音频证据钩子 →
+    #   乐器组探测（probe/probe_segments）→ 生成参数（★ batch_size 默认 4 —— 批量推理
+    #   当年正是因为"纯损失"被删掉的，见 bca0a55）→ 自定义事件流（cap/证据删除）→
+    #   跨块缝合。其中任何一层与用户机上**旧版 muscriptor 包**的 API 对不上，
+    #   整次转录就直接报废 —— python 运行时在 kachina ignoreFolderPath 里**不随更新
+    #   升级**，所以「新引擎代码 × 旧包」是常态：新版引擎默认传 batch_size 等新 kwargs，
+    #   旧包的 transcribe() 不认就 TypeError。4.3.x 只有一行 model.transcribe(wav)，
+    #   不跟任何 kwargs，什么包都能跑，也是用户认定的质量基准。
+    #   → 默认一律走 4.3.x 裸路径：一次解码、一次调用、上游默认参数、零后处理。
+    #     调试新流水线：FUFUMIDI_MS_MODERN=1（下方原逻辑原样保留，未删一行）。
+    #   唯一保留的显式选项：界面手选「限定乐器组」（instruments= 硬约束，0.3.0 就有
+    #   这个 kwarg）；探测类约束（probe/probe_segments）与预设生成参数一律不传。
+    if not os.environ.get("FUFUMIDI_MS_MODERN"):
+        import audio_io
+        import json as _json_l
+        wav_tmp = audio_io.decode_to_wav(audio_path, 16000)
+        _mi_l = params.get("muscriptor_instruments")
+        _constrain_l = None
+        if _mi_l:
+            try:
+                import instrument_probe as _ip_l
+                _mode_l, _groups_l = _ip_l.parse_mode(_mi_l)
+                if _mode_l == "limit":
+                    _constrain_l = _sanitize_groups(_groups_l, log_cb, "手动限定")
+            except Exception:  # noqa: BLE001
+                _constrain_l = None
+        _log(log_cb, "4.3.x 兼容模式：整曲一次推理，无预处理/自动探测/证据收尾/缝合"
+                     "（调试新流水线：FUFUMIDI_MS_MODERN=1）")
+
+        def _legacy_events(stream):
+            """4.3.0 的进度透传：只认 ProgressEvent，其余原样过（绝不动流）。"""
+            try:
+                from muscriptor.events import ProgressEvent as _PE
+            except Exception:  # noqa: BLE001
+                _PE = None
+            for ev in stream:
+                if _PE is not None and isinstance(ev, _PE):
+                    try:
+                        if log_cb and getattr(ev, "total", 0):
+                            log_cb('###PROG ' + _json_l.dumps(
+                                {"completed": int(ev.completed), "total": int(ev.total)}))
+                    except Exception:  # noqa: BLE001
+                        pass
+                yield ev
+
+        t0 = time.perf_counter()
+        data = None
+        cuda_fallback_done = False
+        while data is None:
+            try:
+                _log(log_cb, "推理中（多乐器转录）…")
+                if _constrain_l is not None:
+                    events = model.transcribe(wav_tmp, instruments=_constrain_l)
+                else:
+                    events = model.transcribe(wav_tmp)
+                data = model.events_to_midi_bytes(_legacy_events(events))
+                # 0 音符保护（4.3.0 没有，但纯校验不改写结果）：空 MIDI 不落盘
+                if _midi_note_count_bytes(data) == 0:
+                    raise RuntimeError(
+                        "识别结果为 0 音符（模型未输出事件；音频可能近乎静音）。未写入空 MIDI。")
+            except Exception as e:  # noqa: BLE001
+                oom = "out of memory" in str(e).lower() or "OutOfMemoryError" in type(e).__name__
+                _ck = ""
+                try:
+                    from engine_gpu import cuda_error_kind as _kind
+                    _ck = _kind(e)
+                except Exception:  # noqa: BLE001
+                    _ck = ""
+                # OOM 与 CUDA 运行期错误（no kernel image / 设备断言…）→ 换 CPU 重跑一次。
+                # 这层兜底不碰转录逻辑（重跑的仍是同一行裸调用），4.3.x 行为不受影响。
+                if (oom or _ck) and not cuda_fallback_done and (
+                        _dev_type in ("cuda", "mps") or str(dev or "").startswith(("cuda", "mps"))):
+                    cuda_fallback_done = True
+                    try:
+                        import torch
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    model = TranscriptionModel.load_model(load_arg, device="cpu")
+                    dev = "cpu"
+                    _dev_type = ""
+                    _log(log_cb, "GPU 推理失败：%s（%s）—— 已改用 CPU 重跑本次转录（慢一些，但结果可用）"
+                         % (_ck or "oom", str(e).strip().splitlines()[0][:200]))
+                    continue
+                raise
+        _log(log_cb, f"[计时] muscriptor 推理（4.3.x 兼容模式）：{time.perf_counter() - t0:.1f}s")
+        try:
+            audio_io.remove_temp(wav_tmp)
+        except Exception:  # noqa: BLE001
+            pass
+        with open(output_midi, "wb") as f:
+            f.write(data)
+        _n_l = _count_notes(output_midi)
+        _log(log_cb, f"保存 MIDI → {os.path.basename(output_midi)}（{_n_l} 音符）")
+        _st_l = _duration_stats(output_midi)
+        if _st_l:
+            _log(log_cb, "[自检] 音符 %d，时长中位数 %.2fs，>2s 占 %.1f%%，最长 %.1f s"
+                         % (_st_l["count"], _st_l["median"], _st_l["over2"], _st_l["max"]))
+        try:
+            del model
+        except Exception:  # noqa: BLE001
+            pass
+        return
+
     _log(log_cb, "推理中（多乐器转录）…")
     out_dir = os.path.dirname(os.path.abspath(output_midi))
     os.makedirs(out_dir, exist_ok=True)
@@ -1312,7 +1418,10 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         #   按块流式出结果；Medium/Small 保留 batch=4。
         _batch_override = params.get("muscriptor_batch")
         if _batch_override is None:
-            _batch_override = 1 if size == "large" else 4
+            # ★ 2026-11-01：默认回到 1。批量推理当年就是被 bca0a55 以「实测纯损失」删掉的；
+            #   6.4.x 又把它设成 medium/small 默认 4，而它必须配 prelude_forcing=False 才成立 ——
+            #   与"恢复 prelude 默认开"互相矛盾，还要求包里有 batch_size kwarg（旧包直接 TypeError）。
+            _batch_override = 1
         _gen_kw["batch_size"] = max(1, int(_batch_override))
         _log(log_cb, "muscriptor 批量：%d（模型 %s）" % (_gen_kw["batch_size"], size))
         for _k, _cast in (("temperature", float), ("cfg_coef", float), ("beam_size", int)):

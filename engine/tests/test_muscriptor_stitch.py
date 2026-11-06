@@ -1,22 +1,18 @@
 # -*- coding: utf-8 -*-
-"""「跨块延音」两条路径的回归测试（engine_muscriptor）。
+"""「跨块延音」的回归测试（engine_muscriptor）。
 
-背景（2026-10-18 用户）：「长音问题复发，一直响」。实测那首 154s 的歌：
-  · prelude_forcing 开（模型强制 tie）→ 7115 个音符、时长中位数 20ms、最长 82.9s；
-  · prelude_forcing 关（模型自己猜 tie）→ 788 个音符、中位数 0.54s、最长 12s，
-    但块边界上的延音会被切断/换乐器。
-2026-10-18b 当时选了「一律关掉 + 解码后缝合」，2026-10-31 又回退（用户报障
-「音色不统一 + 音符丢失，4.3.x 没这问题」；5.0.0-beta.4 实测过关掉 prelude 会让
-相邻分块换乐器组 1 → 16 次、音符少 22%）。现在：
-  **默认 prelude_forcing=True 交给模型**（僵尸音由音频证据收尾兜底），
-  只有用户显式关掉时才 prelude_forcing=False + 解码后缝合。
+★ 2026-11-01：全面回退 4.3.x 转录逻辑（用户报障「muscriptor 无法转录」）。
+6.x 默认路径在模型调用前叠加了一整串补丁层（预处理/证据/探测/生成参数/事件流/
+缝合），任何一层与用户机上旧版 muscriptor 包的 API 对不上就整次报废。所以：
+  · **默认 = 4.3.x 兼容模式**：model.transcribe(wav) 裸调用（零 kwargs）、
+    零后处理、不缝合 —— 引擎路径测试锁死 captured_kw == {}；
+  · 调试才进新流水线：FUFUMIDI_MS_MODERN=1，此时沿用 10-31 的契约
+    （默认 prelude_forcing=True 交给模型；显式 False → 模型收到 False + 解码后缝合）。
 
-这里锁死四件事：
+缝合函数本身的单测（下面 1-3 条）不变：
   1) 边界两侧同轨同音高的延音必须缝成一个长音（连续性不丢）；
   2) 不同音高 / 间隔过大 / 不同轨（不同乐器）一律不缝（不许改音色、不许乱连）；
-  3) 缝合后 MIDI 仍可正常解析，轨道名/音色等非音符事件不丢；
-  4) 引擎路径：默认（或显式 True）→ **模型收到 True 且不缝合**；
-     显式 False → 模型收到 False 且缝合。
+  3) 缝合后 MIDI 仍可正常解析，轨道名/音色等非音符事件不丢。
 """
 import io
 import os
@@ -213,18 +209,30 @@ def run_transcribe(monkeypatch, tmp_path):
     return _run
 
 
-def test_engine_keeps_model_prelude_and_skips_stitch(run_transcribe):
-    """默认（= 4.3.x 行为）：prelude_forcing 交给模型开着，块边界连续性由模型保证，
-    不再靠解码后缝合来补 —— 缝合只在用户显式关掉 prelude 时才用。"""
+def test_engine_default_is_legacy_bare_call(run_transcribe):
+    """★ 2026-11-01 默认 = 4.3.x 兼容模式：model.transcribe(wav) **零 kwargs**、零后处理。
+
+    这是「muscriptor 无法转录」的根因修复：6.x 默认传 batch_size 等新 kwargs，
+    用户机上旧版 muscriptor 包不认就 TypeError 整次报废。这里锁死裸调用。
+    """
     data, logs, kw = run_transcribe()
-    assert kw.get("prelude_forcing") is True, "默认必须让模型自己续接跨块延音：%r" % (kw,)
+    assert kw == {}, "默认必须是 4.3.x 裸调用（零 kwargs），实际传了：%r" % (kw,)
     assert not any("跨块延音缝合：接合" in s for s in logs), logs
+    assert not any("音频证据式收尾" in s for s in logs), logs
+    assert any("4.3.x 兼容模式" in s for s in logs), logs
     _mid, notes = _notes_of(data)
     assert len(notes) == 2, notes            # 模型给的两颗（0-5s / 5-7s）原样保留
 
 
-def test_engine_stitches_when_prelude_explicitly_off(run_transcribe):
-    """用户显式取消跨块延音 → 模型侧关闭 prelude，改由解码后缝合补连续性。"""
+def test_engine_legacy_ignores_prelude_param(run_transcribe):
+    """4.3.x 模式下 prelude_forcing 参数被忽略 —— 模型收到的是上游默认（零 kwargs）。"""
+    _data, _logs, kw = run_transcribe({"prelude_forcing": False})
+    assert kw == {}, "兼容模式下不许把 prelude_forcing 传给模型：%r" % (kw,)
+
+
+def test_engine_stitches_when_prelude_explicitly_off(run_transcribe, monkeypatch):
+    """调试路径（FUFUMIDI_MS_MODERN=1）：显式取消跨块延音 → prelude 关 + 解码后缝合。"""
+    monkeypatch.setenv("FUFUMIDI_MS_MODERN", "1")
     data, logs, kw = run_transcribe({"prelude_forcing": False})
     assert kw.get("prelude_forcing") is False, "显式关闭时不应该再交给模型开：%r" % (kw,)
     assert any("跨块延音缝合：接合 1 处" in s for s in logs), logs

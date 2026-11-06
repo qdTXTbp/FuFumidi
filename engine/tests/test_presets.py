@@ -96,15 +96,13 @@ def test_quality_policy_highest_quality_and_stable():
         assert p["params"].get("perf") == "quality", f"{name} 没选最重的性能档"
     b = presets._builtin_presets()
     ms = b["MuScriptor · 最优"]["params"]
-    assert (ms["temperature"], ms["cfg_coef"], ms["beam_size"]) == (1.0, 1.0, 1)
-    assert ms["precision"] == "fp32"
-    assert ms["prelude_forcing"] is True            # 跨块延音：把默认行为写成显式值
-    assert ms["max_note_hold"] == 0                 # 不截断：僵尸音由音频证据收尾（见 test_muscriptor_sustain_evidence）
-    #   2026-10-18 A/B 后这两项曾被固化为默认（音色切换 5→0、F1 0.4914→0.7692），
-    #   后来 b42e097「精简高级参数面板」把它们连带删掉，默认悄悄退回"不干预乐器组"，
-    #   于是 MuScriptor 逐 5 秒块自由改判乐器（用户报障：每隔一段时间换一种乐器）。
-    #   面板可以不暴露，默认行为不能退化 —— 这里钉住，别再被"精简"顺手删掉。
-    assert ms["muscriptor_instruments"] == "probe_segments"   # 按 6.2.1 做法逐段探测乐器组
+    # ★ 2026-11-01 全面回退 4.3.x 转录逻辑（用户报障「muscriptor 无法转录」）：
+    #   预设只保留模型选择 —— 探测/生成参数/prelude/上限一律不写，
+    #   引擎默认 model.transcribe(wav) 裸调用（零 kwargs，旧版包也兼容）。
+    assert ms["model"] == "muscriptor" and ms["model_size"] == "medium"
+    for k in ("muscriptor_instruments", "temperature", "cfg_coef", "beam_size",
+              "precision", "prelude_forcing", "max_note_hold"):
+        assert k not in ms, "MuScriptor 预设不该写 %s" % k
     assert b["钢琴 · 最优"]["params"]["include_pedal"] is True
     assert b["分离 · 最优"]["params"]["include_drums"] is True
     assert b["分离 · 最优"]["params"]["stem_format"] == "wav"
