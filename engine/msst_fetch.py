@@ -58,11 +58,16 @@ def main():
                     b = r.read(1 << 20)
                     if not b: break
                     w.write(b)
+    want_size = int(meta.get("size") or 0)
+    if want_size and total != want_size: raise RuntimeError("size mismatch")
     h = hashlib.sha256()
     with open(final, "rb") as r:
         for b in iter(lambda: r.read(1 << 20), b""): h.update(b)
     want = (meta.get("sha256") or "").lower()
-    if want and h.hexdigest() != want: raise RuntimeError("sha256 mismatch")
+    if want and h.hexdigest() != want:
+        try: os.remove(final)
+        except OSError: pass
+        raise RuntimeError("sha256 mismatch")
     for f in os.listdir(tmpdir):
         try: os.remove(os.path.join(tmpdir, f))
         except OSError: pass
