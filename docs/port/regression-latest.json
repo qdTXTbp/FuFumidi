@@ -1,53 +1,19 @@
 {
   "schema": "fufumidi.regression-matrix/1",
-  "generatedAt": "2026-11-06T14:41:20.043Z",
+  "generatedAt": "2026-11-06T15:00:19.051Z",
   "repo": {
     "root": "E:\\Midi\\FuFumidi-Source",
     "branch": "feat/audio-tagger-auto-probe",
-    "commit": "0efe7b86",
-    "commitFull": "0efe7b86efc5c6adda312f38dd3937e322b01e27",
-    "subject": "feat(models): verify SHA-256 for base downloads",
+    "commit": "3379542d",
+    "commitFull": "3379542d7088242d09ea7bd3ca07811996e7a40d",
+    "subject": "feat(tauri): S2c–S9 资源中心与资源管理全量对齐（6.5.0-alpha.2）",
     "dirty": [
       "M build/kachina.config.json",
-      " M docs/plans/2026-11-06-v64-parity-plan.md",
-      " M engine/msst_fetch.py",
-      " M frontend/package.json",
-      " M frontend/src/App.vue",
-      " M frontend/src/bridge/tauri.js",
-      " M frontend/src/components/models/ModelCatalog.vue",
-      " M frontend/src/core/changelog.js",
-      " M frontend/src/core/i18n.js",
-      " M frontend/src/core/i18n_ja.js",
-      " M frontend/src/views/ViewModels.vue",
-      " M package.json",
       " M scripts/build-kachina.ps1",
-      " M scripts/tauri/gen-soundfont-registry.mjs",
-      " M scripts/tauri/handler-audit.mjs",
       " M scripts/updater/FuFumidiUpdater.cs",
-      " M shells/tauri/Cargo.lock",
-      " M shells/tauri/Cargo.toml",
-      " M shells/tauri/src/main.rs",
-      " M shells/tauri/src/soundfont_registry.json",
-      " M shells/tauri/src/stem_workflow.rs",
-      " M shells/tauri/tauri.conf.json",
       "?? docs/plans/2026-11-01-stem-aware-transcription.md",
-      "?? docs/port/",
-      "?? engine/msst_config_heal.py",
-      "?? engine/tests/test_msst_config_heal.py",
-      "?? engine/tests/test_msst_fetch.py",
-      "?? frontend/src/core/model-download.js",
-      "?? frontend/src/stores/modelDownloads.ts",
-      "?? frontend/tests/model-download.test.js",
-      "?? frontend/tests/model-downloads-store.test.js",
       "?? scripts/e2e/migrate-electron-ls.mjs",
-      "?? scripts/e2e/recover-playlists.mjs",
-      "?? scripts/release-notes-v6.5.0-alpha.2.md",
-      "?? scripts/tauri/model-contract-check.mjs",
-      "?? scripts/tauri/model-fetch-smoke.mjs",
-      "?? scripts/tauri/regression-matrix.mjs",
-      "?? shells/tauri/src/model_service.rs",
-      "?? shells/tauri/src/msst-manifest-seed.json",
-      "?? shells/tauri/src/resource_extras.rs"
+      "?? scripts/e2e/recover-playlists.mjs"
     ],
     "changedDuringRun": []
   },
@@ -75,7 +41,7 @@
     "failed": 0,
     "warned": 1,
     "skipped": 3,
-    "durationMs": 26356
+    "durationMs": 26981
   },
   "steps": [
     {
@@ -88,9 +54,9 @@
       "exitCode": 0,
       "signal": null,
       "timedOut": false,
-      "durationMs": 926,
-      "startedAt": "2026-11-06T14:40:54.513Z",
-      "finishedAt": "2026-11-06T14:40:55.439Z",
+      "durationMs": 964,
+      "startedAt": "2026-11-06T14:59:52.945Z",
+      "finishedAt": "2026-11-06T14:59:53.909Z",
       "tail": {
         "stdout": "\n> fufumidi@6.5.0-alpha.2 typecheck\n> npm --prefix frontend run typecheck\n\n\n> fufumidi-frontend@6.5.0-alpha.2 typecheck\n> tsc --noEmit",
         "stderr": ""
@@ -106,9 +72,9 @@
       "exitCode": 0,
       "signal": null,
       "timedOut": false,
-      "durationMs": 4785,
-      "startedAt": "2026-11-06T14:40:55.439Z",
-      "finishedAt": "2026-11-06T14:41:00.224Z",
+      "durationMs": 4771,
+      "startedAt": "2026-11-06T14:59:53.909Z",
+      "finishedAt": "2026-11-06T14:59:58.680Z",
       "tail": {
         "stdout": "> node scripts/audit-job-params.cjs\n\n每个作业参数都能在主进程里找到接线。\n\n> fufumidi@6.5.0-alpha.2 audit:dead-options\n> node scripts/audit-dead-options.cjs\n\n没有发现「绑定了但没人读」的控件。\n\n> fufumidi@6.5.0-alpha.2 audit:ui-tokens\n> node scripts/check-ui-tokens.mjs\n\n界面 token 审计（棘轮：只许变小）\n  颜色字面值                0  (基线 0)  OK 持平\n  font-size 字面值        0  (基线 0)  OK 持平\n  border-radius 字面值    0  (基线 0)  OK 持平\n  gap 游离值              0  (基线 0)  OK 持平\n\n> fufumidi@6.5.0-alpha.2 check:contracts\n> node scripts/contracts/extract-ipc.mjs --check && node scripts/contracts/extract-engine-params.mjs --check\n\n[contracts] OK: 250 invoke / 250 handle / 2 ipcMain.on / 29 events，零漂移\n[engine-params] OK: 57 params / 43 worker keys / 27 engine map / 15 flags；已知漂移 0 项（见 schema.drift）\n\n> fufumidi@6.5.0-alpha.2 check:brand\n> node scripts/brand/check-brand-assets.mjs\n\n[brand] 校验 13 个品牌资产 / manifest 13\n[brand] OK: 品牌资产未变（logo / 图标 / 立绘 / 安装器图一致，Tauri 壳复用同一图标）\n\n> fufumidi@6.5.0-alpha.2 tauri:handler-audit\n> node scripts/tauri/handler-audit.mjs\n\n{\n  \"commands\": 212,\n  \"handlerEntries\": 212,\n  \"missing\": [],\n  \"extra\": []\n}",
         "stderr": ""
@@ -125,11 +91,11 @@
       "exitCode": 0,
       "signal": null,
       "timedOut": false,
-      "durationMs": 2575,
-      "startedAt": "2026-11-06T14:41:00.225Z",
-      "finishedAt": "2026-11-06T14:41:02.800Z",
+      "durationMs": 2521,
+      "startedAt": "2026-11-06T14:59:58.681Z",
+      "finishedAt": "2026-11-06T15:00:01.202Z",
       "tail": {
-        "stdout": "✔ ★ 每个图元的 fill 必须是字符串或 {stops:[...]} —— 否则 WebGL2 会把它画成纯白 (1.7461ms)\n✔ 每个可画图元恰好一个实例；text 与 alpha<=0 被跳过 (0.9319ms)\n✔ 矩形四角落在约定槽位（TL/TR/BR/BL），与顶点着色器的 uv 推导一致 (0.5049ms)\n✔ 坐标按 scale 放大（超采样/DPR 都靠它，图元本身保持 CSS 单位） (0.109ms)\n✔ 按混合模式切分 run —— 顺序与 count 必须与原图元序列一致 (0.1634ms)\n✔ 4 段渐变被精确采样（canvas 的分段线形在片元里逐段还原） (0.1354ms)\n✔ ★ 缺 stops 的 fill 对象当**全透明**（不许兜底成纯白 —— 2026-10-17 白条 bug 的根） (0.1282ms)\n✔ rgba() 里的 alpha 进入采样色（网格线就是靠它变淡的） (0.0996ms)\n✔ 径向光：外半径解析与 canvas2d 一致；内外半径相等时按 canvas 规范不画 (0.1007ms)\n✔ 线展成垂直方向加宽的四边形，线宽进 shape（片元据此做 AA） (0.0995ms)\n✔ 键盘不进泛光源（哑光物体；2026-10-17「黑键太透明」的实测结论） (0.1917ms)\n✔ buildVizBlocks 把同音高首尾相接的音符合并，力度取组内最大 (0.9203ms)\n✔ buildVizBlocks 维持「按 start 升序、互不重叠、end 单调」这一二分依赖的不变量 (0.6097ms)\n✔ visibleRange 只取一屏之内、且不丢跨屏长音 (0.1378ms)\n✔ 6 万音符的曲目单帧只处理屏内约 1% 的块（旧实现是全量重扫 + 全量绘制） (125.8754ms)\n✔ 每帧只处理屏内音符块（旧测试数绘制调用，现在直接数图元） (6.1435ms)\n✔ 放大时落在可视音域之外的高/低音不再产生图元 (2.9038ms)\n✔ rmsAt 静音为 0、满幅接近 1，且随振幅单调 (0.7456ms)\n✔ rmsFromBytes 与 rmsAt 是同一度量（字节量化，128 为中点） (0.551ms)\n✔ smoothEnergy 起音快、收音慢，并容忍未初始化的初值 (0.1065ms)\n✔ P1-12 模板表：3 个任务模板、id 唯一、都有标签/说明/吸附档 (1.7177ms)\n✔ P1-12 listTemplates 返回副本，改它不影响全局 (0.1458ms)\n✔ P1-12 getTemplate：未知 id 返回 null (0.0785ms)\n✔ P1-12 normalizeTemplatePrefs：吸附夹到合法档位，非法视图/颜色丢弃 (0.1229ms)\n✔ P1-12 applyTemplate：只覆盖模板里的键，其余保持原值 (0.137ms)\n✔ P1-12 applyTemplate：未知模板原样返回 (0.0828ms)\n✔ P1-12 matchTemplate：当前偏好正好等于某模板时能命中 (0.1117ms)\n✔ 只需字形转换的词不会被 PHRASE 表误改（移动 → 移動，而非移送） (1.0918ms)\n✔ PHRASE 表的繁体用词仍然生效 (0.4801ms)\n✔ 常见界面文案整体转换正确 (0.6794ms)\n✔ 不需要转换的文本原样返回 (0.1196ms)\nℹ tests 605\nℹ suites 0\nℹ pass 605\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 2138.6548",
+        "stdout": "✔ ★ 每个图元的 fill 必须是字符串或 {stops:[...]} —— 否则 WebGL2 会把它画成纯白 (1.769ms)\n✔ 每个可画图元恰好一个实例；text 与 alpha<=0 被跳过 (0.9046ms)\n✔ 矩形四角落在约定槽位（TL/TR/BR/BL），与顶点着色器的 uv 推导一致 (0.4989ms)\n✔ 坐标按 scale 放大（超采样/DPR 都靠它，图元本身保持 CSS 单位） (0.1002ms)\n✔ 按混合模式切分 run —— 顺序与 count 必须与原图元序列一致 (0.1543ms)\n✔ 4 段渐变被精确采样（canvas 的分段线形在片元里逐段还原） (0.1266ms)\n✔ ★ 缺 stops 的 fill 对象当**全透明**（不许兜底成纯白 —— 2026-10-17 白条 bug 的根） (0.1257ms)\n✔ rgba() 里的 alpha 进入采样色（网格线就是靠它变淡的） (0.101ms)\n✔ 径向光：外半径解析与 canvas2d 一致；内外半径相等时按 canvas 规范不画 (0.0978ms)\n✔ 线展成垂直方向加宽的四边形，线宽进 shape（片元据此做 AA） (0.1016ms)\n✔ 键盘不进泛光源（哑光物体；2026-10-17「黑键太透明」的实测结论） (0.1695ms)\n✔ buildVizBlocks 把同音高首尾相接的音符合并，力度取组内最大 (0.9711ms)\n✔ buildVizBlocks 维持「按 start 升序、互不重叠、end 单调」这一二分依赖的不变量 (0.6176ms)\n✔ visibleRange 只取一屏之内、且不丢跨屏长音 (0.1398ms)\n✔ 6 万音符的曲目单帧只处理屏内约 1% 的块（旧实现是全量重扫 + 全量绘制） (128.9916ms)\n✔ 每帧只处理屏内音符块（旧测试数绘制调用，现在直接数图元） (6.3672ms)\n✔ 放大时落在可视音域之外的高/低音不再产生图元 (2.8823ms)\n✔ rmsAt 静音为 0、满幅接近 1，且随振幅单调 (0.7715ms)\n✔ rmsFromBytes 与 rmsAt 是同一度量（字节量化，128 为中点） (0.4461ms)\n✔ smoothEnergy 起音快、收音慢，并容忍未初始化的初值 (0.1013ms)\n✔ P1-12 模板表：3 个任务模板、id 唯一、都有标签/说明/吸附档 (1.4985ms)\n✔ P1-12 listTemplates 返回副本，改它不影响全局 (0.1256ms)\n✔ P1-12 getTemplate：未知 id 返回 null (0.0705ms)\n✔ P1-12 normalizeTemplatePrefs：吸附夹到合法档位，非法视图/颜色丢弃 (0.1079ms)\n✔ P1-12 applyTemplate：只覆盖模板里的键，其余保持原值 (0.1254ms)\n✔ P1-12 applyTemplate：未知模板原样返回 (0.0772ms)\n✔ P1-12 matchTemplate：当前偏好正好等于某模板时能命中 (0.1064ms)\n✔ 只需字形转换的词不会被 PHRASE 表误改（移动 → 移動，而非移送） (1.4024ms)\n✔ PHRASE 表的繁体用词仍然生效 (0.5055ms)\n✔ 常见界面文案整体转换正确 (0.7369ms)\n✔ 不需要转换的文本原样返回 (0.171ms)\nℹ tests 605\nℹ suites 0\nℹ pass 605\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 2086.4432",
         "stderr": ""
       }
     },
@@ -143,9 +109,9 @@
       "exitCode": 0,
       "signal": null,
       "timedOut": false,
-      "durationMs": 79,
-      "startedAt": "2026-11-06T14:41:02.801Z",
-      "finishedAt": "2026-11-06T14:41:02.880Z",
+      "durationMs": 81,
+      "startedAt": "2026-11-06T15:00:01.202Z",
+      "finishedAt": "2026-11-06T15:00:01.283Z",
       "tail": {
         "stdout": "{\n  \"commands\": 212,\n  \"handlerEntries\": 212,\n  \"missing\": [],\n  \"extra\": []\n}",
         "stderr": ""
@@ -161,9 +127,9 @@
       "exitCode": 0,
       "signal": null,
       "timedOut": false,
-      "durationMs": 76,
-      "startedAt": "2026-11-06T14:41:02.880Z",
-      "finishedAt": "2026-11-06T14:41:02.956Z",
+      "durationMs": 80,
+      "startedAt": "2026-11-06T15:00:01.283Z",
+      "finishedAt": "2026-11-06T15:00:01.363Z",
       "tail": {
         "stdout": "[ipc-coverage] preload methods 265 / tauri methods 210 / missing 57\n[ipc-coverage] preload invoke channels 250 / tauri call channels 196\n  - diffsinger: 16\n  - 设置/杂项: 11\n  - 导出/渲染: 6\n  - 事件/窗口: 6\n  - utau/voicebank: 5\n  - 更新/测速: 4\n  - 模型/安装/平台: 3\n  - 曲库/数据: 2\n  - 其他: 2\n  - 文件/诊断: 2",
         "stderr": ""
@@ -179,9 +145,9 @@
       "exitCode": 0,
       "signal": null,
       "timedOut": false,
-      "durationMs": 118,
-      "startedAt": "2026-11-06T14:41:02.956Z",
-      "finishedAt": "2026-11-06T14:41:03.074Z",
+      "durationMs": 117,
+      "startedAt": "2026-11-06T15:00:01.363Z",
+      "finishedAt": "2026-11-06T15:00:01.480Z",
       "tail": {
         "stdout": "| 指标 | 数值 |\n|---|---:|\n| 前端调用的 bridge 方法（去重） | 214 |\n| Tauri 顶层方法 | 147 |\n| Tauri 嵌套方法 | 83 |\n| **未找到实现** | **25** |\n\n## 未找到实现的方法\n\n- `appUninstall` — frontend/src/components/SettingsPanel.vue\n- `e2e` — frontend/src/audio.js\n- `omrEngine` — frontend/src/views/ViewResources.vue\n- `onSpeedtest` — frontend/src/components/SettingsPanel.vue\n- `onTrayControl` — frontend/src/App.vue\n- `plugin` — frontend/src/views/ViewConvert.vue\n- `plugins` — frontend/src/views/PluginCenter.vue\n- `presets` — frontend/src/views/ViewTranscribe.vue\n- `probeVoicebank` — frontend/src/components/sing/VoicebankPanel.vue\n- `project` — frontend/src/views/ViewEdit.vue\n- `project.autosave` — frontend/src/core/session.js\n- `sfWorkshop` — frontend/src/views/ViewSoundfonts.vue\n- `soundfonts` — frontend/src/audio.js\n- `soundfonts.list` — frontend/src/audio.js\n- `storage` — frontend/src/components/StoragePanel.vue\n- `tasks` — frontend/src/App.vue\n- `transcodeVideo` — frontend/src/views/ViewConvert.vue\n- `update` — frontend/src/App.vue, frontend/src/components/SettingsPanel.vue\n- `updateSpeedtest` — frontend/src/components/SettingsPanel.vue\n- `usermeta` — frontend/src/views/ViewSoundfonts.vue\n- `utauAliasRange` — frontend/src/components/sing/VoicebankPanel.vue\n- `wallpaper` — frontend/src/components/WallpaperGallery.vue, frontend/src/components/WallpaperLibrary.vue\n- `wallpaper.downloadUrl` — frontend/src/components/WallpaperLibrary.vue\n- `wallpaper.searchWallhaven` — frontend/src/components/WallpaperLibrary.vue\n- `wallpaperEngine` — frontend/src/App.vue, frontend/src/components/WallpaperEnginePanel.vue\n\n## 说明\n\n顶层别名（如 copyAsset/openExternal）是对 Electron preload 调用习惯的兼容层；嵌套调用（bridge.storage.report）按 parent.child 匹配。",
         "stderr": ""
@@ -197,9 +163,9 @@
       "exitCode": 3,
       "signal": null,
       "timedOut": false,
-      "durationMs": 87,
-      "startedAt": "2026-11-06T14:41:03.074Z",
-      "finishedAt": "2026-11-06T14:41:03.161Z",
+      "durationMs": 88,
+      "startedAt": "2026-11-06T15:00:01.480Z",
+      "finishedAt": "2026-11-06T15:00:01.568Z",
       "tail": {
         "stdout": "      \"hft_transformer\",\n      \"miros\",\n      \"yourmt3\",\n      \"muscriptor_small\",\n      \"muscriptor_medium\",\n      \"muscriptor_large\",\n      \"beat_this\",\n      \"audio_tagger\",\n      \"aria_amt\",\n      \"hnsep_240512\"\n    ],\n    \"tauriIds\": [\n      \"piano_transcription\",\n      \"hft_transformer\",\n      \"miros\",\n      \"yourmt3\",\n      \"muscriptor_small\",\n      \"muscriptor_medium\",\n      \"muscriptor_large\",\n      \"beat_this\",\n      \"audio_tagger\",\n      \"aria_amt\",\n      \"hnsep_240512\",\n      \"basic_pitch\",\n      \"htdemucs4_6stems\"\n    ]\n  },\n  \"sources\": {\n    \"electron\": \"main/models.js\",\n    \"tauri\": [\n      \"shells/tauri/src/main.rs\",\n      \"shells/tauri/src/model_service.rs\",\n      \"shells/tauri/src/resource_extras.rs\",\n      \"shells/tauri/src/stem_workflow.rs\",\n      \"shells/tauri/src/worker_pool.rs\"\n    ],\n    \"catalog\": \"frontend/public/models-msst-catalog.json\"\n  }\n}",
         "stderr": ""
@@ -277,12 +243,12 @@
       "exitCode": 0,
       "signal": null,
       "timedOut": false,
-      "durationMs": 1315,
-      "startedAt": "2026-11-06T14:41:03.161Z",
-      "finishedAt": "2026-11-06T14:41:04.476Z",
+      "durationMs": 1376,
+      "startedAt": "2026-11-06T15:00:01.568Z",
+      "finishedAt": "2026-11-06T15:00:02.944Z",
       "tail": {
-        "stdout": "test worker_pool::tests::spawn_panic_releases_reserved_slot ... ok\ntest worker_pool::tests::status_does_not_block_on_busy_worker_slot ... ok\ntest worker_pool::tests::status_reports_cap_busy_and_workers ... ok\ntest check_midi_tests::model_import_zip_traversal_and_stems_limit ... ok\ntest resource_extras::tests::soundfont_registry_entries_have_download_urls ... ok\ntest worker_pool::tests::warm_reuse_keeps_one_idle_worker_between_jobs ... ok\ntest rvc_tests::list_and_remove_physical_model ... ok\ntest worker_pool::tests::set_cap_expand_wakes_waiter ... ok\ntest worker_pool::tests::shutdown_wakes_waiters_and_rejects_new_work ... ok\ntest worker_pool::tests::waiter_limit_overflow_returns_explicit_error ... ok\ntest sep_yaml_tests::picks_config_by_model_stem ... ok\ntest rvc_tests::list_external_index_and_remove_keeps_source ... ok\ntest check_midi_tests::gpu_status_and_uninstall ... ok\ntest voicebank_tests::utau_lossy_utf8_does_not_panic ... ok\ntest rvc_tests::import_files_copies_and_detects_engine ... ok\ntest voicebank_tests::unified_tolerates_one_missing_side ... ok\ntest voicebank_tests::unified_size_sums_recursively ... ok\ntest separate_args_tests::builds_separate_args_and_rejects_unknown ... ok\ntest rvc_tests::import_folder_reference_and_physical ... ok\ntest check_midi_tests::storage_report_and_cleanup ... ok\ntest rvc_catalog_tests::embedded_catalog_parses ... ok\ntest check_midi_tests::playlist_crud_roundtrip ... ok\ntest plugin_confirm_tests::extracts_and_restores_on_failure ... ok\ntest voicebank_tests::unified_dsconfig_root_and_one_level ... ok\ntest rvc_zip_tests::import_zip_flat_nested_and_invalid ... ok\ntest voicebank_tests::utau_markers_names_and_single_level ... ok\ntest worker_pool::tests::cap_one_serializes_jobs ... ok\ntest oto_tests::import_zip_bank_nested_traversal_and_duplicate ... ok\ntest worker_pool::tests::cap_two_limits_concurrency_for_eight_jobs ... ok\ntest worker_pool::tests::real_child_worker_echoes_without_stderr_blocking ... ok\ntest worker_pool::tests::real_pool_reuses_warm_worker_between_jobs ... ok\ntest worker_pool::tests::real_cap_two_workers_run_independently ... ok\ntest worker_pool::tests::real_pool_restarts_after_child_eof ... ok\ntest check_midi_tests::real_engine_worker_protocol_warm_and_shutdown ... ok\ntest oto_tests::save_rejects_over_8mb ... ok\ntest worker_pool::tests::real_pool_cancel_unblocks_reading_worker_and_reaps_it ... ok\n\ntest result: ok. 140 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.43s",
-        "stderr": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.71s\n     Running unittests src\\main.rs (target\\debug\\deps\\fufumidi_shell-7161f2fa0feb86be.exe)"
+        "stdout": "test check_midi_tests::model_import_zip ... ok\ntest worker_pool::tests::spawn_panic_releases_reserved_slot ... ok\ntest sep_yaml_tests::picks_config_by_model_stem ... ok\ntest resource_extras::tests::soundfont_registry_entries_have_download_urls ... ok\ntest worker_pool::tests::status_does_not_block_on_busy_worker_slot ... ok\ntest worker_pool::tests::status_reports_cap_busy_and_workers ... ok\ntest worker_pool::tests::set_cap_expand_wakes_waiter ... ok\ntest rvc_tests::list_and_remove_physical_model ... ok\ntest worker_pool::tests::warm_reuse_keeps_one_idle_worker_between_jobs ... ok\ntest worker_pool::tests::shutdown_wakes_waiters_and_rejects_new_work ... ok\ntest worker_pool::tests::waiter_limit_overflow_returns_explicit_error ... ok\ntest rvc_tests::list_external_index_and_remove_keeps_source ... ok\ntest voicebank_tests::utau_lossy_utf8_does_not_panic ... ok\ntest rvc_tests::import_files_copies_and_detects_engine ... ok\ntest voicebank_tests::unified_tolerates_one_missing_side ... ok\ntest separate_args_tests::builds_separate_args_and_rejects_unknown ... ok\ntest voicebank_tests::unified_size_sums_recursively ... ok\ntest check_midi_tests::gpu_status_and_uninstall ... ok\ntest rvc_tests::import_folder_reference_and_physical ... ok\ntest rvc_catalog_tests::embedded_catalog_parses ... ok\ntest check_midi_tests::storage_report_and_cleanup ... ok\ntest plugin_confirm_tests::extracts_and_restores_on_failure ... ok\ntest check_midi_tests::playlist_crud_roundtrip ... ok\ntest rvc_zip_tests::import_zip_flat_nested_and_invalid ... ok\ntest voicebank_tests::unified_dsconfig_root_and_one_level ... ok\ntest voicebank_tests::utau_markers_names_and_single_level ... ok\ntest worker_pool::tests::cap_one_serializes_jobs ... ok\ntest oto_tests::import_zip_bank_nested_traversal_and_duplicate ... ok\ntest worker_pool::tests::cap_two_limits_concurrency_for_eight_jobs ... ok\ntest worker_pool::tests::real_child_worker_echoes_without_stderr_blocking ... ok\ntest worker_pool::tests::real_pool_reuses_warm_worker_between_jobs ... ok\ntest worker_pool::tests::real_cap_two_workers_run_independently ... ok\ntest worker_pool::tests::real_pool_restarts_after_child_eof ... ok\ntest check_midi_tests::real_engine_worker_protocol_warm_and_shutdown ... ok\ntest oto_tests::save_rejects_over_8mb ... ok\ntest worker_pool::tests::real_pool_cancel_unblocks_reading_worker_and_reaps_it ... ok\n\ntest result: ok. 140 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.43s",
+        "stderr": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.77s\n     Running unittests src\\main.rs (target\\debug\\deps\\fufumidi_shell-7161f2fa0feb86be.exe)"
       },
       "note": "cwd=shells/tauri"
     },
@@ -296,12 +262,12 @@
       "exitCode": 0,
       "signal": null,
       "timedOut": false,
-      "durationMs": 1149,
-      "startedAt": "2026-11-06T14:41:04.476Z",
-      "finishedAt": "2026-11-06T14:41:05.625Z",
+      "durationMs": 1124,
+      "startedAt": "2026-11-06T15:00:02.944Z",
+      "finishedAt": "2026-11-06T15:00:04.068Z",
       "tail": {
         "stdout": "",
-        "stderr": "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.91s"
+        "stderr": "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.89s"
       },
       "note": "cwd=shells/tauri"
     },
@@ -315,11 +281,11 @@
       "exitCode": 0,
       "signal": null,
       "timedOut": false,
-      "durationMs": 436,
-      "startedAt": "2026-11-06T14:41:05.625Z",
-      "finishedAt": "2026-11-06T14:41:06.061Z",
+      "durationMs": 458,
+      "startedAt": "2026-11-06T15:00:04.068Z",
+      "finishedAt": "2026-11-06T15:00:04.527Z",
       "tail": {
-        "stdout": "test ping_and_version_match_legacy_contract ... ok\ntest json_lines_run_processes_multiple_requests ... ok\ntest unknown_command_is_json_error ... ok\ntest midi_stats_rejects_missing_file ... ok\ntest midi_stats_reports_generated_file ... ok\ntest batch_transforms_handle_empty_directory ... ok\ntest batch_stats_flags_broken_files ... ok\ntest hash_batch_outputs_sha256_hex ... ok\ntest quantize_batch_writes_quantized_copy ... ok\ntest quantize_batch_defaults_to_eighth_notes ... ok\ntest transpose_batch_defaults_to_one_octave ... ok\ntest transpose_batch_writes_transposed_copy ... ok\ntest spawned_binary_speaks_json_lines_end_to_end ... ok\ntest spawned_cli_prints_single_line_json ... ok\n\ntest result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s\n\n\nrunning 7 tests\ntest empty_line_is_ignored ... ok\ntest exit_sets_exit_flag ... ok\ntest argv_style_is_accepted ... ok\ntest invalid_json_returns_error_response ... ok\ntest ping_keeps_id_and_ok ... ok\ntest result_line_prefix_and_valid_json ... ok\ntest unknown_command_is_error_not_panic ... ok\n\ntest result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "stdout": "test ping_and_version_match_legacy_contract ... ok\ntest midi_stats_rejects_missing_file ... ok\ntest json_lines_exit_marks_response ... ok\ntest unknown_command_is_json_error ... ok\ntest midi_stats_reports_generated_file ... ok\ntest spawned_binary_speaks_json_lines_end_to_end ... ok\ntest batch_transforms_handle_empty_directory ... ok\ntest spawned_cli_prints_single_line_json ... ok\ntest batch_stats_flags_broken_files ... ok\ntest hash_batch_outputs_sha256_hex ... ok\ntest quantize_batch_defaults_to_eighth_notes ... ok\ntest transpose_batch_defaults_to_one_octave ... ok\ntest quantize_batch_writes_quantized_copy ... ok\ntest transpose_batch_writes_transposed_copy ... ok\n\ntest result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s\n\n\nrunning 7 tests\ntest empty_line_is_ignored ... ok\ntest exit_sets_exit_flag ... ok\ntest argv_style_is_accepted ... ok\ntest ping_keeps_id_and_ok ... ok\ntest invalid_json_returns_error_response ... ok\ntest unknown_command_is_error_not_panic ... ok\ntest result_line_prefix_and_valid_json ... ok\n\ntest result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
         "stderr": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s\n     Running unittests src\\lib.rs (target\\debug\\deps\\fufumidi_core-d7195fae26400537.exe)\n     Running tests\\smf_contract.rs (target\\debug\\deps\\smf_contract-5254051d8ff99481.exe)\n     Running tests\\smf_parse.rs (target\\debug\\deps\\smf_parse-ae35e2ee1cafe989.exe)\n     Running tests\\stats.rs (target\\debug\\deps\\stats-9104e141ed1138be.exe)\n     Running tests\\transform.rs (target\\debug\\deps\\transform-b3533266a4770693.exe)\n     Running unittests src\\lib.rs (target\\debug\\deps\\fufumidi_engine-a41c75175103d234.exe)\n     Running unittests src\\main.rs (target\\debug\\deps\\fufumidi_engine-3c49ee376abe21c1.exe)\n     Running tests\\cli_tests.rs (target\\debug\\deps\\cli_tests-9b456da66ee38888.exe)\n     Running tests\\protocol_contract.rs (target\\debug\\deps\\protocol_contract-eec4598f63d34a20.exe)\n   Doc-tests fufumidi_core\n   Doc-tests fufumidi_engine"
       },
       "note": "cwd=crates（crates/rust-core 不存在，回退到 crates/ Rust workspace）"
@@ -334,11 +300,11 @@
       "exitCode": 0,
       "signal": null,
       "timedOut": false,
-      "durationMs": 7930,
-      "startedAt": "2026-11-06T14:41:06.061Z",
-      "finishedAt": "2026-11-06T14:41:13.991Z",
+      "durationMs": 8556,
+      "startedAt": "2026-11-06T15:00:04.527Z",
+      "finishedAt": "2026-11-06T15:00:13.083Z",
       "tail": {
-        "stdout": "../renderer/dist/assets/ViewMusic-DlnlTLkP.js                2.02 kB │ gzip:   1.17 kB\n../renderer/dist/assets/score-DmLGVsqx.js                    2.52 kB │ gzip:   1.48 kB\n../renderer/dist/assets/utau_tools-DBFMT2v5.js               2.98 kB │ gzip:   1.55 kB\n../renderer/dist/assets/timeline-Cso9zidL.js                 3.55 kB │ gzip:   1.45 kB\n../renderer/dist/assets/CommandPalette-DY6HCfwT.js           4.13 kB │ gzip:   2.12 kB\n../renderer/dist/assets/ThemeLibrary-qT--bzLy.js             4.21 kB │ gzip:   2.07 kB\n../renderer/dist/assets/WallpaperGallery-D-MxlwYV.js         6.28 kB │ gzip:   2.75 kB\n../renderer/dist/assets/arrange-D17S1Ptj.js                  6.65 kB │ gzip:   2.38 kB\n../renderer/dist/assets/recorder-DIhWABmS.js                 7.67 kB │ gzip:   2.86 kB\n../renderer/dist/assets/ViewPlay-CtFEDwPj.js                 8.87 kB │ gzip:   4.04 kB\n../renderer/dist/assets/ViewHome-DKd1-Vxz.js                 8.98 kB │ gzip:   3.55 kB\n../renderer/dist/assets/ViewAbout-wcIub5Ih.js                9.09 kB │ gzip:   3.89 kB\n../renderer/dist/assets/analysis-Dgglqo9i.js                10.42 kB │ gzip:   4.59 kB\n../renderer/dist/assets/TaskCenter-DiDGAHie.js              11.39 kB │ gzip:   4.38 kB\n../renderer/dist/assets/ViewAnalyze-CBkaD03e.js             11.94 kB │ gzip:   4.98 kB\n../renderer/dist/assets/PluginCenter-C51K1MqW.js            12.31 kB │ gzip:   4.47 kB\n../renderer/dist/assets/GuideOverlay-THNlvVSh.js            14.25 kB │ gzip:   6.18 kB\n../renderer/dist/assets/ViewCover-BLRi35pN.js               14.77 kB │ gzip:   5.12 kB\n../renderer/dist/assets/ViewLyrics-FdlS7qJl.js              15.44 kB │ gzip:   5.89 kB\n../renderer/dist/assets/vizbg-ClteHI6K.js                   20.93 kB │ gzip:   9.23 kB\n../renderer/dist/assets/ViewViz-BxbeAe0Q.js                 20.98 kB │ gzip:   7.82 kB\n../renderer/dist/assets/ViewViews-BhQA8Z_o.js               21.63 kB │ gzip:   8.41 kB\n../renderer/dist/assets/ViewPiano3D-DeCC8UwF.js             21.87 kB │ gzip:   8.71 kB\n../renderer/dist/assets/AppearancePanel-DYXjETJH.js         27.96 kB │ gzip:   9.57 kB\n../renderer/dist/assets/ViewTranscode-vjVmIjAW.js           35.97 kB │ gzip:  12.90 kB\n../renderer/dist/assets/ViewScore-Csd--rKm.js               43.05 kB │ gzip:  15.79 kB\n../renderer/dist/assets/index-aH-46XFj.js                   48.89 kB │ gzip:  19.16 kB\n../renderer/dist/assets/diffsinger-Bo_2qQ6P.js              60.43 kB │ gzip:  18.34 kB\n../renderer/dist/assets/ViewConvert-Cb_kJxzs.js             61.09 kB │ gzip:  23.01 kB\n../renderer/dist/assets/ViewVoicebank-CYBQ0tEb.js           75.85 kB │ gzip:  50.09 kB\n../renderer/dist/assets/SettingsPanel-gUhflxPV.js           80.69 kB │ gzip:  26.36 kB\n../renderer/dist/assets/vue-Zj6JKP8a.js                     86.20 kB │ gzip:  34.11 kB\n../renderer/dist/assets/ViewTranscribe-BI1bNLEF.js          95.62 kB │ gzip:  30.16 kB\n../renderer/dist/assets/ViewResources-DIJ7Kc-K.js          113.50 kB │ gzip:  35.02 kB\n../renderer/dist/assets/ViewSing-DwDQA838.js               199.80 kB │ gzip:  67.09 kB\n../renderer/dist/assets/ViewEdit-DNUP_Tf6.js               245.00 kB │ gzip:  79.75 kB\n../renderer/dist/assets/pdf-C2gx_7a2.js                    359.61 kB │ gzip: 105.93 kB\n../renderer/dist/assets/index-Cx7vEzlp.js                1,476.82 kB │ gzip: 543.25 kB\n✓ built in 7.10s",
+        "stdout": "../renderer/dist/assets/ViewMusic-CGykJr9d.js                2.02 kB │ gzip:   1.17 kB\n../renderer/dist/assets/score-Cxvcat3P.js                    2.52 kB │ gzip:   1.48 kB\n../renderer/dist/assets/utau_tools-Dc7bWb3g.js               2.98 kB │ gzip:   1.55 kB\n../renderer/dist/assets/timeline-76synirG.js                 3.55 kB │ gzip:   1.44 kB\n../renderer/dist/assets/CommandPalette-FjALNdmr.js           4.13 kB │ gzip:   2.12 kB\n../renderer/dist/assets/ThemeLibrary-DFfP-BtP.js             4.21 kB │ gzip:   2.07 kB\n../renderer/dist/assets/WallpaperGallery-CYgn5TlS.js         6.28 kB │ gzip:   2.75 kB\n../renderer/dist/assets/arrange-DF56Skxd.js                  6.65 kB │ gzip:   2.38 kB\n../renderer/dist/assets/recorder-DIhWABmS.js                 7.67 kB │ gzip:   2.86 kB\n../renderer/dist/assets/ViewPlay-BBCTrBMm.js                 8.87 kB │ gzip:   4.04 kB\n../renderer/dist/assets/ViewHome-grQZOHKF.js                 8.98 kB │ gzip:   3.55 kB\n../renderer/dist/assets/ViewAbout-DB_Uk-dX.js                9.09 kB │ gzip:   3.89 kB\n../renderer/dist/assets/analysis-Dcpz_1lY.js                10.42 kB │ gzip:   4.59 kB\n../renderer/dist/assets/TaskCenter-Dl_zwUXk.js              11.39 kB │ gzip:   4.38 kB\n../renderer/dist/assets/ViewAnalyze-CAhlLkM4.js             11.94 kB │ gzip:   4.98 kB\n../renderer/dist/assets/PluginCenter-CnZ7nwFH.js            12.31 kB │ gzip:   4.47 kB\n../renderer/dist/assets/GuideOverlay-CaGtSj5F.js            14.25 kB │ gzip:   6.18 kB\n../renderer/dist/assets/ViewCover-DWO_pILa.js               14.77 kB │ gzip:   5.12 kB\n../renderer/dist/assets/ViewLyrics-BBFKe3U4.js              15.44 kB │ gzip:   5.89 kB\n../renderer/dist/assets/vizbg-Z1GRVLin.js                   20.93 kB │ gzip:   9.23 kB\n../renderer/dist/assets/ViewViz-Dvz6bDeY.js                 20.98 kB │ gzip:   7.82 kB\n../renderer/dist/assets/ViewViews-By6B1h9H.js               21.63 kB │ gzip:   8.41 kB\n../renderer/dist/assets/ViewPiano3D-BaZn8_jh.js             21.87 kB │ gzip:   8.71 kB\n../renderer/dist/assets/AppearancePanel-0BtApykN.js         27.96 kB │ gzip:   9.57 kB\n../renderer/dist/assets/ViewTranscode-B4BtRkJd.js           35.97 kB │ gzip:  12.90 kB\n../renderer/dist/assets/ViewScore-CGURphpX.js               43.05 kB │ gzip:  15.79 kB\n../renderer/dist/assets/index-C_tsF0Ng.js                   48.89 kB │ gzip:  19.16 kB\n../renderer/dist/assets/diffsinger-Caw_nLOP.js              60.43 kB │ gzip:  18.34 kB\n../renderer/dist/assets/ViewConvert-Zl6LLV0x.js             61.09 kB │ gzip:  23.01 kB\n../renderer/dist/assets/ViewVoicebank-BuSgknhT.js           75.85 kB │ gzip:  50.09 kB\n../renderer/dist/assets/SettingsPanel-C8xzn1Tq.js           80.69 kB │ gzip:  26.36 kB\n../renderer/dist/assets/vue-Zj6JKP8a.js                     86.20 kB │ gzip:  34.11 kB\n../renderer/dist/assets/ViewTranscribe-zd7q8Z-8.js          95.62 kB │ gzip:  30.16 kB\n../renderer/dist/assets/ViewResources-D8hA4XMq.js          113.50 kB │ gzip:  35.02 kB\n../renderer/dist/assets/ViewSing-DkejBMnI.js               199.80 kB │ gzip:  67.09 kB\n../renderer/dist/assets/ViewEdit-BEJRCwTr.js               245.00 kB │ gzip:  79.75 kB\n../renderer/dist/assets/pdf-C2gx_7a2.js                    359.61 kB │ gzip: 105.93 kB\n../renderer/dist/assets/index-B-St8dOA.js                1,476.82 kB │ gzip: 543.24 kB\n✓ built in 7.58s",
         "stderr": "[plugin vite:reporter] \n(!) E:/Midi/FuFumidi-Source/frontend/src/audio.js is dynamically imported by E:/Midi/FuFumidi-Source/frontend/src/stores/settings.ts, E:/Midi/FuFumidi-Source/frontend/src/views/ViewSoundfonts.vue but also statically imported by E:/Midi/FuFumidi-Source/frontend/src/components/EditorCanvas.vue, E:/Midi/FuFumidi-Source/frontend/src/components/PlayerBar.vue, E:/Midi/FuFumidi-Source/frontend/src/components/editor/RecordPanel.vue, E:/Midi/FuFumidi-Source/frontend/src/components/viz/Piano3D.vue, E:/Midi/FuFumidi-Source/frontend/src/core/sing_transport.js, E:/Midi/FuFumidi-Source/frontend/src/stores/app.ts, E:/Midi/FuFumidi-Source/frontend/src/views/ViewAnalyze.vue, E:/Midi/FuFumidi-Source/frontend/src/views/ViewArrange.vue, E:/Midi/FuFumidi-Source/frontend/src/views/ViewEdit.vue, E:/Midi/FuFumidi-Source/frontend/src/views/ViewHome.vue, E:/Midi/FuFumidi-Source/frontend/src/views/ViewLyrics.vue, E:/Midi/FuFumidi-Source/frontend/src/views/ViewScore.vue, E:/Midi/FuFumidi-Source/frontend/src/views/ViewSing.vue?vue&type=script&setup=true&lang.ts, E:/Midi/FuFumidi-Source/frontend/src/views/ViewSoundfonts.vue, E:/Midi/FuFumidi-Source/frontend/src/views/ViewViz.vue, dynamic import will not move module into another chunk.\n\n\n(!) Some chunks are larger than 500 kB after minification. Consider:\n- Using dynamic import() to code-split the application\n- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks\n- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit."
       }
     },
@@ -352,11 +318,11 @@
       "exitCode": 0,
       "signal": null,
       "timedOut": false,
-      "durationMs": 5722,
-      "startedAt": "2026-11-06T14:41:13.991Z",
-      "finishedAt": "2026-11-06T14:41:19.713Z",
+      "durationMs": 5677,
+      "startedAt": "2026-11-06T15:00:13.083Z",
+      "finishedAt": "2026-11-06T15:00:18.760Z",
       "tail": {
-        "stdout": "{\n  \"ok\": true,\n  \"model\": \"hft_transformer\",\n  \"exe\": \"E:\\\\Midi\\\\FuFumidi-Source\\\\shells\\\\tauri\\\\target\\\\debug\\\\fufumidi-shell.exe\",\n  \"timeoutMs\": 300000,\n  \"durationMs\": 5624,\n  \"exitCode\": 0,\n  \"signal\": null,\n  \"timedOut\": false,\n  \"spawnError\": null,\n  \"marker\": \"checkpoint/MAESTRO-V3/model_016_003.pkl\",\n  \"markerPath\": \"C:\\\\Users\\\\qdTXTbp\\\\AppData\\\\Local\\\\Temp\\\\fufumidi-model-fetch-NuTABq\\\\models\\\\hft_transformer\\\\checkpoint\\\\MAESTRO-V3\\\\model_016_003.pkl\",\n  \"markerExists\": true,\n  \"sizeBytes\": 22136957,\n  \"maxDownloadBytes\": 52428800,\n  \"tooBig\": false,\n  \"download\": {\n    \"id\": \"hft_transformer\",\n    \"ok\": true,\n    \"path\": \"C:\\\\Users\\\\qdTXTbp\\\\AppData\\\\Local\\\\Temp\\\\fufumidi-model-fetch-NuTABq\\\\models\\\\hft_transformer\",\n    \"size\": 22136957\n  },\n  \"dataRoot\": \"C:\\\\Users\\\\qdTXTbp\\\\AppData\\\\Local\\\\Temp\\\\fufumidi-model-fetch-NuTABq\",\n  \"cleanedUp\": true,\n  \"cleanupError\": null,\n  \"stderrTail\": \"\"\n}",
+        "stdout": "{\n  \"ok\": true,\n  \"model\": \"hft_transformer\",\n  \"exe\": \"E:\\\\Midi\\\\FuFumidi-Source\\\\shells\\\\tauri\\\\target\\\\debug\\\\fufumidi-shell.exe\",\n  \"timeoutMs\": 300000,\n  \"durationMs\": 5588,\n  \"exitCode\": 0,\n  \"signal\": null,\n  \"timedOut\": false,\n  \"spawnError\": null,\n  \"marker\": \"checkpoint/MAESTRO-V3/model_016_003.pkl\",\n  \"markerPath\": \"C:\\\\Users\\\\qdTXTbp\\\\AppData\\\\Local\\\\Temp\\\\fufumidi-model-fetch-nLmZGq\\\\models\\\\hft_transformer\\\\checkpoint\\\\MAESTRO-V3\\\\model_016_003.pkl\",\n  \"markerExists\": true,\n  \"sizeBytes\": 22136957,\n  \"maxDownloadBytes\": 52428800,\n  \"tooBig\": false,\n  \"download\": {\n    \"id\": \"hft_transformer\",\n    \"ok\": true,\n    \"path\": \"C:\\\\Users\\\\qdTXTbp\\\\AppData\\\\Local\\\\Temp\\\\fufumidi-model-fetch-nLmZGq\\\\models\\\\hft_transformer\",\n    \"size\": 22136957\n  },\n  \"dataRoot\": \"C:\\\\Users\\\\qdTXTbp\\\\AppData\\\\Local\\\\Temp\\\\fufumidi-model-fetch-nLmZGq\",\n  \"cleanedUp\": true,\n  \"cleanupError\": null,\n  \"stderrTail\": \"\"\n}",
         "stderr": ""
       },
       "details": {
@@ -364,13 +330,13 @@
         "model": "hft_transformer",
         "exe": "E:\\Midi\\FuFumidi-Source\\shells\\tauri\\target\\debug\\fufumidi-shell.exe",
         "timeoutMs": 300000,
-        "durationMs": 5624,
+        "durationMs": 5588,
         "exitCode": 0,
         "signal": null,
         "timedOut": false,
         "spawnError": null,
         "marker": "checkpoint/MAESTRO-V3/model_016_003.pkl",
-        "markerPath": "C:\\Users\\qdTXTbp\\AppData\\Local\\Temp\\fufumidi-model-fetch-NuTABq\\models\\hft_transformer\\checkpoint\\MAESTRO-V3\\model_016_003.pkl",
+        "markerPath": "C:\\Users\\qdTXTbp\\AppData\\Local\\Temp\\fufumidi-model-fetch-nLmZGq\\models\\hft_transformer\\checkpoint\\MAESTRO-V3\\model_016_003.pkl",
         "markerExists": true,
         "sizeBytes": 22136957,
         "maxDownloadBytes": 52428800,
@@ -378,10 +344,10 @@
         "download": {
           "id": "hft_transformer",
           "ok": true,
-          "path": "C:\\Users\\qdTXTbp\\AppData\\Local\\Temp\\fufumidi-model-fetch-NuTABq\\models\\hft_transformer",
+          "path": "C:\\Users\\qdTXTbp\\AppData\\Local\\Temp\\fufumidi-model-fetch-nLmZGq\\models\\hft_transformer",
           "size": 22136957
         },
-        "dataRoot": "C:\\Users\\qdTXTbp\\AppData\\Local\\Temp\\fufumidi-model-fetch-NuTABq",
+        "dataRoot": "C:\\Users\\qdTXTbp\\AppData\\Local\\Temp\\fufumidi-model-fetch-nLmZGq",
         "cleanedUp": true,
         "cleanupError": null,
         "stderrTail": ""

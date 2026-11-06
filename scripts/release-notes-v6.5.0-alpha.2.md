@@ -60,3 +60,13 @@
 - 无头环境未做真实窗口内的交互验证；三态按钮与进度展示由前端单测与静态审计覆盖。
 - 插件 JS 宿主、Audiveris MSI 安装与 homr venv 安装尚未在 Tauri 侧完整移植，相关入口返回明确错误。
 - 安装包升级 / 数据保留 / 完整 E2E 仍需在 VM 内跑一次（本版未执行窗口级 E2E）。
+
+## 发布状态（2026-11-06 23:0x）
+
+- 代码已提交并推送到 GitHub：`feat/audio-tagger-auto-probe` @ `3379542d`。
+- 安装包已归档：`E:\Midi\安装包\FuFumidi_6.5.0-alpha.2_x64-setup.exe`
+  （251,795,966 B，SHA-256 `569E95E1028855C301DDC438BB9AC2C7A389FD76C194E5979B56561503510E07`）。
+- 同一文件另存为 `FuFumidi.Install.6.5.0-alpha.2.exe` 供更新器识别（需要资产名包含 install）。
+- **未上传 Release 资产**：当前环境没有 GitHub / CNB token；且远端 `v6.5.0-alpha.2` 标签与 Release
+  已被 2026-10-30 的旧 alpha.2 占用（资产为旧的 FuFumidi.Install.exe）。建议下一次上传使用
+  `v6.5.0-tauri-alpha.2` 或直接递增到 alpha.3，避免与旧 release 资产混淆。
