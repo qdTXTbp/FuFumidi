@@ -46,3 +46,15 @@
 - 插件应用事件（song-loaded/view-changed 等）暂未接入前端事件源。
 - OMR 的 Audiveris MSI 仅验证下载与指纹，未执行 msiexec 解包（按要求不运行安装器）；homr venv 安装未实机执行。
 - GPU 分卷下载目前串行。
+
+## 发布状态（2026-11-07 00:25）
+
+- **预发行版**（prerelease=true）：已发布到 GitHub Releases 与 CNB Releases，tag `v6.5.0-alpha.3`，
+  标题「FuFumidi 6.5.0-alpha.3 · Tauri（预发行）」。
+- 资产：
+  - `FuFumidi_6.5.0-alpha.3_x64-setup.exe`（251,905,251 B）
+  - `FuFumidi.Install.exe`（同一文件，更新器按 install 资产名识别）
+  - `FuFumidi-6.5.0-alpha.3-release-notes.md`
+  - `SHA256SUMS-alpha.3.txt`
+- SHA-256：`40069066AE83D7E67C7711A6D1A21DEB4C6C8F1EE34DE00866860862AC026C26`
+- 本地归档：`E:\Midi\安装包\FuFumidi_6.5.0-alpha.3_x64-setup.exe`
