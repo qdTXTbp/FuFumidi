@@ -30,7 +30,7 @@ pub fn pick_model() -> Option<String> {
             if models_dir().join(sub).join(id).is_dir() { return Some(id.to_string()); }
         }
     }
-    model_list().into_iter().find(|m| m.get("kind").and_then(|v| v.as_str()) == Some("separate") && m.get("exists").and_then(|v| v.as_bool()) == Some(true)).and_then(|m| m.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+    crate::model_service::list_plain().into_iter().find(|m| m.get("kind").and_then(|v| v.as_str()) == Some("separate") && m.get("exists").and_then(|v| v.as_bool()) == Some(true)).and_then(|m| m.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()))
 }
 
 fn run_worker(req: &serde_json::Value) -> Result<serde_json::Value, String> {

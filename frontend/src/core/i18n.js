@@ -3346,6 +3346,7 @@ export const I18N_MAP = {
   '专辑': 'Album',
   '专辑封面': 'Album art',
   '个下载中': ' downloading',
+  '个已暂停': ' paused',
   '个歌单': ' playlists',
   '云同步': 'Cloud sync',
   '云端存档': 'Cloud save',
@@ -6872,6 +6873,26 @@ export const I18N_MAP = {
   '难度': 'Difficulty',
   '外接 MIDI / 电脑键盘': 'External MIDI / Computer keyboard',
   '载入一首 MIDI 或选择内置曲目': 'Load a MIDI or choose a built-in song',
+
+  /* ---- 资源中心模型下载三态（S7：暂停 / 继续 / 取消 / 清单大小）---- */
+  '暂停下载': 'Pause download',
+  '继续下载': 'Resume download',
+  '清单大小': 'Manifest size',
+  '分组': 'Group',
+  '用途': 'Purpose',
+  '运行时包': 'Runtime bundle',
+  '单文件': 'Single file',
+  'GitHub 分卷仓库': 'GitHub parts repo',
+  'HuggingFace 仓库': 'HuggingFace repo',
+  '压缩包（解包）': 'Archive (unpacked)',
+  '随包自带': 'Bundled',
+  '该模型随包自带，无需下载': 'This model ships with the app; no download needed',
+  '当前环境不支持暂停下载': 'This environment does not support pausing downloads',
+  '暂停失败：': 'Pause failed: ',
+  '已暂停（断点已保留，继续时会接着下）': 'Paused (partial data kept; Resume continues where it stopped)',
+  '请先取消下载再删除': 'Cancel the download before deleting',
+  '该功能尚未在 Tauri 桌面版移植：': 'Not yet ported to the Tauri desktop build: ',
+  '等待后台任务完成超时（可稍后刷新查看结果）': 'Timed out waiting for the background task (refresh later to check the result)',
 };
 
 /* 语言状态（响应式：切语言后 t() 返回值变化，Vue 模板自动重渲染） */

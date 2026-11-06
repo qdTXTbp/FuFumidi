@@ -4,7 +4,8 @@ import fs from 'node:fs';
 
 const file = process.argv[2] || 'shells/tauri/src/main.rs';
 const src = fs.readFileSync(file, 'utf8');
-const defs = [...src.matchAll(/#\[tauri::command\]\s*(?:pub\s+)?(?:async\s+)?fn\s+([A-Za-z0-9_]+)/g)].map((m) => m[1]);
+// 兼容 #[tauri::command] 与 #[tauri::command(async)] / #[tauri::command(rename_all = "...")] 等带参数形式。
+const defs = [...src.matchAll(/#\[\s*tauri::command(?:\s*\([^)]*\))?\s*\]\s*(?:pub\s+)?(?:async\s+)?fn\s+([A-Za-z0-9_]+)/g)].map((m) => m[1]);
 const handlerBlock = (src.match(/generate_handler!\[([\s\S]*?)\]/) || [null, ''])[1];
 const registered = new Set([...handlerBlock.matchAll(/[A-Za-z0-9_]+/g)].map((m) => m[0]));
 const missing = [...new Set(defs.filter((d) => !registered.has(d)))].sort();

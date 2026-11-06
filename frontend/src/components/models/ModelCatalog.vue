@@ -38,7 +38,7 @@
             v-for="(m, i) in g.items"
             :key="m.id"
             class="vm-card"
-            :class="{ inst: m.exists, down: prog[m.id] && prog[m.id].active }"
+            :class="{ inst: m.exists, down: isDownloading(m) || isPaused(m), fail: isFailed(m) }"
             :style="{ animationDelay: (i * 40) + 'ms' }"
           >
             <div class="vm-top" :class="'k-' + (m.kind || 'other')"></div>
@@ -48,25 +48,44 @@
             </div>
             <div class="vm-name-line"><div class="vm-name">{{ m.name }}</div><span v-if="m.best" class="vm-best" :title="t('该领域效果最佳')">👑 {{ m.best }}</span></div>
             <div class="vm-use">{{ m.use || m.note || '' }}</div>
+            <!-- group / runtime / 分卷（Tauri 契约新增字段）：没有就不占位 -->
+            <div v-if="m.group || m.runtime || m.parts" class="vm-tags">
+              <span v-if="m.group" class="vm-tag">{{ m.group }}</span>
+              <span v-if="m.runtime" class="vm-tag mono" :title="t('运行时')">{{ m.runtime }}</span>
+              <span v-if="m.parts" class="vm-tag">{{ t('分卷') }} {{ partsText(m) }}</span>
+            </div>
             <div class="vm-foot">
               <template v-if="m.external">
                 <span class="pill">{{ t('外部来源') }}</span>
                 <button class="btn sm" @click.stop="$emit('openExternal', m)">{{ t('打开来源') }}</button>
               </template>
+              <template v-else-if="isDownloading(m)">
+                <span class="pill run">{{ pct(m) }}%</span>
+                <button class="btn sm ghost" @click.stop="$emit('pause', m)">{{ t('暂停') }}</button>
+                <button class="btn sm" @click.stop="$emit('cancel', m.id)">{{ t('取消') }}</button>
+              </template>
+              <template v-else-if="isPaused(m)">
+                <span class="pill pause">{{ t('已暂停') }}</span>
+                <button class="btn sm primary" @click.stop="$emit('resume', m)">{{ t('继续') }}</button>
+                <button class="btn sm" @click.stop="$emit('cancel', m.id)">{{ t('取消') }}</button>
+              </template>
+              <template v-else-if="isFailed(m)">
+                <span class="pill bad">{{ t('下载失败') }}</span>
+                <button class="btn sm" @click.stop="$emit('download', m)">{{ t('重试') }}</button>
+              </template>
               <template v-else-if="m.exists">
                 <span class="pill on">{{ t('已安装') }}</span>
                 <button class="btn sm" @click.stop="$emit('remove', m)">{{ t('删除') }}</button>
-              </template>
-              <template v-else-if="prog[m.id] && prog[m.id].active">
-                <span class="pill run">{{ prog[m.id].percent || 0 }}%</span>
-                <button class="btn sm" @click.stop="$emit('cancel', m.id)">{{ t('取消') }}</button>
               </template>
               <template v-else>
                 <span class="pill off">{{ t('未安装') }}</span>
                 <button class="btn sm" @click.stop="$emit('download', m)">{{ t('下载') }}</button>
               </template>
             </div>
-            <div v-if="prog[m.id] && prog[m.id].active" class="mini-bar"><i :style="{ transform: 'scaleX(' + ((prog[m.id].percent || 0) / 100) + ')' }"></i></div>
+            <!-- 未下载时给清单大小 / minSize（不再显示 0）；下载中给实时已收/总量 -->
+            <div v-if="sizeLabel(m)" class="vm-size">{{ sizeLabel(m) }}</div>
+            <div v-if="isFailed(m) && prog[m.id] && prog[m.id].error" class="vm-err" :title="prog[m.id].error">{{ prog[m.id].error }}</div>
+            <div v-if="isDownloading(m) || isPaused(m)" class="mini-bar" :class="{ paused: isPaused(m) }"><i :style="{ transform: 'scaleX(' + (pct(m) / 100) + ')' }"></i></div>
           </div>
         </div>
       </section>
@@ -82,6 +101,7 @@
 import { computed, ref } from 'vue';
 import Icon from '../Icon.vue';
 import { t } from '../../core/i18n.js';
+import { DL, downloadState, expectedBytes, manifestBytes } from '../../core/model-download.js';
 
 const props = defineProps({
   items: { type: Array, default: () => [] },
@@ -93,10 +113,44 @@ const props = defineProps({
   note: { type: String, default: '' },
   emptyText: { type: String, default: '' },
 });
-defineEmits(['download', 'remove', 'cancel', 'openExternal']);
+defineEmits(['download', 'remove', 'cancel', 'pause', 'resume', 'openExternal']);
 
 const query = ref('');
 const stateFilter = ref('all');
+
+/* ---------------- 下载三态（与 ViewModels 同一套语义，见 core/model-download.js） ---------------- */
+function human(n) {
+  const v = Number(n) || 0;
+  if (!v) return '';
+  if (v >= 1e9) return (v / 1e9).toFixed(2) + ' GB';
+  if (v >= 1e6) return (v / 1e6).toFixed(0) + ' MB';
+  if (v >= 1e3) return (v / 1e3).toFixed(0) + ' KB';
+  return v + ' B';
+}
+function entryOf(m) { return props.prog[m.id]; }
+function stateOf(m) { return downloadState(m, entryOf(m)); }
+function isDownloading(m) { return stateOf(m) === DL.DOWNLOADING; }
+function isPaused(m) { return stateOf(m) === DL.PAUSED; }
+function isFailed(m) { return stateOf(m) === DL.FAILED; }
+function pct(m) { return Math.max(0, Math.min(100, Math.round(Number(entryOf(m) && entryOf(m).percent) || 0))); }
+function sizeLabel(m) {
+  const e = expectedBytes(m, entryOf(m));
+  if (e.live) return human(e.received) + ' / ' + human(e.bytes);
+  if (!e.bytes) return stateOf(m) === DL.INSTALLED ? human(m.size) : '';
+  return (e.isMin ? '≥ ' : '') + human(e.bytes);
+}
+/* 分卷描述：与 ViewModels 的 partsText 同逻辑（声库页/模型页各自 scoped，不跨组件引） */
+function partsText(m) {
+  const n = Number(m && m.parts) || 0;
+  if (!n) return '';
+  const sizes = (m && Array.isArray(m.partSizes)) ? m.partSizes : [];
+  if (sizes.length === n) {
+    const min = Math.min.apply(null, sizes);
+    const max = Math.max.apply(null, sizes);
+    return n + ' × ~' + human(min) + (max !== min ? ' · ' + human(manifestBytes(m).bytes) : '');
+  }
+  return String(n);
+}
 
 const flat = computed(() => {
   const q = query.value.trim().toLowerCase();
@@ -148,6 +202,7 @@ const groups = computed(() => {
 .vm-card:hover { transform: translateY(-3px); box-shadow: var(--shadow-lg); border-color: color-mix(in srgb, var(--brand-coral) 40%, transparent); }
 .vm-card.inst { border-color: color-mix(in srgb, var(--ok, var(--t-ok)) 45%, transparent); }
 .vm-card.down { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent); }
+.vm-card.fail { border-color: color-mix(in srgb, var(--error) 38%, transparent); }
 .vm-top { position: absolute; left: 0; right: 0; top: 0; height: 4px; }
 .vm-top.k-transcribe { background: linear-gradient(90deg, var(--data-7), var(--data-1)); }
 .vm-top.k-separate { background: linear-gradient(90deg, var(--t-info), var(--t-info)); }
@@ -161,13 +216,21 @@ const groups = computed(() => {
 .vm-name-line { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
 .vm-best { display: inline-flex; align-items: center; gap: 2px; font-size: var(--fs-xs); font-weight: 700; color: var(--t-warn); background: linear-gradient(135deg, var(--data-2), var(--data-3)); padding: 1px 6px; border-radius: var(--r-lg); line-height: 15px; }
 .vm-use { font-size: var(--fs-sm); color: var(--slate); line-height: 1.6; flex: 1; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.vm-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 2px; gap: var(--sp-2); }
+.vm-tags { display: flex; align-items: center; gap: var(--sp-1); flex-wrap: wrap; }
+.vm-tag { font-size: var(--fs-xs); line-height: 16px; padding: 0 6px; border-radius: var(--r-sm); background: var(--surface-soft); color: var(--stone); }
+.vm-tag.mono { font-family: var(--mono); }
+.vm-size { font-size: var(--fs-xs); color: var(--stone); font-family: var(--mono); }
+.vm-err { font-size: var(--fs-xs); color: var(--error); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vm-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 2px; gap: var(--sp-2); flex-wrap: wrap; }
 .pill { font-size: var(--fs-xs); font-weight: 700; padding: 2px 8px; border-radius: var(--r-lg); letter-spacing: .2px; white-space: nowrap; }
 .pill.on { background: color-mix(in srgb, var(--ok,var(--t-ok)) 14%, transparent); color: var(--ok,var(--t-ok)); }
 .pill.run { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
+.pill.pause { background: color-mix(in srgb, var(--t-warn) 16%, transparent); color: var(--t-warn); }
+.pill.bad { background: color-mix(in srgb, var(--error) 14%, transparent); color: var(--error); }
 .pill.off { background: var(--surface-soft); color: var(--stone); }
 .mini-bar { height: 3px; border-radius: var(--r-sm); background: var(--surface-soft); overflow: hidden; }
 .mini-bar i { display: block; height: 100%; background: var(--accent); transform-origin: left center; transition: transform var(--motion-fast) linear; }
+.mini-bar.paused i { background: var(--t-warn); }
 
 .vm-empty { display: flex; flex-direction: column; align-items: center; gap: var(--sp-3); padding: 48px 20px; color: var(--stone); }
 .vm-empty-ic { opacity: .5; }

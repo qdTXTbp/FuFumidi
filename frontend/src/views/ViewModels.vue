@@ -3,7 +3,7 @@
 // - 卡片：用处 + 架构徽标 + 大小 + 状态
 // - 点击卡片 → 右侧详情抽屉（含下载/删除）
 // - 下载中关闭抽屉 → 全屏弹窗实时显示 速度 + 进度（可取消）
-import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { useRoute } from 'vue-router';
 import Icon from '../components/Icon.vue';
 import DiffSingerCatalog from './DiffSingerCatalog.vue';
@@ -13,9 +13,12 @@ import RvcModelPanel from '../components/cover/RvcModelPanel.vue';
 import { useAppStore } from '../stores/app';
 import { useVoicebankStore } from '../stores/voicebank';
 import { t } from '../core/i18n.js';
+import { DL, downloadState, manifestBytes, expectedBytes } from '../core/model-download.js';
+import { useModelDownloadStore } from '../stores/modelDownloads';
 
 const app = useAppStore();
 const vbStore = useVoicebankStore();
+const dlStore = useModelDownloadStore();   // 下载状态跨页共享（App.vue 的全局下载条读同一份）
 const toast = (m, type) => app.toast(m, type);
 const bridge = window.fuBridge;
 
@@ -69,7 +72,8 @@ const metaKind = computed(() => META_KIND[curSub.value] || 'model');
 
 /* ---------------- 模型列表与进度 ---------------- */
 const list = ref([]);
-const prog = reactive({});            // id -> {active, percent, speed, received, total, done, error}
+// 下载进度在 store 里（不是本页局部状态）：切页/暂停后回来仍能看到「下载中/已暂停」
+const prog = dlStore.prog;
 const loading = ref(false);
 const detail = ref(null);             // 当前选中模型（详情抽屉）
 
@@ -119,38 +123,110 @@ function speedTxt(bps) {
 async function refresh() {
   if (!bridge || !bridge.modelList) return;
   try { list.value = (await bridge.modelList()) || []; } catch (e) { list.value = []; }
+  dlStore.setNames(list.value);       // 顶部全局下载条要显示模型名
+  dlStore.syncActive(list.value);     // model_list.active 兜底（本地暂停/失败/完成优先）
+  // 抽屉持有的是对象引用；列表刷新后换成新对象，避免显示旧体积/旧字段
+  if (detail.value) {
+    const fresh = list.value.find((x) => x && x.id === detail.value.id);
+    if (fresh) detail.value = fresh;
+  }
 }
-function setProg(p) {
-  const cur = prog[p.id] || {};
-  prog[p.id] = { ...cur, ...p, active: !!(p.done ? false : (p.active !== false ? cur.active !== false : true)) };
-  if (p.done) prog[p.id].active = false;
-  if (p.error) prog[p.id].active = false;
+let refreshTimer = null;
+/** 下载结束后合并刷新，避免一连串 done 事件触发多次 model_list。 */
+function scheduleRefresh() {
+  if (refreshTimer) return;
+  refreshTimer = setTimeout(() => { refreshTimer = null; refresh(); }, 260);
 }
-function onProgress(p) {
-  if (!p || !p.id) return;
-  setProg(p);
+// 完成/失败后刷新列表（暂停、取消不算结束，不刷新，避免把「已暂停」显示成未安装）
+watch(() => dlStore.refreshTick, () => scheduleRefresh());
+
+/* ---------------- 下载（三态：下载中 / 已暂停 / 下载失败） ----------------
+ * 状态与动作都在 stores/modelDownloads：本页只负责 toast 与列表刷新。
+ * 暂停：modelPause(id) 保留断点；继续 = 用**同一个** modelDownload 重入（后端从 .part 续传）。 */
+
+/** 三态判定：卡片 / 抽屉共用（纯函数在 core/model-download.js，已单测） */
+function dlState(m) { return downloadState(m, m && m.id ? prog[m.id] : undefined); }
+function isDownloading(m) { return dlState(m) === DL.DOWNLOADING; }
+function isPaused(m) { return dlState(m) === DL.PAUSED; }
+function isFailed(m) { return dlState(m) === DL.FAILED; }
+function pct(m) { return Math.max(0, Math.min(100, Math.round(Number(m && prog[m.id] && prog[m.id].percent) || 0))); }
+function stateClass(m) {
+  const s = dlState(m);
+  if (s === DL.INSTALLED) return 'on';
+  if (s === DL.DOWNLOADING) return 'run';
+  if (s === DL.PAUSED) return 'pause';
+  if (s === DL.FAILED) return 'bad';
+  return 'off';
+}
+function stateLabel(m) {
+  const s = dlState(m);
+  if (s === DL.INSTALLED) return t('已安装');
+  if (s === DL.DOWNLOADING) return pct(m) + '%';
+  if (s === DL.PAUSED) return t('已暂停');
+  if (s === DL.FAILED) return t('下载失败');
+  return t('未安装');
+}
+/** 体积：未下载时给清单大小（分卷合计）或 minSize，**不再显示 0**。 */
+function sizeLabel(m) {
+  if (!m) return '';
+  const e = expectedBytes(m, prog[m.id]);
+  if (e.live) return human(e.received) + ' / ' + human(e.bytes);
+  if (!e.bytes) return dlState(m) === DL.INSTALLED ? human(m.size) : '';
+  return (e.isMin ? '≥ ' : '') + human(e.bytes);
+}
+function progressHint(m) {
+  if (!m) return '';
+  if (isPaused(m)) return t('已暂停（断点已保留，继续时会接着下）');
+  return (prog[m.id] && prog[m.id].text) || '';
+}
+/** 分卷清单合计（详情抽屉「清单大小」行）：只有确切清单才显示，minSize 不冒充清单。 */
+function manifestLabel(m) {
+  const b = manifestBytes(m);
+  return b.bytes && b.source !== 'minSize' ? human(b.bytes) : '';
+}
+/** type 字段（Tauri 契约）→ 用户可读的类型名；未知值原样显示，不吞掉。 */
+const TYPE_LABEL = {
+  file: '单文件',
+  parts: '分卷',
+  zip: '压缩包（解包）',       // Tauri model_service 用 zip 表示解包型运行时包
+  unpack: '压缩包（解包）',    // Electron 旧值
+  ghsplit: 'GitHub 分卷仓库',
+  hf: 'HuggingFace 仓库',
+  rvc: 'RVC 模型',
+};
+function typeLabel(ty) {
+  const k = String(ty || '');
+  return TYPE_LABEL[k] ? t(TYPE_LABEL[k]) : k;
 }
 
-/* ---------------- 下载 ---------------- */
-function startDownload(m) {
-  if (!bridge || !bridge.modelDownload) return;
-  if (prog[m.id] && prog[m.id].active) return;
-  prog[m.id] = { active: true, percent: 0, speed: 0, received: 0, total: 0 };
-  bridge.modelDownload(m.id, 'huggingface').then(r => {
-    prog[m.id] = { active: false, percent: 100, done: true, speed: 0 };
-    if (!r || !r.ok) { prog[m.id].error = (r && r.error) || t('下载失败'); prog[m.id].done = false; }
-    refresh();
-  }).catch(e => {
-    prog[m.id] = { active: false, done: false, error: String((e && e.message) || e) };
-  });
+async function startDownload(m) {
+  if (!m || !m.id) return;
+  if (!bridge || !bridge.modelDownload) { app.toast(t('当前环境不支持下载模型'), 'warn'); return; }
+  if (m.downloadable === false) { app.toast(t('该模型随包自带，无需下载'), 'warn'); return; }
+  if (isDownloading(m)) return;
+  const r = await dlStore.start(m);
+  if (r && (r.active || r.stale)) return;          // 已在下载 / 被更新的尝试取代
+  if (r && r.paused) return;                        // 用户主动暂停，不弹失败
+  if (r && r.canceled) return;                      // 取消是中性动作
+  if (r && r.refused === 'bundled') { app.toast(t('该模型随包自带，无需下载'), 'warn'); return; }
+  if (r && r.ok) app.toast(t('已下载：') + m.name, 'ok');
+  else app.toast(t('下载失败：') + ((r && r.error) || ''), 'warn');
 }
-function cancelDownload(id) {
-  if (bridge && bridge.modelCancel) bridge.modelCancel(id);
+async function pauseDownload(id) {
+  if (!prog[id] || !prog[id].active) return;
+  if (!bridge || !bridge.modelPause) { app.toast(t('当前环境不支持暂停下载'), 'warn'); return; }
+  const r = await dlStore.pause(id);
+  if (r && r.ok === false) app.toast(t('暂停失败：') + ((r && r.error) || ''), 'warn');
+}
+async function cancelDownload(id) {
+  if (!id) return;
+  await dlStore.cancel(id);
 }
 function deleteModel(m) {
   if (!bridge || !bridge.modelDelete) return;
+  if (isDownloading(m) || isPaused(m)) { app.toast(t('请先取消下载再删除'), 'warn'); return; }
   if (!window.confirm(t('删除模型「') + m.name + t('」？'))) return;
-  bridge.modelDelete(m.id).then(() => { refresh(); toast(t('已删除'), 'ok'); }).catch(() => toast(t('删除失败'), 'warn'));
+  bridge.modelDelete(m.id).then(() => { dlStore.forget(m.id); refresh(); toast(t('已删除'), 'ok'); }).catch(() => toast(t('删除失败'), 'warn'));
 }
 
 /* ---------------- 运行时包（2026-10-21 统一下载/管理通道） ----------------
@@ -172,7 +248,8 @@ function partsText(m) {
     const min = Math.min.apply(null, sizes);
     const max = Math.max.apply(null, sizes);
     const one = human(min);
-    return n + ' × ~' + one + (max !== min ? '（合计 ' + human(sizes.reduce((a, b) => a + b, 0)) + '）' : '');
+    // 用「 · 合计」而不是中文括号，EN/JA 界面下也不会冒出未翻译的中文
+    return n + ' × ~' + one + (max !== min ? ' · ' + human(sizes.reduce((a, b) => a + b, 0)) : '');
   }
   return String(n);
 }
@@ -183,7 +260,6 @@ function closeDetail() {
 }
 
 /* ---------------- 生命周期 ---------------- */
-let off = null;
 // 预取 DiffSinger 声库目录统计：即使不进 DiffSinger 页签，页签徽标也能显示真实
 // 可下载数量（此前恒为 0）。失败静默 —— 点进页签时 DiffSingerCatalog 会再拉一次。
 async function prefetchDiffSingerStats() {
@@ -199,13 +275,16 @@ async function prefetchDiffSingerStats() {
   } catch (e) {}
 }
 onMounted(async () => {
-  await refresh();
+  dlStore.ensureEvents();             // 全局只订阅一次（App.vue 也会调，幂等）
+  dlStore.ensureNames();
+  await refresh();                    // refresh 里 syncActive 会用 model_list.active 兜底
   loading.value = false;
-  for (const m of list.value) { if (m.active) prog[m.id] = { ...(prog[m.id] || {}), active: true, percent: prog[m.id] ? prog[m.id].percent : 0 }; }
-  if (bridge && bridge.onModelProgress) off = bridge.onModelProgress(onProgress);
   prefetchDiffSingerStats();
 });
-onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
+onBeforeUnmount(() => {
+  // 事件订阅在 store，不随本页卸载；这里只清本页的合并刷新计时器
+  if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null; }
+});
 </script>
 
 <template>
@@ -271,6 +350,7 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
                   :note="t('调教（歌声合成）用到的模型。Worldline v11 的谐波分离模型就在这里下载。')"
                   :empty-text="t('没有符合条件的调教模型')"
                   @download="startDownload" @remove="deleteModel"
+                  @pause="(it) => pauseDownload(it.id)" @resume="startDownload"
                   @cancel="(it) => cancelDownload(it.id)" @openExternal="openExternal" />
       </div>
     </div>
@@ -278,7 +358,7 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
     <!-- 卡片网格（转录 / 分离 / 修复·VR 沿用） -->
     <Transition v-else-if="showGrid" name="vmfade" mode="out-in">
       <div class="vm-grid" :key="listKind">
-        <div v-for="(m, i) in tabbedList" :key="m.id" class="vm-card" :class="{ inst: m.exists, down: prog[m.id] && prog[m.id].active }" :style="{ animationDelay: (i * 40) + 'ms' }" @click="detail = m">
+        <div v-for="(m, i) in tabbedList" :key="m.id" class="vm-card" :class="{ inst: m.exists, down: isDownloading(m) || isPaused(m), fail: isFailed(m) }" :style="{ animationDelay: (i * 40) + 'ms' }" @click="detail = m">
           <div class="vm-top" :class="'k-' + (m.kind || 'other')"></div>
           <div class="vm-head">
             <span class="vm-ic"><Icon :name="kindIcon(m)" :size="15" /></span>
@@ -286,17 +366,38 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
           </div>
           <div class="vm-name-line"><div class="vm-name">{{ m.name }}</div><span v-if="m.best" class="vm-best" :title="t('该领域效果最佳')">👑 {{ m.best }}</span></div>
           <div class="vm-use">{{ m.use || m.note || '' }}</div>
+          <!-- group / runtime / 分卷（Tauri 契约新增字段）：没有就不占位 -->
+          <div v-if="m.group || m.runtime || m.parts" class="vm-tags">
+            <span v-if="m.group" class="vm-tag">{{ m.group }}</span>
+            <span v-if="m.runtime" class="vm-tag mono" :title="t('运行时')">{{ m.runtime }}</span>
+            <span v-if="m.parts" class="vm-tag">{{ t('分卷') }} {{ partsText(m) }}</span>
+          </div>
           <div class="vm-foot">
             <template v-if="m.external">
               <span class="pill">{{ t('外部来源') }}</span>
               <button class="btn sm" @click.stop="openExternal(m)">{{ t('打开来源') }}</button>
             </template>
             <template v-else>
-              <span class="pill" :class="m.exists ? 'on' : (prog[m.id] && prog[m.id].active ? 'run' : 'off')">{{ m.exists ? t('已安装') : (prog[m.id] && prog[m.id].active ? (prog[m.id].percent || 0) + '%' : t('未安装')) }}</span>
-              <span class="vm-size">{{ human(prog[m.id] && prog[m.id].received || m.size) }}</span>
+              <span class="pill" :class="stateClass(m)">{{ stateLabel(m) }}</span>
+              <span class="vm-size">{{ sizeLabel(m) }}</span>
             </template>
           </div>
-          <div v-if="prog[m.id] && prog[m.id].active" class="mini-bar"><i :style="{ transform: 'scaleX(' + (((prog[m.id].percent || 0)) / 100) + ')' }"></i></div>
+          <div v-if="isDownloading(m) || isPaused(m)" class="mini-bar" :class="{ paused: isPaused(m) }"><i :style="{ transform: 'scaleX(' + (pct(m) / 100) + ')' }"></i></div>
+          <!-- 三态操作：下载中 [暂停][取消] · 已暂停 [继续][取消] · 失败 [重试] -->
+          <div v-if="!m.external && (isDownloading(m) || isPaused(m) || isFailed(m))" class="vm-dl-acts" @click.stop>
+            <template v-if="isDownloading(m)">
+              <button class="btn sm ghost" @click.stop="pauseDownload(m.id)">{{ t('暂停') }}</button>
+              <button class="btn sm ghost danger" @click.stop="cancelDownload(m.id)">{{ t('取消') }}</button>
+            </template>
+            <template v-else-if="isPaused(m)">
+              <button class="btn sm primary" @click.stop="startDownload(m)">{{ t('继续') }}</button>
+              <button class="btn sm ghost danger" @click.stop="cancelDownload(m.id)">{{ t('取消') }}</button>
+            </template>
+            <template v-else>
+              <button class="btn sm" @click.stop="startDownload(m)">{{ t('重试') }}</button>
+              <span class="vm-err-inline" :title="prog[m.id] && prog[m.id].error">{{ (prog[m.id] && prog[m.id].error) || t('下载失败') }}</span>
+            </template>
+          </div>
         </div>
         <div v-if="!tabbedList.length" class="vm-empty">
           <div class="vm-empty-ic"><Icon name="box" :size="30" /></div>
@@ -325,36 +426,56 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
             <div class="vm-meta">
               <div class="meta-row"><span class="meta-k">{{ t('架构') }}</span><span>{{ detail.arch || '—' }}</span></div>
               <div class="meta-row"><span class="meta-k">{{ t('分类') }}</span><span>{{ kindLabel(detail.kind) }}</span></div>
-              <div class="meta-row"><span class="meta-k">{{ t('大小') }}</span><span>{{ human(detail.size) }}</span></div>
+              <!-- Tauri 模型契约新增字段：group / runtime / type 有就显示，没有不占位 -->
+              <div v-if="detail.group" class="meta-row"><span class="meta-k">{{ t('分组') }}</span><span class="mono">{{ detail.group }}</span></div>
+              <div v-if="detail.runtime" class="meta-row"><span class="meta-k">{{ t('运行时') }}</span><span class="mono">{{ detail.runtime }}</span></div>
+              <div v-if="detail.type" class="meta-row"><span class="meta-k">{{ t('类型') }}</span><span>{{ typeLabel(detail.type) }}</span></div>
+              <!-- 大小：未下载时给清单大小 / minSize，不再是 0 -->
+              <div class="meta-row"><span class="meta-k">{{ t('大小') }}</span><span>{{ sizeLabel(detail) || '—' }}</span></div>
               <div v-if="detail.repo" class="meta-row"><span class="meta-k">{{ t('来源') }}</span><span class="mono">{{ detail.repo }}</span></div>
               <!-- ★ 2026-10-21：分卷大小不再硬编码 25MB —— MIROS 的分片是 ~900MB/片，
                    写死会让用户以为下 6×25MB。有 partSizes 就按实际算，没有再只报片数。 -->
               <div v-if="detail.parts" class="meta-row"><span class="meta-k">{{ t('分卷') }}</span><span>{{ partsText(detail) }}</span></div>
+              <div v-if="!detail.exists && manifestLabel(detail)" class="meta-row"><span class="meta-k">{{ t('清单大小') }}</span><span>{{ manifestLabel(detail) }}</span></div>
               <!-- 运行时包（hFT / YourMT3+ / MIROS）：解包型条目，下的是「运行时 + 权重」一整套 -->
-              <div v-if="isRuntimeBundle(detail)" class="meta-row"><span class="meta-k">{{ t('类型') }}</span><span>{{ t('运行时包（含依赖 + 权重，解包后即用）') }}</span></div>
+              <div v-if="isRuntimeBundle(detail)" class="meta-row"><span class="meta-k">{{ t('运行时包') }}</span><span>{{ t('运行时包（含依赖 + 权重，解包后即用）') }}</span></div>
             </div>
             <p class="vm-note">{{ detail.note }}</p>
 
-            <div v-if="prog[detail.id] && prog[detail.id].active" class="vm-prog-box">
-              <div class="vm-prog-bar"><i :style="{ transform: 'scaleX(' + (((prog[detail.id].percent || 0)) / 100) + ')' }"></i></div>
+            <div v-if="isDownloading(detail) || isPaused(detail)" class="vm-prog-box">
+              <div class="vm-prog-bar" :class="{ paused: isPaused(detail) }"><i :style="{ transform: 'scaleX(' + (pct(detail) / 100) + ')' }"></i></div>
               <div class="vm-prog-txt">
-                <span class="pc">{{ (prog[detail.id].percent || 0) }}%</span>
-                <span v-if="prog[detail.id].speed">⚡ {{ speedTxt(prog[detail.id].speed) }}</span>
+                <span class="pc">{{ pct(detail) }}%</span>
+                <span v-if="isPaused(detail)" class="vm-paused">{{ t('已暂停') }}</span>
+                <span v-else-if="prog[detail.id].speed">⚡ {{ speedTxt(prog[detail.id].speed) }}</span>
                 <span>{{ human(prog[detail.id].received) }} / {{ human(prog[detail.id].total) }}</span>
               </div>
+              <div v-if="progressHint(detail)" class="vm-prog-hint">{{ progressHint(detail) }}</div>
             </div>
-            <div v-if="prog[detail.id] && prog[detail.id].error" class="vm-err">{{ prog[detail.id].error }}</div>
+            <div v-if="isFailed(detail)" class="vm-err">{{ prog[detail.id].error || t('下载失败') }}</div>
           </div>
 
           <div class="vm-drawer-foot">
-            <div v-if="detail.external" class="df-group">
+            <template v-if="detail.external">
               <button class="btn sm primary" @click="openExternal(detail)">{{ t('打开来源') }}</button>
-            </div>
-            <div v-else-if="!(prog[detail.id] && prog[detail.id].active)" class="df-group">
+            </template>
+            <template v-else-if="isDownloading(detail)">
+              <button class="btn sm ghost" @click="pauseDownload(detail.id)">{{ t('暂停下载') }}</button>
+              <button class="btn sm ghost danger" @click="cancelDownload(detail.id)">{{ t('取消下载') }}</button>
+            </template>
+            <template v-else-if="isPaused(detail)">
+              <button class="btn sm primary" @click="startDownload(detail)">{{ t('继续下载') }}</button>
+              <button class="btn sm ghost danger" @click="cancelDownload(detail.id)">{{ t('取消下载') }}</button>
+            </template>
+            <template v-else-if="isFailed(detail)">
               <button v-if="detail.exists" class="btn sm ghost danger" @click="deleteModel(detail)">{{ t('删除') }}</button>
-              <button class="btn sm primary" @click="startDownload(detail)">{{ detail.exists ? t('重新下载') : t('下载') }}</button>
-            </div>
-            <button v-else class="btn sm ghost danger" @click="cancelDownload(detail.id)">{{ t('取消下载') }}</button>
+              <button class="btn sm primary" @click="startDownload(detail)">{{ t('重试') }}</button>
+            </template>
+            <template v-else>
+              <button v-if="detail.exists" class="btn sm ghost danger" @click="deleteModel(detail)">{{ t('删除') }}</button>
+              <span v-if="detail.downloadable === false" class="pill off">{{ t('随包自带') }}</span>
+              <button v-else class="btn sm primary" @click="startDownload(detail)">{{ detail.exists ? t('重新下载') : t('下载') }}</button>
+            </template>
           </div>
         </div>
       </div>
@@ -419,8 +540,19 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
 .pill.run { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
 .pill.off { background: var(--surface-soft); color: var(--stone); }
 .vm-size { font-size: var(--fs-xs); color: var(--stone); font-family: var(--mono); }
+.pill.pause { background: color-mix(in srgb, var(--t-warn) 16%, transparent); color: var(--t-warn); }
+.pill.bad { background: color-mix(in srgb, var(--error) 14%, transparent); color: var(--error); }
+/* group / runtime / 分卷：契约新增字段的小标签（没有就不渲染） */
+.vm-tags { display: flex; align-items: center; gap: var(--sp-1); flex-wrap: wrap; }
+.vm-tag { font-size: var(--fs-xs); line-height: 16px; padding: 0 6px; border-radius: var(--r-sm); background: var(--surface-soft); color: var(--stone); }
+.vm-tag.mono { font-family: var(--mono); }
+/* 三态操作条：暂停 / 继续 / 取消 / 重试 */
+.vm-dl-acts { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; margin-top: 2px; }
+.vm-err-inline { flex: 1; min-width: 0; font-size: var(--fs-xs); color: var(--error); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vm-card.fail { border-color: color-mix(in srgb, var(--error) 38%, transparent); }
 .mini-bar { height: 4px; border-radius: var(--r-pill); background: var(--surface-soft); overflow: hidden; margin-top: 4px; }
 .mini-bar i { display: block; height: 100%; border-radius: var(--r-pill); background: linear-gradient(90deg, var(--accent), var(--brand-coral)); transition: transform var(--motion-base) var(--ease-out); }
+.mini-bar.paused i { background: linear-gradient(90deg, color-mix(in srgb, var(--t-warn) 80%, var(--brand-coral)), var(--t-warn)); }
 .vm-empty { grid-column: 1 / -1; display: flex; flex-direction: column; align-items: center; gap: var(--sp-3); padding: 56px 0; color: var(--stone); }
 .vm-empty-ic { opacity: .35; }
 
@@ -449,7 +581,10 @@ onBeforeUnmount(() => { if (off) try { off(); } catch (e) {} });
 .vm-prog-box { margin-top: 8px; }
 .vm-prog-bar { height: 8px; border-radius: var(--r-pill); background: var(--surface-soft); overflow: hidden; }
 .vm-prog-bar i { display: block; height: 100%; border-radius: var(--r-pill); background: linear-gradient(90deg, var(--accent), var(--brand-coral)); transition: transform var(--motion-base) var(--ease-out); }
+.vm-prog-bar.paused i { background: linear-gradient(90deg, color-mix(in srgb, var(--t-warn) 75%, var(--brand-coral)), var(--t-warn)); }
 .vm-prog-txt { display: flex; align-items: center; gap: var(--sp-3); font-size: var(--fs-xs); color: var(--stone); margin-top: 6px; }
+.vm-prog-txt .vm-paused { color: var(--t-warn); font-weight: 700; }
+.vm-prog-hint { margin-top: 4px; font-size: var(--fs-xs); color: var(--stone); line-height: 1.5; }
 .vm-prog-txt .pc { font-weight: 800; font-size: var(--fs-md); color: var(--ink); font-family: var(--mono); }
 .vm-prog-name { font-size: var(--fs-sm); font-weight: 600; color: var(--ink); margin-bottom: 5px; }
 .vm-err { color: var(--error); font-size: var(--fs-sm); margin-top: 8px; }

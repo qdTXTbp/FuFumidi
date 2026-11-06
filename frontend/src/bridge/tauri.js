@@ -47,12 +47,121 @@ export function installTauriBridge() {
     return () => {};
   };
 
+  // ============================================================
+  // ★ 桥接映射规则（2026-11-06 S7 审计 → S6 命令合入后复核）
+  //
+  // 只映射 shells/tauri/src/main.rs 里真实注册过的 #[tauri::command]。
+  // 给不存在的命令写 invoke 不会编译报错，只会在用户点下去时得到
+  // "command not found"（rvc_catalog / model_delete 都踩过）。
+  //
+  // 已注册、但 resource_extras 仍是占位实现的命令（桥接照常 call()，
+  // 后端返回 {ok:false,error:"…尚未在 Tauri 侧实现"}，界面走既有错误分支；
+  // 等 resource_extras 落地后**不需要再改前端**）：
+  //   dep_install / gpu_list_packages|package_url|download_package|import_local|
+  //   install_auto|cancel_install / sf_workshop_download|cancel / plugins_invoke /
+  //   update_download|open / wallpaper_download / export_score_pdf|png_zip /
+  //   omr_engine_install|lang_install|homr_install|sr_install|omr_cancel_install /
+  //   utau_voicebank_registry|download_voicebank|cancel_voicebank_download
+  //
+  // 仍无 Rust 命令、只能降级的能力（调用处有 typeof / 存在性守卫）：
+  //   · utau_render_track（本文件用 notPorted 兜底，避免 TypeError）
+  //   · utau_alias_range / probe_voicebank（守卫给出「当前环境不支持」提示）
+  //   · app_uninstall / update_speedtest / onSpeedtest / onTrayControl
+  //   · wallpaper.downloadUrl / searchWallhaven
+  //   · transcode_video：命令已注册但 resource_extras 返回 todo，故意先不映射，
+  //     保留 ViewConvert 的 WebM 回退；真正实现后在这里补 call('transcode_video').
+  //   · 事件通道：sf-workshop:progress / utau:voicebankProgress / gpu:progress /
+  //     omr:progress 已按 rust-extras 的「started+done」契约接好（见下方 taskCall）；
+  //     open-file / 文件夹监听事件仍无 emit（订阅已就绪）
+  // ============================================================
+  const notPorted = (cmd) => () => Promise.resolve({
+    ok: false,
+    notPorted: true,
+    error: t('该功能尚未在 Tauri 桌面版移植：') + cmd,
+  });
+
+  // ============================================================
+  // ★ S6 后台任务（rust-extras 契约）：命令**立即返回** {ok:true, started:true, id}，
+  //   真正的完成/失败在进度事件的 done 终态里（p.done===true 时带 ok/path/size/error/canceled）。
+  //   原因：main.rs 的同步薄包装在 Tauri 主线程执行，阻塞式下载会让取消/进度进不来。
+  //
+  //   桥接在这里把 started 结果「挂起」到对应事件的 done 再 resolve，既有
+  //   await 调用点（ViewSoundfonts / UtauVoicebankStore / ViewResources / SettingsPanel）
+  //   无需区分两种语义；若后端改回同步返回（结果里没有 started），这里原样透传。
+  // ============================================================
+  const TASK_TIMEOUT_MS = 2 * 60 * 60 * 1000;   // 2h 兜底：大增强包/声库下载上限，事件丢失时不至于永远挂起
+  const taskWaiters = new Map();                // eventName -> [{ id, resolve, timer }]
+  const TASK_EVENTS = ['sf-workshop:progress', 'utau:voicebankProgress', 'gpu:progress', 'omr:progress'];
+  const normalizeDone = (p) => {
+    if (!p || !p.done) return p;
+    // 老 UI 用 r.ok 判断成败；done 事件未显式给 ok 时按 error/canceled 推导
+    if (p.ok === undefined) return { ...p, ok: p.canceled ? false : !p.error };
+    return p;
+  };
+  const settleTask = (eventName, p) => {
+    if (!p || !p.done) return;
+    const done = normalizeDone(p);
+    const arr = taskWaiters.get(eventName) || [];
+    if (!arr.length) return;
+    // 带 id 的事件按 id 配对；无 id 的按 FIFO（UI 侧同一通道通常也只跑一个任务）
+    let i = arr.findIndex((w) => w.id && p.id && w.id === p.id);
+    if (i < 0) i = arr.findIndex((w) => !w.id || !p.id);
+    if (i < 0) return;
+    const w = arr.splice(i, 1)[0];
+    clearTimeout(w.timer);
+    w.resolve(done);
+  };
+  for (const ev of TASK_EVENTS) listen(ev, (p) => settleTask(ev, p));
+
+  /** 注册「等 done」槽位。**必须在 invoke 之前注册**：后台线程可能在 invoke 返回前就 emit done。 */
+  function taskSlot(eventName) {
+    let entry = null;
+    const promise = new Promise((resolve) => {
+      entry = { id: null, resolve, timer: null };
+      entry.timer = setTimeout(() => {
+        const arr = taskWaiters.get(eventName) || [];
+        const i = arr.indexOf(entry);
+        if (i >= 0) arr.splice(i, 1);
+        resolve({ ok: false, error: t('等待后台任务完成超时（可稍后刷新查看结果）') });
+      }, TASK_TIMEOUT_MS);
+      const arr = taskWaiters.get(eventName) || [];
+      arr.push(entry);
+      taskWaiters.set(eventName, arr);
+    });
+    return { promise, entry };
+  }
+  /** 撤销槽位（invoke 失败 / 不是 started 时，别把过期槽位留在表里） */
+  function dropTaskSlot(eventName, entry) {
+    const arr = taskWaiters.get(eventName) || [];
+    const i = arr.indexOf(entry);
+    if (i >= 0) arr.splice(i, 1);
+    clearTimeout(entry.timer);
+  }
+  /** call() 的后台任务版：started:true → 等 done 事件；否则原样返回 */
+  async function taskCall(cmd, args, eventName) {
+    const { promise, entry } = taskSlot(eventName);
+    let r;
+    try {
+      r = await call(cmd, args);
+    } catch (e) {
+      dropTaskSlot(eventName, entry);
+      throw e;
+    }
+    if (!r || r.started !== true) {
+      dropTaskSlot(eventName, entry);
+      return r;
+    }
+    entry.id = r.id || null;
+    const done = await promise;
+    return { ...r, ...done };
+  }
+
   window.fuBridge = {
     // ---- 打开文件（Tauri 阶段：双击关联事件后续接入）----
     // ★ Tauri 构建下的功能缺口（审计已登记）：Electron 侧靠主进程 'open-file' 事件
   //   支持双击 .mid 打开；Tauri 侧没有对应实现，所以这里只能返回一个空取消函数 ——
   //   即**Tauri 构建下双击 .mid 仍然不生效**。要补齐得在 src-tauri 里接文件关联并 emit 同名事件。
-  onOpenFile: (cb) => listen('open-file', (p) => cb && cb(new Uint8Array((p && p.bytes) || []), (p && p.name) || 'opened.mid')),
+    onOpenFile: (cb) => listen('open-file', (p) => cb && cb(new Uint8Array((p && p.bytes) || []), (p && p.name) || 'opened.mid')),
     takePendingOpenFile: () => call('take_pending_open_file'),
 
     // ---- 设置 ----
@@ -115,15 +224,23 @@ export function installTauriBridge() {
     // 音色工坊：内置精选下载 / 自定义导入 / 删除 / 打开目录
     sfWorkshop: {
       list: () => call('sf_workshop_list'),
-      download: (id) => call('sf_workshop_download', { id }),
+      // 后台任务：started 后等 sf-workshop:progress 的 done 再 resolve
+      download: (id) => taskCall('sf_workshop_download', { id }, 'sf-workshop:progress'),
       cancel: (id) => call('sf_workshop_cancel', { id }),
       import: () => call('sf_workshop_import'),
       remove: (id) => call('sf_workshop_delete', { id }),
       openDir: () => call('sf_workshop_open_dir'),
       onProgress: (cb) => listen('sf-workshop:progress', cb),
     },
-    // ---- UTAU / 统一声库（只读；Electron 侧 utau:listVoicebanks / voicebank:unified）----
-    // Tauri 端命令只扫数据目录，不 import / 不删除 / 不下载（那些动作仍未移植，见审计缺口）。
+    // ---- UTAU / 统一声库 ----
+    // 只读命令（列表/导入/导出/删除/oto）在 main.rs；下载/注册表走 resource_extras 占位实现。
+    // TODO(未实现)：utau_render_track / utau_alias_range / probe_voicebank，均无 Rust 命令。
+    utauVoicebankRegistry: () => call('utau_voicebank_registry'),
+    // 后台任务：started 后等 utau:voicebankProgress 的 done 再 resolve
+    utauDownloadVoicebank: (id) => taskCall('utau_download_voicebank', { id }, 'utau:voicebankProgress'),
+    utauCancelVoicebankDownload: (id) => call('utau_cancel_voicebank_download', { id }),
+    utauRenderTrack: (cfg) => notPorted('utau_render_track')(cfg),
+    onVoicebankProgress: (cb) => listen('utau:voicebankProgress', cb),
     utauListVoicebanks: () => call('utau_list_voicebanks'),
     utauExportVoicebankZip: (opts) => call('utau_export_voicebank_zip', { files: (opts && opts.files) || [] }),
     utauExportVoicebank: (opts) => call('utau_export_voicebank', { dir: opts && opts.dir, files: (opts && opts.files) || [] }),
@@ -164,7 +281,9 @@ export function installTauriBridge() {
     // ---- 乐谱 / 视频 ----
     exportScorePngZip: (opts) => call('export_score_png_zip', { opts }),
     exportScorePdf: () => call('export_score_pdf'),
-    transcodeVideo: (data, audio) => call('transcode_video', { opts: { data, audio } }),
+    // 视频导出走 video_export_* 流式通道；transcode_video 没有 Rust 命令，
+    // 故意不映射 —— ViewConvert 检测不到该方法时会走 WebM 回退下载。
+    // TODO(未移植)：transcode_video（Electron 的 webm→mp4 兜底）
 
     // ---- 打开输出 / 编辑指南 / 事件 ----
     openOutput: (p) => call('open_output', { p }),
@@ -208,10 +327,10 @@ export function installTauriBridge() {
     diffsingerMsCatalog: () => call('diffsinger_ms_catalog'),
     diffsingerMsDownload: (req) => call('diffsinger_ms_download', { req: req || {} }),
     diffsingerMsCancelDownload: (name) => call('diffsinger_ms_cancel_download', { name }),
-    updateCheck: (channel) => call('check_update', { channel }),
+    updateCheck: (channel) => call('update_check', { channel }),   // Rust 命令名是 update_check（原 check_update 是命名不一致）
     updateNotes: (tag) => call('update_notes', { tag }),
     updateDownload: (url, channel, name, size) => call('update_download', { url, channel, name, size }),
-    updateOpen: (p) => call('update_open', { p }),
+    updateOpen: (p) => call('update_open', { path: p }),
     onUpdateProgress: (cb) => listen('update:progress', cb),
     // 线路列表 / 会话内首选线路（本地命令：只读设置，不联网、不下载；偏好只提前不锁定）
     updateSources: (channel) => call('update_sources', { channel }),
@@ -235,9 +354,11 @@ export function installTauriBridge() {
     gpuUninstall: (kind) => call('gpu_uninstall', { kind }),
     gpuListPackages: () => call('gpu_list_packages'),
     gpuPackageUrl: (kind) => call('gpu_package_url', { kind }),
-    gpuDownloadPackage: (opts) => call('gpu_download_package', { opts }),
+    // 后台任务：started 后等 gpu:progress 的 done 再 resolve
+    gpuDownloadPackage: (opts) => taskCall('gpu_download_package', { opts }, 'gpu:progress'),
     gpuImportLocal: (p, kind) => call('gpu_import_local', { req: { paths: Array.isArray(p) ? p : [p], kind } }),
-    gpuInstallAuto: () => call('gpu_install_auto'),
+    gpuInstallAuto: () => taskCall('gpu_install_auto', undefined, 'gpu:progress'),
+    gpuCancelInstall: () => call('gpu_cancel_install'),
     onGpuProgress: (cb) => listen('gpu:progress', cb),
 
     // ---- 翻唱模型（本地）----
@@ -265,6 +386,12 @@ export function installTauriBridge() {
       homrRemove: () => call('omr_homr_remove'),
       srStatus: () => call('omr_sr_status'),
       srRemove: () => call('omr_sr_remove'),
+      // 后台任务：started 后等 omr:progress 的 done 再 resolve
+      install: () => taskCall('omr_engine_install', undefined, 'omr:progress'),
+      langInstall: (codes) => taskCall('omr_lang_install', { codes }, 'omr:progress'),
+      homrInstall: () => taskCall('omr_homr_install', undefined, 'omr:progress'),
+      srInstall: () => taskCall('omr_sr_install', undefined, 'omr:progress'),
+      onProgress: (cb) => listen('omr:progress', cb),
     },
     plugin: {
       pickFile: () => call('plugin_pick_file'),
@@ -308,6 +435,8 @@ export function installTauriBridge() {
       defaults: () => call('wallpaper_defaults'),
       list: () => call('wallpaper_list'),
       download: (url, name) => call('wallpaper_download', { url, name }),
+      // TODO(未移植)：downloadUrl / searchWallhaven 在 Rust 端还没有命令
+      //   （调用处有存在性守卫；未定义时保持「当前版本不支持」的旧提示）
       addLocal: (path) => call('wallpaper_add_local', { src_path: path }),
       removeLocal: (name) => call('wallpaper_remove_local', { name }),
       setDesktop: (path) => call('wallpaper_set_desktop', { path }),
@@ -342,7 +471,7 @@ export function installTauriBridge() {
     // ---- 文件夹监听（Tauri 阶段暂不实现，返回空订阅）----
     setFolderWatch: () => Promise.resolve({ ok: true }),
     // ★ 同上：Tauri 构建未实现文件夹监听（审计已登记）
-  onFolderWatch: () => () => {},
+    onFolderWatch: () => () => {},
   };
 
   window.__fufumidi_isTauri = true;

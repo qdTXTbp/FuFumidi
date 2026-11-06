@@ -8,7 +8,16 @@
     "minSize": 25000000,
     "repoFile": "GeneralUser GS v1.471.sf2",
     "bundledPath": "renderer/vendor/soundfonts/GeneralUser.sf2",
-    "license": "CC BY 3.0 · 可免费用于个人/商用，见包内许可证"
+    "license": "CC BY 3.0 · 可免费用于个人/商用，见包内许可证",
+    "fromRepo": "ROCKNIX/generaluser-gs",
+    "urls": [
+      "https://cnb.cool/FuFuCloud-mirror/FuFumidiSoundFonts/-/git/raw/main/GeneralUser.GS.v1.471.sf2",
+      "https://gh.jasonzeng.dev/https://raw.githubusercontent.com/ROCKNIX/generaluser-gs/main/GeneralUser%20GS%20v1.471.sf2",
+      "https://raw.githubusercontent.com/ROCKNIX/generaluser-gs/main/GeneralUser%20GS%20v1.471.sf2",
+      "https://ghfast.top/https://raw.githubusercontent.com/ROCKNIX/generaluser-gs/main/GeneralUser%20GS%20v1.471.sf2",
+      "https://gh-proxy.com/https://raw.githubusercontent.com/ROCKNIX/generaluser-gs/main/GeneralUser%20GS%20v1.471.sf2",
+      "https://gh.jasonzeng.dev/https://github.com/monologue82/FuFumidiSoundFonts/releases/download/v1/GeneralUser.GS.v1.471.sf2"
+    ]
   },
   {
     "id": "fluidr3",
@@ -19,7 +28,13 @@
     "minSize": 90000000,
     "repoFile": null,
     "bundledPath": null,
-    "license": "MIT · 可自由使用/分发（保留署名）"
+    "license": "MIT · 可自由使用/分发（保留署名）",
+    "fromRepo": "pianobooster/fluid-soundfont",
+    "urls": [
+      "https://cnb.cool/FuFuCloud-mirror/FuFuMIDI/-/releases/download/soundfonts-v1/FluidR3_GM.sf2",
+      "https://gh.jasonzeng.dev/https://github.com/monologue82/FuFumidiSoundFonts/releases/download/v1/FluidR3_GM.sf2",
+      "https://sourceforge.net/projects/androidframe/files/soundfonts/FluidR3_GM.sf2/download"
+    ]
   },
   {
     "id": "mscore_general",
@@ -33,7 +48,11 @@
     "repoFile": null,
     "bundledPath": null,
     "license": "MIT · 可自由使用/分发（FluidR3 © Frank Wen · 适配 © S. Christian Collins）",
-    "category": "通用音色库"
+    "category": "通用音色库",
+    "fromRepo": null,
+    "urls": [
+      "https://ftp.osuosl.org/pub/musescore/soundfont/MuseScore_General/MuseScore_General.sf3"
+    ]
   },
   {
     "id": "allvoice",
@@ -47,7 +66,14 @@
     "repoFile": null,
     "bundledPath": null,
     "license": "ToH 派生 · 已获作者书面授权，可再分发（授权凭证见项目档案）",
-    "category": "通用音色库"
+    "category": "通用音色库",
+    "fromRepo": null,
+    "urls": [
+      "https://cnb.cool/FuFuCloud-mirror/FuFuMIDI/-/releases/download/soundfonts-v1/allvoice.sf2",
+      "https://ghfast.top/https://github.com/qdTXTbp/FuFumidi/releases/download/soundfonts-v1/allvoice.sf2",
+      "https://gh.jasonzeng.dev/https://github.com/qdTXTbp/FuFumidi/releases/download/soundfonts-v1/allvoice.sf2",
+      "https://github.com/qdTXTbp/FuFumidi/releases/download/soundfonts-v1/allvoice.sf2"
+    ]
   },
   {
     "id": "sonatina",
@@ -60,7 +86,9 @@
     "bundledPath": null,
     "license": "免费使用（Sonatina 采样库，详见包内许可）",
     "manual": true,
-    "officialUrl": "https://ftp.osuosl.org/pub/musescore/soundfont/"
+    "officialUrl": "https://ftp.osuosl.org/pub/musescore/soundfont/",
+    "fromRepo": null,
+    "urls": []
   },
   {
     "id": "arachno",
@@ -71,7 +99,16 @@
     "minSize": 90000000,
     "repoFile": null,
     "bundledPath": null,
-    "license": "免费可自由使用（官方许可）"
+    "license": "免费可自由使用（官方许可）",
+    "fromRepo": null,
+    "urls": [
+      "https://cnb.cool/FuFuCloud-mirror/FuFuMIDI/-/releases/download/soundfonts-v1/Arachno_SoundFont_Version_1.0.sf2",
+      "https://gh.jasonzeng.dev/https://github.com/qdTXTbp/FuFumidi/releases/download/soundfonts-v1/Arachno_SoundFont_Version_1.0.sf2",
+      "https://ghfast.top/https://github.com/qdTXTbp/FuFumidi/releases/download/soundfonts-v1/Arachno_SoundFont_Version_1.0.sf2",
+      "https://github.com/qdTXTbp/FuFumidi/releases/download/soundfonts-v1/Arachno_SoundFont_Version_1.0.sf2",
+      "https://media.githubusercontent.com/media/rwtnb/Drumsthesia/main/Arachno%20SoundFont%20-%20Version%201.0.sf2",
+      "https://archive.org/download/free-soundfonts-sf2-2019-04/Arachno_SoundFont_Version_1.0.sf2"
+    ]
   },
   {
     "id": "timbres",
@@ -84,7 +121,9 @@
     "bundledPath": null,
     "license": "免费使用 · 不可再分发（Don Allen / Midkar 授权条款）",
     "manual": true,
-    "officialUrl": "https://midkar.com/SoundFonts/index.html"
+    "officialUrl": "https://midkar.com/SoundFonts/index.html",
+    "fromRepo": null,
+    "urls": []
   },
   {
     "id": "sgm_v2_part1",
@@ -95,7 +134,12 @@
     "minSize": 90000000,
     "repoFile": null,
     "bundledPath": null,
-    "license": "免费个人/商用（SGM 许可条款）"
+    "license": "免费个人/商用（SGM 许可条款）",
+    "fromRepo": null,
+    "urls": [
+      "https://cnb.cool/FuFuCloud-mirror/FuFumidiSoundFonts/-/git/raw/main/SGM_V2_01_part1.sf2",
+      "https://gh.jasonzeng.dev/https://github.com/monologue82/FuFumidiSoundFonts/releases/download/v1/SGM_V2_01_part1.sf2"
+    ]
   },
   {
     "id": "sgm_v2_part2",
@@ -106,7 +150,12 @@
     "minSize": 90000000,
     "repoFile": null,
     "bundledPath": null,
-    "license": "免费个人/商用（SGM 许可条款）"
+    "license": "免费个人/商用（SGM 许可条款）",
+    "fromRepo": null,
+    "urls": [
+      "https://cnb.cool/FuFuCloud-mirror/FuFumidiSoundFonts/-/git/raw/main/SGM_V2_01_part2.sf2",
+      "https://gh.jasonzeng.dev/https://github.com/monologue82/FuFumidiSoundFonts/releases/download/v1/SGM_V2_01_part2.sf2"
+    ]
   },
   {
     "id": "sgm_v2_part3",
@@ -117,7 +166,12 @@
     "minSize": 90000000,
     "repoFile": null,
     "bundledPath": null,
-    "license": "免费个人/商用（SGM 许可条款）"
+    "license": "免费个人/商用（SGM 许可条款）",
+    "fromRepo": null,
+    "urls": [
+      "https://cnb.cool/FuFuCloud-mirror/FuFumidiSoundFonts/-/git/raw/main/SGM_V2_01_part3.sf2",
+      "https://gh.jasonzeng.dev/https://github.com/monologue82/FuFumidiSoundFonts/releases/download/v1/SGM_V2_01_part3.sf2"
+    ]
   },
   {
     "id": "aspirin_dx",
@@ -128,7 +182,13 @@
     "minSize": 60000000,
     "repoFile": null,
     "bundledPath": null,
-    "license": "libre 开源重制（NeoSoundFonts 维护）"
+    "license": "libre 开源重制（NeoSoundFonts 维护）",
+    "fromRepo": null,
+    "urls": [
+      "https://gh.jasonzeng.dev/https://github.com/NeoSoundFonts/Aspirin-DX-Soundbank/releases/download/2026-07-08/Version-20260708.sf2",
+      "https://ghfast.top/https://github.com/NeoSoundFonts/Aspirin-DX-Soundbank/releases/download/2026-07-08/Version-20260708.sf2",
+      "https://github.com/NeoSoundFonts/Aspirin-DX-Soundbank/releases/download/2026-07-08/Version-20260708.sf2"
+    ]
   },
   {
     "id": "salamander",
@@ -141,7 +201,14 @@
     "fileName": "Salamander Grand Piano 6L.sf2",
     "repoFile": null,
     "bundledPath": null,
-    "license": "CC BY 3.0（使用需署名原钢琴录音艺术家）"
+    "license": "CC BY 3.0（使用需署名原钢琴录音艺术家）",
+    "fromRepo": null,
+    "urls": [
+      "https://cnb.cool/FuFuCloud-mirror/FuFuMIDI/-/releases/download/soundfonts-v1/Salamander_Grand_Piano_SF2_V3_20200602_6L.sf2",
+      "https://gh.jasonzeng.dev/https://github.com/qdTXTbp/FuFumidi/releases/download/soundfonts-v1/Salamander_Grand_Piano_SF2_V3_20200602_6L.sf2",
+      "https://ghfast.top/https://github.com/qdTXTbp/FuFumidi/releases/download/soundfonts-v1/Salamander_Grand_Piano_SF2_V3_20200602_6L.sf2",
+      "https://github.com/qdTXTbp/FuFumidi/releases/download/soundfonts-v1/Salamander_Grand_Piano_SF2_V3_20200602_6L.sf2"
+    ]
   },
   {
     "id": "fluidr3_mono",
@@ -154,7 +221,11 @@
     "repoFile": null,
     "bundledPath": null,
     "license": "CC BY 3.0 · 可自由使用（保留署名）",
-    "category": "通用音色库"
+    "category": "通用音色库",
+    "fromRepo": null,
+    "urls": [
+      "https://cdn.jsdelivr.net/gh/musescore/MuseScore@2.1/share/sound/FluidR3Mono_GM.sf3"
+    ]
   },
   {
     "id": "fm_gm_mini",
@@ -166,7 +237,11 @@
     "repoFile": null,
     "bundledPath": null,
     "license": "GPL-3.0",
-    "category": "通用音色库"
+    "category": "通用音色库",
+    "fromRepo": null,
+    "urls": [
+      "https://cdn.jsdelivr.net/gh/zeittresor/opensoundfont@main/FM_GM_SoundFont_v0_2_1_mini.sf2"
+    ]
   },
   {
     "id": "giga_fm_gm",
@@ -179,7 +254,11 @@
     "bundledPath": null,
     "license": "CC BY 4.0",
     "category": "通用音色库",
-    "slow": true
+    "slow": true,
+    "fromRepo": null,
+    "urls": [
+      "https://smpldsnds.github.io/soundfonts/soundfonts/giga-hq-fm-gm.sf2"
+    ]
   },
   {
     "id": "yamaha_grand",
@@ -192,7 +271,11 @@
     "bundledPath": null,
     "license": "GPL-3.0",
     "category": "单音色强化",
-    "slow": true
+    "slow": true,
+    "fromRepo": null,
+    "urls": [
+      "https://smpldsnds.github.io/soundfonts/soundfonts/yamaha-grand-lite.sf2"
+    ]
   },
   {
     "id": "galaxy_ep",
@@ -205,7 +288,11 @@
     "bundledPath": null,
     "license": "GPL-3.0",
     "category": "单音色强化",
-    "slow": true
+    "slow": true,
+    "fromRepo": null,
+    "urls": [
+      "https://smpldsnds.github.io/soundfonts/soundfonts/galaxy-electric-pianos.sf2"
+    ]
   },
   {
     "id": "supersaw",
@@ -218,7 +305,11 @@
     "bundledPath": null,
     "license": "GPL-3.0",
     "category": "合成与电子",
-    "slow": true
+    "slow": true,
+    "fromRepo": null,
+    "urls": [
+      "https://smpldsnds.github.io/soundfonts/soundfonts/supersaw-collection.sf2"
+    ]
   },
   {
     "id": "florestan",
@@ -230,7 +321,11 @@
     "repoFile": null,
     "bundledPath": null,
     "license": "公共素材",
-    "category": "轻量音色库"
+    "category": "轻量音色库",
+    "fromRepo": null,
+    "urls": [
+      "https://cdn.jsdelivr.net/gh/schellingb/TinySoundFont@master/examples/florestan-subset.sf2"
+    ]
   },
   {
     "id": "vintage_dreams",
@@ -242,6 +337,10 @@
     "repoFile": null,
     "bundledPath": null,
     "license": "公共素材",
-    "category": "轻量音色库"
+    "category": "轻量音色库",
+    "fromRepo": null,
+    "urls": [
+      "https://cdn.jsdelivr.net/gh/FluidSynth/fluidsynth@master/sf2/VintageDreamsWaves-v2.sf2"
+    ]
   }
 ]

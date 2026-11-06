@@ -17,7 +17,7 @@ const GuideOverlay = defineAsyncComponent(() => import('./components/GuideOverla
 const AppearancePanel = defineAsyncComponent(() => import('./components/AppearancePanel.vue'));
 const ChangeLogOverlay = defineAsyncComponent(() => import('./components/ChangeLogOverlay.vue'));
 const TaskCenter = defineAsyncComponent(() => import('./components/TaskCenter.vue'));
-import { ref, computed, reactive } from 'vue';
+import { ref, computed } from 'vue';
 
 /* 全局 UI 缩放只走 core/display.js 的单一入口（Electron setZoomFactor / CSS zoom）。
    过去这里还监听 workspace.layout.scale 再写一次 documentElement.style.zoom，两套缩放会相乘；
@@ -25,6 +25,7 @@ import { ref, computed, reactive } from 'vue';
 import { useAppStore, VIEWS, viewParentOf } from './stores/app';
 import { usePlaylistStore } from './stores/playlist';
 import { useSettingsStore } from './stores/settings';
+import { useModelDownloadStore } from './stores/modelDownloads';
 import { setLang, t, browserLang } from './core/i18n.js';
 import { applyDisplayPrefs as applyDisplayPrefsShared, loadDisplayPrefs } from './core/display.js';
 import { applyMaterial } from './core/material.js';
@@ -42,6 +43,7 @@ const state = app;
 const playlistStore = usePlaylistStore();
 const tabsStore = useTabsStore();
 const settingsStore = useSettingsStore();
+const dlStore = useModelDownloadStore();   // 下载状态跨页共享（资源中心写、这里读/控制）
 const wallpaperPromptOpen = ref(false);
 const route = useRoute();
 const router = useRouter();
@@ -643,8 +645,6 @@ let offGpuProg = null;
 let gpuBarTimer = null;
 let offUpdateProg = null;
 let offOpenFile = null;  // 双击 .mid 关联打开的订阅取消函数
-let offDlProg = null;   // 模型下载进度订阅取消函数（此前未声明，严格模式下赋值抛 ReferenceError，
-                        // 中断 onMounted 后续初始化：更新进度订阅/键盘快捷键/退出前 SQLite 落盘）
 let updLastPct = -1;
 // 安装进度（任意页面都可见）：App.vue 全局订阅 gpu:progress 写入 store
 function onGpuProgressGlobal(p) {
@@ -684,36 +684,26 @@ function dismissGpuBar() {
   state.gpuInstall.done = false;
 }
 
-/* ---------------- 模型下载：顶部通知条（任意页面可见） ---------------- */
-const dlProg = reactive({});            // id -> {active, percent, speed, received, total, done, error}
-const dlModelNames = ref({});
+/* ---------------- 模型下载：顶部通知条（任意页面可见） ----------------
+ * 状态在 stores/modelDownloads（资源中心与这里共享同一份）：
+ *   · 切页不丢；暂停后条目仍留在条上（显示「已暂停」+ 继续/取消）；
+ *   · 只有完成 / 失败才从条上消失（详情回资源中心看）。 */
 const dlPeek = ref(false);              // 收起为顶部细条（露出一点）
 const dlExpanded = ref(false);          // 点击展开详细下载数据
 let dlHideTimer = null;
-let prevDlCount = 0;
-const activeDls = computed(() => Object.entries(dlProg).filter(([id, v]) => v && v.active).map(([id, v]) => ({ id, ...v, name: (dlModelNames.value[id] && dlModelNames.value[id].name) || id })));
-const overallPct = computed(() => { const d = activeDls.value; if (!d.length) return 0; return Math.round(d.reduce((s, x) => s + (x.percent || 0), 0) / d.length); });
-async function ensureDlNames() {
-  try { const arr = await bridge.modelList() || []; const m = {}; for (const x of arr) if (x && x.id) m[x.id] = x; dlModelNames.value = m; } catch (e) {}
-}
-function applyDl(p) {
-  if (!p || !p.id) return;
-  const cur = dlProg[p.id] || {};
-  dlProg[p.id] = {
-    ...cur, ...p,
-    active: !!(p.done ? false : (p.active !== false ? (cur.active !== false) : true)),
-  };
-  // DiffSinger AI 声库（id 前缀 dsms:）不在 modelList 里，展示名直接用主进程发来的 label
-  // （形如「神里绫华（原神）」），避免全局条只显示裸 id。
-  if (p.label) dlModelNames.value[p.id] = { ...(dlModelNames.value[p.id] || {}), name: p.label };
-  if (p.done) dlProg[p.id].active = false;
-  if (p.error) dlProg[p.id].active = false;
-  if (p.done) ensureDlNames();
-  const c = activeDls.value.length;
-  if (c > prevDlCount && !dlExpanded.value) { dlPeek.value = false; armHide(); }   // 新下载开始：弹出并重新计时
-  prevDlCount = c;
+const barDls = computed(() => dlStore.barItems);          // 下载中 + 已暂停
+const activeDls = computed(() => barDls.value.filter((d) => d.active));
+const pausedDls = computed(() => barDls.value.filter((d) => d.paused));
+const overallPct = computed(() => {
+  const d = barDls.value;
+  if (!d.length) return 0;
+  return Math.round(d.reduce((s, x) => s + (Number(x.percent) || 0), 0) / d.length);
+});
+// 新下载开始 → 弹开并重新计时；全部结束 → 收起
+watch(() => barDls.value.length, (c, prev) => {
+  if (c > 0 && c > Number(prev || 0) && !dlExpanded.value) { dlPeek.value = false; armHide(); }
   if (c === 0) { dlPeek.value = false; dlExpanded.value = false; }
-}
+});
 function armHide() {
   clearTimeout(dlHideTimer);
   dlHideTimer = setTimeout(() => { if (!dlExpanded.value) dlPeek.value = true; }, 5000);
@@ -725,12 +715,22 @@ function toggleDl() {
   dlExpanded.value = !dlExpanded.value;
   if (dlExpanded.value) clearTimeout(dlHideTimer); else armHide();
 }
-function cancelDl(id) {
-  // DiffSinger AI 声库走独立取消通道（modelCancel 只认常规模型 id）
-  if (typeof id === 'string' && id.startsWith('dsms:')) {
-    if (bridge && bridge.diffsingerMsCancelDownload) bridge.diffsingerMsCancelDownload(id.slice(5));
-  } else if (bridge && bridge.modelCancel) bridge.modelCancel(id);
-  dlProg[id] = { ...(dlProg[id] || {}), active: false, paused: true };
+/** 取消（不是失败：资源中心会显示「已取消」，允许重新下载） */
+async function cancelDl(id) {
+  await dlStore.cancel(id);
+}
+/** 暂停：保留断点；失败时 store 会恢复「下载中」，这里只提示 */
+async function pauseDl(id) {
+  const r = await dlStore.pause(id);
+  if (r && r.unsupported) return;      // 该通道不支持暂停（按钮本身也会隐藏）
+  if (r && r.ok === false) app.toast(t('暂停失败：') + ((r && r.error) || ''), 'warn');
+}
+/** 继续：用同一个 modelDownload 重入续传 */
+async function resumeDl(d) {
+  const r = await dlStore.start({ id: d.id, name: d.name });
+  if (r && r.ok === false && !r.paused && !r.canceled && !r.active) {
+    app.toast(t('下载失败：') + ((r && r.error) || ''), 'warn');
+  }
 }
 function dlHuman(n) { if (!n) return '—'; if (n >= 1e9) return (n / 1e9).toFixed(2) + ' GB'; if (n >= 1e6) return (n / 1e6).toFixed(0) + ' MB'; if (n >= 1e3) return (n / 1e3).toFixed(0) + ' KB'; return n + ' B'; }
 function dlSpeed(bps) { if (!bps) return ''; return bps >= 1e6 ? (bps / 1e6).toFixed(1) + ' MB/s' : (bps / 1e3).toFixed(0) + ' KB/s'; }
@@ -758,8 +758,8 @@ onMounted(() => {
   setTimeout(restoreSessionView, 350);   // 等首屏路由/曲库恢复稳定后再套用会话
   initGlobal();
   if (bridge && bridge.onGpuProgress) offGpuProg = bridge.onGpuProgress(onGpuProgressGlobal);
-  // 模型下载进度（顶部通知条）
-  if (bridge && bridge.onModelProgress) offDlProg = bridge.onModelProgress(applyDl);
+  // 模型下载进度（顶部通知条）：订阅在共享 store 里做一次，资源中心也用同一份数据
+  dlStore.ensureEvents();
   // ★ 双击 .mid（文件关联）打开：主进程把文件内容经 'open-file' 发过来。
   //   此前**整个前端没有任何地方订阅它** —— 消息发出去没人收，双击等于完全没反应。
   //   实测复现：双击后应用开在首页、曲库里找不到该曲目、既不加载也不播放。
@@ -780,7 +780,7 @@ onMounted(() => {
       })();
     }
   }
-  ensureDlNames();
+  dlStore.ensureNames();
   // 更新包下载进度提示（主进程预下载阶段）
   if (bridge && bridge.onUpdateProgress) {
     offUpdateProg = bridge.onUpdateProgress((p) => {
@@ -808,7 +808,6 @@ onBeforeUnmount(() => {
   stopTickLoop();
   if (offGpuProg) { try { offGpuProg(); } catch (e) {} offGpuProg = null; }
   if (offUpdateProg) { try { offUpdateProg(); } catch (e) {} offUpdateProg = null; }
-  if (offDlProg) { try { offDlProg(); } catch (e) {} offDlProg = null; }
   if (offOpenFile) { try { offOpenFile(); } catch (e) {} offOpenFile = null; }
   clearTimeout(gpuBarTimer);
   clearTimeout(dlHideTimer);
@@ -882,26 +881,40 @@ _endHold();
 
     <!-- 模型下载：顶部通知条（5 秒无人触碰收起为顶部细条，悬停下滑，点击展开详情） -->
     <Transition name="dlnoti">
-      <div v-if="activeDls.length" class="dl-noti" :class="{ peek: dlPeek }">
+      <div v-if="barDls.length" class="dl-noti" :class="{ peek: dlPeek }">
         <div class="dl-stack" :class="{ open: dlExpanded }" @mouseenter="revealDl" @mouseleave="onDlLeave">
           <button class="dl-bar" @click="toggleDl">
             <Icon name="download" :size="15" />
             <b class="dl-anypct">{{ overallPct }}%</b>
-            <span class="dl-cnt">{{ activeDls.length }} {{ t('个下载中') }}</span>
+            <span class="dl-cnt">
+              <template v-if="activeDls.length">{{ activeDls.length }} {{ t('个下载中') }}</template>
+              <template v-if="activeDls.length && pausedDls.length"> · </template>
+              <template v-if="pausedDls.length">{{ pausedDls.length }} {{ t('个已暂停') }}</template>
+            </span>
             <i class="dl-caret">{{ dlExpanded ? '▲' : '▼' }}</i>
           </button>
           <div class="dl-panel">
-            <div v-for="d in activeDls" :key="d.id" class="dl-item">
+            <div v-for="d in barDls" :key="d.id" class="dl-item" :class="{ paused: d.paused }">
               <div class="dl-name" :title="d.id">{{ d.name }}</div>
               <!-- 主进程在测速后会发 text（如「选用 国内源 CNB（cnb.cool）（31.2 MB/s）」）。
                    此前这条信息只进内存、界面从不显示，用户无法确认是否真走了国内源。 -->
               <div v-if="d.text" class="dl-src" :title="d.text">{{ d.text }}</div>
-              <div class="dl-pbar"><i :style="{ transform: 'scaleX(' + (((d.percent || 0)) / 100) + ')' }"></i></div>
+              <div class="dl-pbar" :class="{ paused: d.paused }"><i :style="{ transform: 'scaleX(' + (((d.percent || 0)) / 100) + ')' }"></i></div>
               <div class="dl-meta">
-                <span class="pct">{{ (d.percent || 0) }}%</span>
-                <span v-if="d.speed" class="spd">⚡ {{ dlSpeed(d.speed) }}</span>
+                <span class="pct">{{ d.percent || 0 }}%</span>
+                <span v-if="d.paused" class="dl-paused-tag"><Icon name="pause" :size="11" /> {{ t('已暂停') }}</span>
+                <span v-else-if="d.speed" class="spd">⚡ {{ dlSpeed(d.speed) }}</span>
                 <span class="sz">{{ dlHuman(d.received) }} / {{ dlHuman(d.total) }}</span>
-                <button class="btn sm ghost danger" style="margin-left:auto" @click.stop="cancelDl(d.id)">{{ t('取消') }}</button>
+                <span class="dl-acts">
+                  <template v-if="d.paused">
+                    <button class="btn sm primary" @click.stop="resumeDl(d)">{{ t('继续') }}</button>
+                    <button class="btn sm ghost danger" @click.stop="cancelDl(d.id)">{{ t('取消') }}</button>
+                  </template>
+                  <template v-else>
+                    <button v-if="d.canPause" class="btn sm ghost" @click.stop="pauseDl(d.id)">{{ t('暂停') }}</button>
+                    <button class="btn sm ghost danger" @click.stop="cancelDl(d.id)">{{ t('取消') }}</button>
+                  </template>
+                </span>
               </div>
             </div>
           </div>
@@ -1069,6 +1082,10 @@ _endHold();
 .dl-src { font-size: var(--fs-xs); color: var(--stone); margin: -2px 0 var(--sp-1); font-family: var(--mono);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: var(--sp-2); }
 .dl-pbar { height: 6px; border-radius: var(--r-pill); background: var(--surface-soft); overflow: hidden; }
+.dl-pbar.paused i { background: linear-gradient(90deg, color-mix(in srgb, var(--t-warn) 75%, var(--brand-coral)), var(--t-warn)); }
+.dl-item.paused { background: color-mix(in srgb, var(--t-warn) 5%, transparent); border-radius: var(--r-sm); }
+.dl-paused-tag { display: inline-flex; align-items: center; gap: 2px; color: var(--t-warn); font-weight: 700; }
+.dl-acts { display: inline-flex; align-items: center; gap: var(--sp-1); margin-left: auto; }
 .dl-pbar i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--brand-coral));
   border-radius: var(--r-pill); transition: transform var(--motion-base) var(--ease-out); }
 .dl-meta { display: flex; align-items: center; gap: var(--sp-3); font-size: var(--fs-xs); color: var(--stone); margin-top: var(--sp-1); font-family: var(--mono); }

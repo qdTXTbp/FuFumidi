@@ -27,6 +27,8 @@ use tauri_plugin_dialog::DialogExt;
 
 mod worker_pool;
 mod stem_workflow;
+mod model_service;
+mod resource_extras;
 
 fn exe_dir() -> Option<PathBuf> {
     std::env::current_exe().ok()?.parent().map(|p| p.to_path_buf())
@@ -92,7 +94,7 @@ fn pick_data_root(explicit: Option<PathBuf>, last: Option<PathBuf>, preferred: O
     let _ = std::fs::create_dir_all(&user); user
 }
 
-fn data_dir() -> PathBuf {
+pub(crate) fn data_dir() -> PathBuf {
     if let Ok(p) = std::env::var("FUFUMIDI_DATA_ROOT") {
         if !p.trim().is_empty() {
             let pb = PathBuf::from(p);
@@ -110,7 +112,7 @@ fn data_dir() -> PathBuf {
     pick_data_root(configured, last, preferred, &hints, user)
 }
 
-fn models_dir() -> PathBuf { data_dir().join("models") }
+pub(crate) fn models_dir() -> PathBuf { data_dir().join("models") }
 
 fn dir_size(p: &Path) -> u64 { dir_size_depth(p, 0) }
 
@@ -130,26 +132,7 @@ fn dir_size_depth(p: &Path, depth: u32) -> u64 {
     total
 }
 
-fn push_model(items: &mut Vec<serde_json::Value>, id: &str, name: &str, kind: &str, path: PathBuf, min_size: u64, note: &str) {
-    // 启动期不能对 33GB 的 models 目录做递归 dir_size：那会让资源中心/转录页
-    // 首次打开卡数十秒（实测冷启动的主要卡顿来源之一）。目录型模型只要
-    // “目录里至少有一个条目”就算存在；准确体积由资源中心异步统计。
-    let (exists, size) = if path.is_dir() {
-        let has = std::fs::read_dir(&path).map(|mut rd| rd.next().is_some()).unwrap_or(false);
-        (has, 0)
-    } else if let Ok(m) = std::fs::metadata(&path) {
-        (m.len() >= min_size && m.len() > 0, m.len())
-    } else {
-        (false, 0)
-    };
-    items.push(serde_json::json!({
-        "id": id, "name": name, "kind": kind, "path": path.display().to_string(),
-        "size": size, "exists": exists, "downloadable": true, "note": note,
-        "arch": "", "use": "", "runtime": ""
-    }));
-}
-
-fn bundled_models_dir() -> Option<PathBuf> {
+pub(crate) fn bundled_models_dir() -> Option<PathBuf> {
     let mut cands = Vec::new();
     if let Some(d) = dev_root() { cands.push(d.join("resources/models")); }
     if let Some(d) = exe_dir() {
@@ -161,61 +144,76 @@ fn bundled_models_dir() -> Option<PathBuf> {
     cands.into_iter().find(|p| p.is_dir())
 }
 
-/// 模型列表（T-115/T-117 过渡实现）：核心条目 + 分离模型，占位字段与 Electron model:list 对齐。
-/// 完整目录仍以 main/models.js 为准；这里保证 UI 能拿到 id/exists/kind，不再一律空态。
+/// 模型列表：规格与 6.4.4 的 MODEL_REGISTRY 对齐（实现见 model_service）。
 #[tauri::command]
-fn model_list() -> Vec<serde_json::Value> {
-    let dir = models_dir();
-    let mut items = Vec::new();
-    let basic_path = if dir.join("basic_pitch_quant.onnx").exists() {
-        dir.join("basic_pitch_quant.onnx")
-    } else if let Some(b) = bundled_models_dir() {
-        b.join("basic_pitch_quant.onnx")
-    } else {
-        dir.join("basic_pitch_quant.onnx")
-    };
-    push_model(&mut items, "basic_pitch", "通用转录（int8 量化）", "transcribe", basic_path, 1000, "basic-pitch ONNX int8");
-    push_model(&mut items, "piano_transcription", "钢琴转录模型", "transcribe", dir.join("piano_transcription/note_F1=0.9677_pedal_F1=0.9186.pth"), 1_000_000, "piano CRNN");
-    push_model(&mut items, "hft_transformer", "hFT-Transformer", "transcribe", dir.join("hft_transformer"), 1_000_000, "Sony ISMIR2023");
-    push_model(&mut items, "muscriptor_small", "MuScriptor Small", "transcribe", dir.join("muscriptor/small/model.safetensors"), 10_000_000, "103M");
-    push_model(&mut items, "muscriptor_medium", "MuScriptor Medium", "transcribe", dir.join("muscriptor/medium/model.safetensors"), 100_000_000, "307M");
-    push_model(&mut items, "muscriptor_large", "MuScriptor Large", "transcribe", dir.join("muscriptor/large/model.safetensors"), 500_000_000, "1.4B");
-    push_model(&mut items, "yourmt3", "YourMT3+", "transcribe", dir.join("yourmt3"), 1_000_000, "YPTF");
-    push_model(&mut items, "miros", "MIROS", "transcribe", dir.join("miros"), 1_000_000, "AMT 2025");
-    push_model(&mut items, "aria_amt", "Aria-AMT", "transcribe", dir.join("aria_amt"), 1_000_000, "Whisper-style piano");
-    push_model(&mut items, "beat_this", "Beat This!", "transcribe", dir.join("hub/checkpoints/beat_this-final0.ckpt"), 100_000, "beat grid");
-    let tagger = if dir.join("audio-tagger").is_dir() { dir.join("audio-tagger") }
-        else if let Some(b) = bundled_models_dir() { b.join("audio-tagger") }
-        else { dir.join("audio-tagger") };
-    push_model(&mut items, "audio_tagger", "Audio Tagger / CED", "transcribe", tagger, 100_000, "instrument tags");
-    push_model(&mut items, "hnsep", "hnsep (Worldline v11)", "transcribe", dir.join("hnsep"), 100_000, "harmonic separation");
-    push_model(&mut items, "htdemucs4_6stems", "HTDemucs4 6stems", "separate", dir.join("multi/htdemucs4_6stems"), 1_000_000, "6-stem separation");
-    // P1: Electron 的 MSST 目录有几十个分离/修复模型；Tauri 不能只列 13 条，
-    // 否则已下载的 multi/vocal/single/vr 权重在资源中心全部显示为“缺失”。
-    for (tag, kind, label) in [("multi", "separate", "multi-stem"), ("vocal", "separate", "vocal"), ("single", "separate", "single-stem"), ("vr", "separate", "vr")] {
-        if let Ok(rd) = std::fs::read_dir(dir.join(tag)) {
-            for e in rd.flatten() {
-                let p = e.path();
-                let name = p.file_stem().and_then(|s| s.to_str()).unwrap_or("model").to_string();
-                let id = format!("msst:{tag}:{name}");
-                push_model(&mut items, &id, &name, kind, p, 1_000_000, label);
-            }
-        }
-    }
-    // 6.4.4 的 MSST 目录是资源中心的主体；Tauri 也必须列出未下载条目。
-    if let Ok(cat) = serde_json::from_str::<Vec<serde_json::Value>>(include_str!("../../../frontend/public/models-msst-catalog.json")) {
-        for m in cat {
-            let file = m.get("file").and_then(|v| v.as_str()).unwrap_or("");
-            let tag = m.get("tag").and_then(|v| v.as_str()).unwrap_or("");
-            let desc = m.get("desc").and_then(|v| v.as_str()).unwrap_or("");
-            if file.is_empty() || tag.is_empty() { continue; }
-            let stem = Path::new(file).file_stem().and_then(|s| s.to_str()).unwrap_or(file);
-            let id = format!("msst:{tag}:{stem}");
-            push_model(&mut items, &id, stem, "separate", dir.join(tag).join(stem), 1_000_000, desc);
-        }
-    }
-    items
+fn model_list(state: State<'_, model_service::ModelDlState>) -> Vec<serde_json::Value> {
+    model_service::list_with_state(Some(&state))
 }
+
+/// 下载模型：进度走 model:progress；暂停保留断点，取消清理断点。
+#[tauri::command]
+async fn model_download(app: AppHandle, state: State<'_, model_service::ModelDlState>, req: serde_json::Value) -> Result<serde_json::Value, String> {
+    Ok(model_service::download(app, state.inner().clone(), req).await)
+}
+
+#[tauri::command]
+fn model_cancel(state: State<'_, model_service::ModelDlState>, id: Option<String>) -> serde_json::Value { model_service::cancel(&state, id) }
+
+#[tauri::command]
+fn model_pause(state: State<'_, model_service::ModelDlState>, id: Option<String>) -> serde_json::Value { model_service::pause(&state, id) }
+
+/* ---------------- S6 资源扩展：薄包装（实现见 resource_extras） ---------------- */
+#[tauri::command(async)]
+fn dep_install(app: AppHandle, group: Option<String>) -> serde_json::Value { resource_extras::dep_install(&app, group) }
+#[tauri::command(async)]
+fn sf_workshop_download(app: AppHandle, id: String) -> serde_json::Value { resource_extras::sf_workshop_download(&app, id) }
+#[tauri::command]
+fn sf_workshop_cancel(id: String) -> serde_json::Value { resource_extras::sf_workshop_cancel(id) }
+#[tauri::command(async)]
+fn gpu_list_packages() -> serde_json::Value { resource_extras::gpu_list_packages() }
+#[tauri::command(async)]
+fn gpu_package_url(kind: String) -> serde_json::Value { resource_extras::gpu_package_url(kind) }
+#[tauri::command(async)]
+fn gpu_download_package(app: AppHandle, opts: Option<serde_json::Value>) -> serde_json::Value { resource_extras::gpu_download_package(&app, opts.unwrap_or(serde_json::Value::Null)) }
+#[tauri::command(async)]
+fn gpu_import_local(app: AppHandle, req: serde_json::Value) -> serde_json::Value { resource_extras::gpu_import_local(&app, req) }
+#[tauri::command(async)]
+fn gpu_install_auto(app: AppHandle) -> serde_json::Value { resource_extras::gpu_install_auto(&app) }
+#[tauri::command]
+fn gpu_cancel_install() -> serde_json::Value { resource_extras::gpu_cancel_install() }
+#[tauri::command]
+fn utau_voicebank_registry() -> serde_json::Value { resource_extras::utau_voicebank_registry() }
+#[tauri::command(async)]
+fn utau_download_voicebank(app: AppHandle, id: String) -> serde_json::Value { resource_extras::utau_download_voicebank(&app, id) }
+#[tauri::command]
+fn utau_cancel_voicebank_download(id: Option<String>) -> serde_json::Value { resource_extras::utau_cancel_voicebank_download(id) }
+#[tauri::command(async)]
+fn omr_engine_install(app: AppHandle) -> serde_json::Value { resource_extras::omr_engine_install(&app) }
+#[tauri::command(async)]
+fn omr_lang_install(app: AppHandle, codes: serde_json::Value) -> serde_json::Value { resource_extras::omr_lang_install(&app, codes) }
+#[tauri::command(async)]
+fn omr_homr_install(app: AppHandle) -> serde_json::Value { resource_extras::omr_homr_install(&app) }
+#[tauri::command(async)]
+fn omr_sr_install(app: AppHandle) -> serde_json::Value { resource_extras::omr_sr_install(&app) }
+#[tauri::command]
+fn omr_cancel_install() -> serde_json::Value { resource_extras::omr_cancel_install() }
+#[tauri::command(async)]
+fn plugins_invoke(id: String, cmd: String, payload: Option<serde_json::Value>) -> serde_json::Value { resource_extras::plugins_invoke(id, cmd, payload.unwrap_or(serde_json::Value::Null)) }
+#[tauri::command(async)]
+fn update_download(url: String, channel: Option<String>, name: Option<String>, size: Option<u64>) -> serde_json::Value { resource_extras::update_download(url, channel, name, size) }
+#[tauri::command]
+fn update_open(path: String) -> serde_json::Value { resource_extras::update_open(path) }
+#[tauri::command(async)]
+fn wallpaper_download(url: String, name: Option<String>) -> serde_json::Value { resource_extras::wallpaper_download(url, name) }
+#[tauri::command(async)]
+fn export_score_png_zip(opts: Option<serde_json::Value>) -> serde_json::Value { resource_extras::export_score_png_zip(opts.unwrap_or(serde_json::Value::Null)) }
+#[tauri::command(async)]
+fn export_score_pdf() -> serde_json::Value { resource_extras::export_score_pdf() }
+#[tauri::command(async)]
+fn transcode_video(opts: Option<serde_json::Value>) -> serde_json::Value { resource_extras::transcode_video(opts.unwrap_or(serde_json::Value::Null)) }
+#[tauri::command]
+fn check_update(channel: Option<String>) -> serde_json::Value { update_check(channel) }
+
 
 /* ---------------- 声库扫描（只读；对齐 main/utau.js:84 / main/diffsinger.js:1261） ---------------- */
 
@@ -1541,13 +1539,19 @@ fn cover_sep_resolve_at(root: &Path, id: &str) -> Result<(PathBuf, Option<PathBu
         let Some((_, w)) = best else { return Err(format!("分离模型目录里没有权重：{name}")) };
         (w, base.clone())
     };
+    let arch = cover_sep_arch(weight.to_string_lossy().as_ref());
     let mut config = std::fs::read_dir(&dir).ok().and_then(|rd| rd.flatten().map(|e| e.path()).find(|p| p.extension().and_then(|x| x.to_str()).map(|x| x.eq_ignore_ascii_case("yaml") || x.eq_ignore_ascii_case("yml")).unwrap_or(false)));
     if config.is_none() {
-        let want = weight.file_name().and_then(|x| x.to_str()).unwrap_or(&name);
-        config = pick_sep_yaml(&root.join("_configs"), want)
-            .or_else(|| pick_sep_yaml(&root.join("cache").join("msst_autocfg"), want));
+        let want = weight.file_name().and_then(|x| x.to_str()).unwrap_or(&name).to_string();
+        config = pick_sep_yaml(&root.join("_configs"), &want)
+            .or_else(|| pick_sep_yaml(&root.join("cache").join("msst_autocfg"), &want));
+        if config.is_none() {
+            // S4 配置自愈：模型目录 → _configs / autocfg → 内置 index → autoconfig。
+            let _ = crate::model_service::heal_config_for_weight(root, &weight, &arch);
+            config = pick_sep_yaml(&root.join("_configs"), &want)
+                .or_else(|| pick_sep_yaml(&root.join("cache").join("msst_autocfg"), &want));
+        }
     }
-    let arch = cover_sep_arch(weight.to_string_lossy().as_ref());
     Ok((weight, config, arch))
 }
 fn cover_args(opts: &serde_json::Value, models_root: &Path) -> Result<Vec<String>, String> {
@@ -1997,127 +2001,6 @@ async fn plugin_render_file(req: serde_json::Value) -> Result<serde_json::Value,
     }).await.map_err(|e| e.to_string())?
 }
 
-fn expected_sha256(id: &str) -> Option<&'static str> {
-    Some(match id {
-        "beat_this" => "8c328b45f59d8dd3dff219253ff6a8d6482be57d0133a29140e2febbf8eb8331",
-        "hft_transformer" => "bb3c88758e4802e6b3881ccb6dc7927417fb43f76980df3739ab2bbc418d70c5",
-        "audio_tagger" => "e2fa9affc4d42bcf6f8400e4d0def0dcdefd95202819b1b90cf75d1123653295",
-        "yourmt3" => "82054845789bf380317cd3ab77dedc6622ee969e58216d7b8289691ae8011c46",
-        "hnsep_240512" => "8f8c1046d0cacd40363e6f71d48bc1663e06a01d4625af0569055648d771ff92",
-        _ => return None,
-    })
-}
-fn sha256_file(path: &Path) -> Option<String> {
-    let out = Command::new("certutil").args(["-hashfile", &path.display().to_string(), "SHA256"]).creation_flags(0x08000000).output().ok()?;
-    if !out.status.success() { return None; }
-    let s = String::from_utf8_lossy(&out.stdout);
-    s.lines().find(|l| l.trim().len() == 64 && l.trim().chars().all(|c| c.is_ascii_hexdigit())).map(|l| l.trim().to_ascii_lowercase())
-}
-
-fn model_download_urls(id: &str) -> Option<(&'static str, &'static str, u64)> {
-    Some(match id {
-        "piano_transcription" => ("https://zenodo.org/record/4034264/files/CRNN_note_F1%3D0.9677_pedal_F1%3D0.9186.pth?download=1", "piano_transcription/note_F1=0.9677_pedal_F1=0.9186.pth", 160_000_000),
-        "beat_this" => ("https://raw.githubusercontent.com/monologue82/Models/main/beat_this/beat_this-final0.ckpt", "hub/checkpoints/beat_this-final0.ckpt", 70_000_000),
-        "hnsep_240512" => ("https://cnb.cool/FuFuCloud-mirror/Models/-/releases/download/hnsep-v1/hnsep_240512.oudep", "hnsep/hnsep_240512.oudep", 50_000_000),
-        _ => return None,
-    })
-}
-
-fn model_download_zip(id: &str) -> Option<(&'static str, &'static str, &'static str, u64)> {
-    Some(match id {
-        "hft_transformer" => ("https://github.com/monologue82/Models/releases/download/models-extra-v1/hft-transformer-ismir2023.zip", "hft_transformer", "checkpoint/MAESTRO-V3/model_016_003.pkl", 18_000_000),
-        "audio_tagger" => ("https://cnb.cool/FuFuCloud-mirror/Models/-/releases/download/models-extra-v1/audio-tagger-20240415.zip", "audio-tagger", "model.int8.onnx", 19_000_000),
-        "yourmt3" => ("https://cnb.cool/FuFuCloud-mirror/Models/-/releases/download/yourmt3-v1/yourmt3-runtime-20261020.zip", "yourmt3", "amt/logs/2024/ptf_all_cross_rebal5_mirst_xk2_edr005_attend_c_full_plus_b100/checkpoints/model.ckpt", 300_000_000),
-        _ => return None,
-    })
-}
-
-#[tauri::command]
-async fn model_download(req: serde_json::Value) -> serde_json::Value {
-    let id = req.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    if let Some(item) = model_list().into_iter().find(|m| m.get("id").and_then(|v| v.as_str()) == Some(id.as_str())) {
-        if item.get("exists").and_then(|v| v.as_bool()) == Some(true) {
-            return serde_json::json!({ "ok": true, "id": id, "existed": true, "path": item.get("path"), "size": item.get("size") });
-        }
-    }
-    if id == "miros" {
-        let Some(py) = python_path() else { return oto_err("Python 不存在") };
-        let Some(eng) = engine_dir() else { return oto_err("引擎目录不存在") };
-        let script = eng.join("miros_fetch.py"); let root = data_dir();
-        return tauri::async_runtime::spawn_blocking(move || {
-            match Command::new(py).args([script.display().to_string(), root.display().to_string()]).creation_flags(0x08000000).output() {
-                Ok(o) => String::from_utf8_lossy(&o.stdout).lines().rev().find_map(|l| serde_json::from_str::<serde_json::Value>(l.trim()).ok()).unwrap_or_else(|| oto_err("miros downloader no JSON")),
-                Err(e) => oto_err(&e.to_string()),
-            }
-        }).await.map_err(|e| e.to_string()).unwrap_or_else(|e| oto_err(&e));
-    }
-if id.starts_with("msst:") || id == "muscriptor_small" || id == "muscriptor_medium" || id == "muscriptor_large" {
-        let Some(py) = python_path() else { return oto_err("Python 不存在") };
-        let Some(eng) = engine_dir() else { return oto_err("引擎目录不存在") };
-        let script = eng.join("msst_fetch.py");
-        let root = data_dir();
-        return tauri::async_runtime::spawn_blocking(move || {
-            let out = Command::new(py).args([script.display().to_string(), "--id".into(), id.clone(), "--root".into(), root.display().to_string()])
-                .creation_flags(0x08000000).output();
-            match out {
-                Ok(o) => {
-                    let s = String::from_utf8_lossy(&o.stdout).to_string();
-                    s.lines().rev().find_map(|l| serde_json::from_str::<serde_json::Value>(l.trim()).ok())
-                        .unwrap_or_else(|| serde_json::json!({ "ok": false, "id": id, "error": String::from_utf8_lossy(&o.stderr).chars().take(800).collect::<String>() }))
-                }
-                Err(e) => oto_err(&e.to_string()),
-            }
-        }).await.map_err(|e| e.to_string()).unwrap_or_else(|e| oto_err(&e));
-    }
-
-    if let Some((url, rel, marker, min)) = model_download_zip(&id) {
-        let root = data_dir();
-        return tauri::async_runtime::spawn_blocking(move || {
-            let dest = root.join("models").join(rel);
-            if let Some(parent) = dest.parent() { if let Err(e) = std::fs::create_dir_all(parent) { return oto_err(&e.to_string()); } }
-            let part = root.join("models").join(format!(".{rel}.zip.part"));
-            let out = match Command::new("curl.exe").args(["-L", "--fail", "--retry", "2", "-C", "-", "-o", &part.display().to_string(), url]).creation_flags(0x08000000).output() {
-                Ok(o) => o, Err(e) => return oto_err(&e.to_string()),
-            };
-            if !out.status.success() { return serde_json::json!({ "ok": false, "id": id, "error": format!("下载失败：{}", String::from_utf8_lossy(&out.stderr).chars().take(400).collect::<String>()) }); }
-            let size = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
-            if size < min { return serde_json::json!({ "ok": false, "id": id, "error": format!("下载不完整：{size} < {min}") }); }
-            if let Some(want) = expected_sha256(&id) { if sha256_file(&part).as_deref() != Some(want) { return serde_json::json!({ "ok": false, "id": id, "error": "SHA-256 校验失败" }); } }
-            std::fs::create_dir_all(&dest).ok();
-            let out = match Command::new("tar.exe").args(["-xf", &part.display().to_string(), "-C", &dest.display().to_string()]).creation_flags(0x08000000).output() {
-                Ok(o) => o, Err(e) => return oto_err(&e.to_string()),
-            };
-            if !out.status.success() { return serde_json::json!({ "ok": false, "id": id, "error": format!("解压失败：{}", String::from_utf8_lossy(&out.stderr).chars().take(400).collect::<String>()) }); }
-            if !dest.join(marker).is_file() { return serde_json::json!({ "ok": false, "id": id, "error": format!("解压后缺标记文件：{marker}") }); }
-            let _ = std::fs::remove_file(&part);
-            serde_json::json!({ "ok": true, "id": id, "path": dest.display().to_string(), "size": size })
-        }).await.map_err(|e| e.to_string()).unwrap_or_else(|e| oto_err(&e));
-    }
-    let Some((url, rel, min)) = model_download_urls(&id) else {
-        return serde_json::json!({ "ok": false, "id": id, "error": "该模型没有直链下载定义；请用资源中心手动放置到 data-root/models" });
-    };
-    let root = data_dir();
-    tauri::async_runtime::spawn_blocking(move || {
-        let dest = root.join("models").join(rel);
-        if let Some(parent) = dest.parent() { if let Err(e) = std::fs::create_dir_all(parent) { return oto_err(&e.to_string()); } }
-        let part = dest.with_extension("part");
-        let out = match Command::new("curl.exe").args(["-L", "--fail", "--retry", "2", "-C", "-", "-o", &part.display().to_string(), url]).creation_flags(0x08000000).output() {
-            Ok(o) => o, Err(e) => return oto_err(&e.to_string()),
-        };
-        if !out.status.success() { return serde_json::json!({ "ok": false, "id": id, "error": format!("下载失败：{}", String::from_utf8_lossy(&out.stderr).chars().take(400).collect::<String>()) }); }
-        let size = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
-        if size < min { return serde_json::json!({ "ok": false, "id": id, "error": format!("下载不完整：{size} < {min}") }); }
-        if let Some(want) = expected_sha256(&id) { if sha256_file(&part).as_deref() != Some(want) { return serde_json::json!({ "ok": false, "id": id, "error": "SHA-256 校验失败" }); } }
-        if let Err(e) = std::fs::rename(&part, &dest) { return oto_err(&e.to_string()); }
-        serde_json::json!({ "ok": true, "id": id, "path": dest.display().to_string(), "size": size })
-    }).await.map_err(|e| e.to_string()).unwrap_or_else(|e| oto_err(&e))
-}
-
-#[tauri::command]
-fn model_cancel(_id: Option<String>) -> serde_json::Value { serde_json::json!({ "ok": false, "error": "直链下载在独立线程执行，当前不支持中途取消" }) }
-#[tauri::command]
-fn model_pause(_id: Option<String>) -> serde_json::Value { serde_json::json!({ "ok": false, "error": "直链下载不支持暂停；重新下载会从 .part 断点续传" }) }
-
 fn diffsinger_catalog() -> serde_json::Value {
     let raw = include_str!("../../../renderer/dist/diffsinger-ms-catalog.json");
     let mut v: serde_json::Value = serde_json::from_str(raw).unwrap_or_else(|_| serde_json::json!({ "ok": false, "error": "catalog JSON 解析失败" }));
@@ -2422,7 +2305,7 @@ fn open_db() -> Result<Connection, String> {
 }
 
 /// 查找 Python：显式 env > 安装版 resources/python > 开发树 resources/python。
-fn python_path() -> Option<PathBuf> {
+pub(crate) fn python_path() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("FUFUMIDI_PYTHON") {
         let pb = PathBuf::from(p);
         if pb.exists() { return Some(pb); }
@@ -2731,7 +2614,7 @@ fn diag_export() -> serde_json::Value {
         "generatedAt": stamp,
         "host": host_info_json(),
         "python": py,
-        "models": model_list().into_iter().filter(|m| m.get("exists").and_then(|v| v.as_bool()).unwrap_or(false)).count(),
+        "models": model_service::list_plain().into_iter().filter(|m| m.get("exists").and_then(|v| v.as_bool()).unwrap_or(false)).count(),
         "soundfonts": soundfont_list().len(),
         "dataDir": data_dir().display().to_string(),
     });
@@ -3023,23 +2906,9 @@ fn open_edit_guide() -> serde_json::Value { open_doc("edit") }
 
 
 fn model_artifact_path(root: &Path, id: &str) -> Option<PathBuf> {
-    let rel: &str = match id {
-        "basic_pitch" => "basic_pitch_quant.onnx",
-        "piano_transcription" => "piano_transcription/note_F1=0.9677_pedal_F1=0.9186.pth",
-        "hft_transformer" => "hft_transformer",
-        "muscriptor_small" => "muscriptor/small",
-        "muscriptor_medium" => "muscriptor/medium",
-        "muscriptor_large" => "muscriptor/large",
-        "yourmt3" => "yourmt3",
-        "miros" => "miros",
-        "aria_amt" => "aria_amt",
-        "beat_this" => "hub/checkpoints/beat_this-final0.ckpt",
-        "audio_tagger" => "audio-tagger",
-        "hnsep" => "hnsep",
-        "htdemucs4_6stems" => "multi/htdemucs4_6stems",
-        _ => return None,
-    };
-    Some(root.join(rel))
+    if id == "basic_pitch" { return Some(root.join("basic_pitch_quant.onnx")); }
+    if id == "htdemucs4_6stems" { return Some(root.join("multi/htdemucs4_6stems")); }
+    model_service::artifact_rel(id).map(|rel| root.join(rel))
 }
 
 fn model_delete_at(root: &Path, id: &str) -> serde_json::Value {
@@ -5196,7 +5065,7 @@ fn list_midi_files(dir: String) -> Vec<String> {
     out
 }
 
-fn engine_dir() -> Option<PathBuf> {
+pub(crate) fn engine_dir() -> Option<PathBuf> {
     let mut cands = Vec::new();
     if let Some(d) = dev_root() { cands.push(d.join("engine")); }
     if let Some(d) = exe_dir() {
@@ -5388,7 +5257,7 @@ fn pick_music_xml(app: AppHandle) -> Option<String> {
 /// 发布版 python/ 故意不带 torch/demucs（体积），必须把数据根下的
 /// gpu-enhancements/<kind>/site-packages 挂到 PYTHONPATH；没有增强包时显式
 /// FUFUMIDI_DISABLE_GPU=1，避免继承宿主环境里的旧 torch 造成 ABI/版本错配。
-fn apply_engine_env(cmd: &mut Command) {
+pub(crate) fn apply_engine_env(cmd: &mut Command) {
     #[cfg(target_os = "windows")]
     cmd.creation_flags(0x08000000);
     cmd.env("PYTHONIOENCODING", "utf-8")
@@ -5872,6 +5741,12 @@ fn tauri_log(msg: &str) {
     }
 }
 
+/// 无窗口 CLI 输出：windows 子系统下 stdout 可能已关闭，写失败绝不能 panic。
+fn cli_print(s: impl std::fmt::Display) {
+    use std::io::Write;
+    let _ = writeln!(std::io::stdout(), "{s}");
+}
+
 fn main() {
     let _ = PROCESS_START.set(std::time::Instant::now());
     std::panic::set_hook(Box::new(|info| {
@@ -5883,18 +5758,26 @@ fn main() {
     }));
     tauri_log(&format!("start pid={} exe={} data={} args={:?}", std::process::id(), std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default(), data_dir().display(), std::env::args().collect::<Vec<_>>()));
     if std::env::args().any(|a| a == "--self-check") {
-        println!("{}", serde_json::to_string_pretty(&host_info_json()).unwrap_or_default());
+        cli_print(serde_json::to_string_pretty(&host_info_json()).unwrap_or_default());
         return;
     }
     if std::env::args().any(|a| a == "--engine-self-check") {
         // 只跑 worker 协议，不创建 Tauri Builder/WebView 窗口。
-        println!("{}", serde_json::to_string_pretty(&engine_self_check()).unwrap_or_default());
+        cli_print(serde_json::to_string_pretty(&engine_self_check()).unwrap_or_default());
+        return;
+    }
+    if let Some(i) = std::env::args().position(|a| a == "--model-fetch") {
+        let args: Vec<String> = std::env::args().collect();
+        let id = args.get(i + 1).cloned().unwrap_or_default();
+        if id.is_empty() { cli_print(serde_json::json!({ "ok": false, "error": "usage: --model-fetch <id> [channel]" })); return; }
+        let channel = args.get(i + 2).cloned();
+        cli_print(model_service::download_headless(&id, channel.as_deref()));
         return;
     }
     if std::env::args().any(|a| a == "--model-check") {
-        let items = model_list();
+        let items = model_service::list_plain();
         let sep: Vec<&serde_json::Value> = items.iter().filter(|m| m.get("kind").and_then(|v| v.as_str()) == Some("separate")).collect();
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!({ "ok": true, "dataDir": data_dir().display().to_string(), "models": items.len(), "separates": sep })).unwrap_or_default());
+        cli_print(serde_json::to_string_pretty(&serde_json::json!({ "ok": true, "dataDir": data_dir().display().to_string(), "models": items.len(), "separates": sep })).unwrap_or_default());
         return;
     }
     let argv: Vec<String> = std::env::args().collect();
@@ -5903,7 +5786,7 @@ fn main() {
         let ok = db_playlists_put(serde_json::json!({ "id": "__diag_playlist__", "name": "诊断歌单", "songIds": [] }));
         let after = db_playlists_list();
         let _ = db_playlists_delete("__diag_playlist__".to_string());
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!({ "dbPath": db_path().display().to_string(), "before": before, "putOk": ok, "after": after })).unwrap_or_default());
+        cli_print(serde_json::to_string_pretty(&serde_json::json!({ "dbPath": db_path().display().to_string(), "before": before, "putOk": ok, "after": after })).unwrap_or_default());
         return;
     }
     if argv.iter().any(|a| a == "--ds-check") {
@@ -5912,26 +5795,26 @@ fn main() {
         let works = c.get("works").and_then(|w| w.as_array()).map(|a| a.len()).unwrap_or(0);
         let mut installed = 0;
         if let Some(ws) = c.get("works").and_then(|w| w.as_array()) { for w in ws { for cat in w.get("categories").and_then(|x| x.as_array()).into_iter().flatten() { for m in cat.get("models").and_then(|x| x.as_array()).into_iter().flatten() { if m.get("installed").and_then(|v| v.as_bool()) == Some(true) { installed += 1; } } } } }
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!({ "works": works, "stats": stats, "installed": installed })).unwrap_or_default());
+        cli_print(serde_json::to_string_pretty(&serde_json::json!({ "works": works, "stats": stats, "installed": installed })).unwrap_or_default());
         return;
     }
     if argv.iter().any(|a| a == "--we-check") {
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!({ "detect": wallpaper_engine_detect(), "inventory": wallpaper_engine_inventory(None) })).unwrap_or_default());
+        cli_print(serde_json::to_string_pretty(&serde_json::json!({ "detect": wallpaper_engine_detect(), "inventory": wallpaper_engine_inventory(None) })).unwrap_or_default());
         return;
     }
     if argv.iter().any(|a| a == "--update-check") {
-        println!("{}", serde_json::to_string_pretty(&update_check_remote("beta")).unwrap_or_default());
+        cli_print(serde_json::to_string_pretty(&update_check_remote("beta")).unwrap_or_default());
         return;
     }
     if let Some(i) = argv.iter().position(|a| a == "--stem-smoke") {
         let audio = argv.get(i + 1).cloned().unwrap_or_default();
         let out = argv.get(i + 2).cloned().unwrap_or_default();
         if audio.is_empty() || out.is_empty() {
-            println!("{}", serde_json::json!({ "ok": false, "error": "usage: --stem-smoke <audio> <out.mid>" }));
+            cli_print(serde_json::json!({ "ok": false, "error": "usage: --stem-smoke <audio> <out.mid>" }));
             return;
         }
         let req = serde_json::json!({ "id": "stem-smoke", "audio": audio, "out": out, "stemEnhance": true, "mode": "universal", "model": "basic", "perf": "quality", "trackBudget": "auto" });
-        println!("{}", serde_json::to_string_pretty(&stem_workflow::run(&req, None).unwrap_or_else(|| serde_json::json!({ "ok": false, "fallback": true }))).unwrap_or_default());
+        cli_print(serde_json::to_string_pretty(&stem_workflow::run(&req, None).unwrap_or_else(|| serde_json::json!({ "ok": false, "fallback": true }))).unwrap_or_default());
         return;
     }
     let state = WorkerState {
@@ -5960,6 +5843,7 @@ fn main() {
     let video_export_state = VideoExportState(Arc::new(Mutex::new(HashMap::new())));
     let cover_state = CoverState(Arc::new(Mutex::new(None)));
     let separation_state = SeparationState(Arc::new(Mutex::new(None)));
+    let model_state = model_service::ModelDlState::default();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .register_uri_scheme_protocol("we", |_app, request| {
@@ -5973,10 +5857,12 @@ fn main() {
         .manage(video_export_state)
         .manage(cover_state)
         .manage(separation_state)
+        .manage(model_state)
         .invoke_handler(tauri::generate_handler![
             host_info, app_version, ping, python_selfcheck, engine_probe,
             wallpaper_engine_detect, wallpaper_engine_inventory, wallpaper_engine_open_folder, wallpaper_engine_view, diffsinger_ms_catalog, diffsinger_ms_download, diffsinger_ms_cancel_download, model_download, model_cancel, model_pause, plugin_pick_file, plugin_pick_audio, plugin_save_path, plugin_render_file, renderer_ready, update_check, update_list, update_notes, launch_updater, load_settings, save_settings, update_sources, update_set_preferred_source, db_kv_get, db_kv_set,
             tasks_list, tasks_cancel, tasks_clear_finished, db_status, db_songs_list, db_song_get, db_songs_put, db_songs_delete, db_playlists_list, db_playlists_put, db_playlists_delete, check_midi, has_midi, verify_midi, dupe_midi, delete_midi, rename_midi, wallpaper_defaults, data_root, open_data_root, clean_temp, get_zoom_factor, set_zoom_factor, set_full_screen, autosave_write, autosave_list, autosave_read, autosave_clear, read_sidecar_lyrics, reveal_midi, copy_asset, open_folder, project_save, project_open, storage_report, storage_cleanup, audio_duration, export_audio, export_stems_zip, cover_singers, cover_pick_audio, cover_pick_dir, cover_open, cover_cancel, cover_run, video_export_begin, video_export_write, video_export_abort, video_export_end, pick_cover, export_dawproject, autostart_get, autostart_set, diag_health, pick_model_archive, model_import_local, clear_user_data, check_integrity, repair_integrity, write_midi, write_binary, usermeta_list, usermeta_set, usermeta_remove, usermeta_reorder, usermeta_pin, wallpaper_list, wallpaper_add_local, wallpaper_remove_local, wallpaper_scan_folder, file_assoc, wallpaper_set_desktop, gpu_status, gpu_uninstall, gpu_unified_memory_experiment, plugins_list, plugins_rescan, plugins_set_enabled, plugins_installed_list, plugins_platform_info, plugins_catalog, plugins_open_platform, plugins_install_from_platform, plugins_confirm_install, plugins_cancel_install, plugins_open_dir, plugins_open_docs, open_edit_guide, sf_workshop_list, sf_workshop_import, sf_workshop_delete, sf_workshop_open_dir, model_list, omr_engine_status, omr_engine_open_dir, omr_engine_remove, omr_lang_status, omr_lang_remove, omr_homr_status, omr_homr_remove, omr_sr_status, omr_sr_remove,
+            dep_install, sf_workshop_download, sf_workshop_cancel, gpu_list_packages, gpu_package_url, gpu_download_package, gpu_import_local, gpu_install_auto, gpu_cancel_install, utau_voicebank_registry, utau_download_voicebank, utau_cancel_voicebank_download, omr_engine_install, omr_lang_install, omr_homr_install, omr_sr_install, omr_cancel_install, plugins_invoke, update_download, update_open, wallpaper_download, export_score_png_zip, export_score_pdf, transcode_video, check_update,
             soundfont_list, dep_check, diag_export, notify, open_output, open_external,
             presets_list, presets_save, presets_delete, presets_last_used, presets_set_model,
             presets_reorder, presets_reorder_to, presets_restore,
