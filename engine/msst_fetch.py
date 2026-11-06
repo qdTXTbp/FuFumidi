@@ -24,9 +24,12 @@ def get_json():
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--id", required=True); ap.add_argument("--root", required=True)
     a = ap.parse_args()
-    parts = a.id.split(":")
-    if len(parts) != 3 or parts[0] != "msst": raise SystemExit("bad id")
-    tag, key = parts[1], parts[2]
+    if a.id in ("muscriptor_small", "muscriptor_medium", "muscriptor_large"):
+        tag, key = "muscriptor", a.id.split("_", 1)[1]
+    else:
+        parts = a.id.split(":")
+        if len(parts) != 3 or parts[0] != "msst": raise SystemExit("bad id")
+        tag, key = parts[1], parts[2]
     man = get_json(); meta = (man.get(tag) or {}).get(key)
     if not meta:
         for k, v in (man.get(tag) or {}).items():

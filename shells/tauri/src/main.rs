@@ -2023,7 +2023,7 @@ async fn model_download(req: serde_json::Value) -> serde_json::Value {
             return serde_json::json!({ "ok": true, "id": id, "existed": true, "path": item.get("path"), "size": item.get("size") });
         }
     }
-    if id.starts_with("msst:") {
+    if id.starts_with("msst:") || id == "muscriptor_small" || id == "muscriptor_medium" || id == "muscriptor_large" {
         let Some(py) = python_path() else { return oto_err("Python 不存在") };
         let Some(eng) = engine_dir() else { return oto_err("引擎目录不存在") };
         let script = eng.join("msst_fetch.py");
