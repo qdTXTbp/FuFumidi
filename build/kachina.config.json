@@ -1,6 +1,12 @@
 {
   "source": [
     {
+      "id": "github",
+      "name": "GitHub 官方",
+      "uri": "https://github.com/qdTXTbp/FuFumidi/releases/latest/download/FuFumidi.Install.exe",
+      "icon": "<svg viewBox=\"0 0 24 24\"><g fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.5\"><path d=\"M3 8.5 9 3l6 5.5M9 3v15c0 1.5 1 3 3 3s3-1.5 3-3V7\"/></g></svg>"
+    },
+    {
       "id": "cnb",
       "name": "国内源 · CNB",
       "uri": "https://cnb.cool/FuFuCloud-mirror/FuFuMIDI/-/releases/latest/download/FuFumidi.Install.exe",
@@ -28,12 +34,6 @@
       "id": "ghproxy-net",
       "name": "国内镜像 · ghproxy.net",
       "uri": "https://ghproxy.net/https://github.com/qdTXTbp/FuFumidi/releases/latest/download/FuFumidi.Install.exe",
-      "icon": "<svg viewBox=\"0 0 24 24\"><g fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.5\"><path d=\"M3 8.5 9 3l6 5.5M9 3v15c0 1.5 1 3 3 3s3-1.5 3-3V7\"/></g></svg>"
-    },
-    {
-      "id": "github",
-      "name": "GitHub 官方",
-      "uri": "https://github.com/qdTXTbp/FuFumidi/releases/latest/download/FuFumidi.Install.exe",
       "icon": "<svg viewBox=\"0 0 24 24\"><g fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.5\"><path d=\"M3 8.5 9 3l6 5.5M9 3v15c0 1.5 1 3 3 3s3-1.5 3-3V7\"/></g></svg>"
     },
     {
@@ -76,7 +76,8 @@
     "${INSTALL_PATH}/resources/models",
     "${INSTALL_PATH}/resources/wallpapers",
     "${INSTALL_PATH}/resources/wallpaper-thumbs",
-    "${INSTALL_PATH}/FuFumidiData"
+    "${INSTALL_PATH}/FuFumidiData",
+    "${INSTALL_PATH}/FuFumidi.update.exe"
   ],
   "userDataPath": [],
   "extraUninstallPath": [],
