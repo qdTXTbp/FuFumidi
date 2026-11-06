@@ -898,7 +898,7 @@ version = "0.3.0"
 
 [[package]]
 name = "fufumidi-shell"
-version = "6.5.0-beta.1"
+version = "6.5.0-alpha.1"
 dependencies = [
  "fufumidi-core",
  "rusqlite",
