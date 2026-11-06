@@ -197,7 +197,7 @@ fn model_list() -> Vec<serde_json::Value> {
             for e in rd.flatten() {
                 let p = e.path();
                 let name = p.file_stem().and_then(|s| s.to_str()).unwrap_or("model").to_string();
-                let id = format!("{tag}:{name}");
+                let id = format!("msst:{tag}:{name}");
                 push_model(&mut items, &id, &name, kind, p, 1_000_000, label);
             }
         }
@@ -210,7 +210,7 @@ fn model_list() -> Vec<serde_json::Value> {
             let desc = m.get("desc").and_then(|v| v.as_str()).unwrap_or("");
             if file.is_empty() || tag.is_empty() { continue; }
             let stem = Path::new(file).file_stem().and_then(|s| s.to_str()).unwrap_or(file);
-            let id = format!("msst:{stem}");
+            let id = format!("msst:{tag}:{stem}");
             push_model(&mut items, &id, stem, "separate", dir.join(tag).join(stem), 1_000_000, desc);
         }
     }
@@ -2023,6 +2023,25 @@ async fn model_download(req: serde_json::Value) -> serde_json::Value {
             return serde_json::json!({ "ok": true, "id": id, "existed": true, "path": item.get("path"), "size": item.get("size") });
         }
     }
+    if id.starts_with("msst:") {
+        let Some(py) = python_path() else { return oto_err("Python 不存在") };
+        let Some(eng) = engine_dir() else { return oto_err("引擎目录不存在") };
+        let script = eng.join("msst_fetch.py");
+        let root = data_dir();
+        return tauri::async_runtime::spawn_blocking(move || {
+            let out = Command::new(py).args([script.display().to_string(), "--id".into(), id.clone(), "--root".into(), root.display().to_string()])
+                .creation_flags(0x08000000).output();
+            match out {
+                Ok(o) => {
+                    let s = String::from_utf8_lossy(&o.stdout).to_string();
+                    s.lines().rev().find_map(|l| serde_json::from_str::<serde_json::Value>(l.trim()).ok())
+                        .unwrap_or_else(|| serde_json::json!({ "ok": false, "id": id, "error": String::from_utf8_lossy(&o.stderr).chars().take(800).collect::<String>() }))
+                }
+                Err(e) => oto_err(&e.to_string()),
+            }
+        }).await.map_err(|e| e.to_string()).unwrap_or_else(|e| oto_err(&e));
+    }
+
     if let Some((url, rel, marker, min)) = model_download_zip(&id) {
         let root = data_dir();
         return tauri::async_runtime::spawn_blocking(move || {
