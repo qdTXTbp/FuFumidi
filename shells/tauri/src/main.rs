@@ -5871,8 +5871,15 @@ fn main() {
     let open_arg = pending_open_from_args(std::env::args());
     let listener = TcpListener::bind(("127.0.0.1", SINGLE_INSTANCE_PORT)).ok();
     if listener.is_none() {
-        // 已有实例：把文件/聚焦请求交给它，本进程不再创建窗口。
-        if single_instance_forward(open_arg.as_deref()) { return; }
+        // 已有实例或并发启动：最多等 5s 把文件/聚焦请求交给它。
+        // 绝不继续创建 WebView2 —— 并发启动曾在干净 VM 里触发
+        // "Failed to create webview: 无效的窗口句柄" panic。
+        for _ in 0..20 {
+            if single_instance_forward(open_arg.as_deref()) { return; }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+        eprintln!("[fufumidi-shell] single-instance port busy and no live instance; exiting");
+        return;
     }
     let pending_open = PendingOpen(Mutex::new(open_arg));
     let zoom_state = ZoomState(Arc::new(Mutex::new(1.0)));
