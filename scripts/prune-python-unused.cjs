@@ -24,7 +24,14 @@ for (const name of PACKAGES) {
   const dst = path.join(BACKUP, name);
   try {
     if (fs.existsSync(dst)) fs.rmSync(dst, { recursive: true, force: true });
-    fs.renameSync(src, dst);
+    try {
+      fs.renameSync(src, dst);
+    } catch (err) {
+      // 同盘快速路径；跨盘（源在 D:、备份在 E:）rename 必报 EXDEV → 复制后删源。
+      if (err.code !== 'EXDEV') throw err;
+      fs.cpSync(src, dst, { recursive: true });
+      fs.rmSync(src, { recursive: true, force: true });
+    }
     moved += size;
     console.log('moved ' + name + '  ' + Math.round(size / 1048576) + ' MB');
   } catch (err) { console.error('skip ' + name + ': ' + err.message); }
