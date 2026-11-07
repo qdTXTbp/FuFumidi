@@ -10,6 +10,7 @@ const { safeExtractAllTo, safeExtractFile } = require('./zip-safe');
 const MSST_CATALOG = require('./models-msst-catalog');
 const SepCommon = require('./separate-common');
 const DS = require('./download-source');
+const ModelSources = require('./model-sources');
 const createFastDownload = require('./fast-download');
 const RVC = require('./rvc');
 
@@ -170,19 +171,32 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
     },
     // 节拍网格检测（Beat This!）：MuScriptor 转录做音符时值对齐的可选前处理权重。
     // 原版经 torch.hub 从 JKU 云盘下载并缓存到系统 ~/.cache/torch（可能截断/联网失败/落外部盘），
-    // 这里纳入资源中心，走国内/多源回退下载，落到软件 models 目录内的 hub/checkpoints 供 torch.hub 复用。
+    // 这里纳入资源中心，落到软件 models 目录内的 hub/checkpoints 供 torch.hub 复用。
+    //
+    // ★ 2026-11-07：明确「自有仓库 · 国内 / 国外双端」，不再依赖 GitHub raw 一条腿：
+    //   国外 = monologue82/Models 的 raw（字节未改，sha256 不变）
+    //   国内 = CNB 整树镜像 FuFuCloud-mirror/Models（同一份文件，实测 13 s / 约 6.2 MB/s）
+    //   国内端 git raw 不支持 Range（见 docs/DOWNLOADS.md 第 2 节），FastDL 会自动退回
+    //   单连接；81 MB 走单连接足够快，不必为它切片。
+    //   两条地址都过同一个 sha256，谁坏谁被丢。
     beat_this: {
       id: 'beat_this',
       name: '节拍网格检测（Beat This!）',
-      note: 'MuScriptor 转录时值对齐 · final0 · 约 81 MB · 多源并行加速下载',
+      note: 'MuScriptor 转录时值对齐 · final0 · 约 81 MB · 国内 CNB / 国外 GitHub 双源',
       kind: 'transcribe',
       arch: 'BeatThis',
-      use: 'MuScriptor 转录可选前置：节拍网格检测，提升音符时值 / 对齐（未下载或失败时自动跳过）',
+      use: 'MuScriptor 转录可选前置：节拍网格检测，提升音符时值 / 对齐（未下载或失败时自动跳过）。'
+        + '权重走自有仓库双端：国内 CNB、国外 GitHub，按「设置 → 下载源」自动选路。',
       dest: path.join('hub', 'checkpoints', 'beat_this-final0.ckpt'),
+      // 国外：自有 GitHub 仓库（raw 在国内多为 0 吞吐，mirrorUrls 会把国内端排到前面）
       url: 'https://raw.githubusercontent.com/monologue82/Models/main/beat_this/beat_this-final0.ckpt',
+      // 国内：自有 CNB 整树镜像（与上面同一份字节）
+      mirrors: ['https://cnb.cool/FuFuCloud-mirror/Models/-/git/raw/main/beat_this/beat_this-final0.ckpt'],
       // 完整性校验（对已验证可用的 final0 权重计算）：分段并行下载后校验，防止镜像返回
-      // 截断/被改写的文件被当成模型装进本地
+      // 截断/被改写的文件被当成模型装进本地。国内镜像 2026-11-07 实测逐字节一致。
       sha256: '8c328b45f59d8dd3dff219253ff6a8d6482be57d0133a29140e2febbf8eb8331',
+      // 确切字节数：给 FastDL 做 expectSize 强校验（截断在下完那一刻就报，不必等 sha256）
+      size: 81058141,
       minSize: 7e7,
       downloadable: true,
       runtime: 'muscriptor',
@@ -824,28 +838,7 @@ function registerModelsIpc({ ipcMain, BrowserWindow, app, path, fs, net, modelsD
 
   /** 由原始 URL 推导候选下载源（自有 Models 仓库优先 CNB 镜像；GitHub 走加速镜像，其它源原样） */
   function mirrorUrls(spec) {
-    const raw = String(spec.url || '');
-    const out = [];
-    if (Array.isArray(spec.mirrors)) out.push(...spec.mirrors);
-    if (!raw) return [...new Set(out.filter(Boolean))];
-    if (/^https:\/\/(raw\.githubusercontent\.com|github\.com)\//i.test(raw)) {
-      const gh = [raw];
-      for (const p of [
-        'https://gh.jasonzeng.dev/',   // 与分卷下载同一个加速入口，国内通常最快
-        'https://ghfast.top/',
-        'https://gh-proxy.com/',
-        'https://ghproxy.net/',
-        'https://hub.gitmirror.com/',
-        'https://raw.gitmirror.com/',
-      ]) gh.push(p + raw);
-      // 自有 Models 仓库的文件 → 追加 CNB 整树镜像，并按下载源偏好排到最前 / 最后
-      const m = raw.match(/^https:\/\/raw\.githubusercontent\.com\/monologue82\/Models\/main\/(.+)$/i);
-      const cnb = m ? DS.cnbRepoRawUrl(MODELS_CNB_REPO, 'main', m[1]) : null;
-      out.push(...DS.orderUrls(cnb, gh, DS.sourceOf(readSettings())));
-      return [...new Set(out.filter(Boolean))];
-    }
-    out.push(raw);
-    return [...new Set(out.filter(Boolean))];
+    return ModelSources.mirrorUrls(spec, { source: DS.sourceOf(readSettings()) });
   }
 
   // 测速（rankMirrors）、长度探测（remoteSize）、单文件高速下载（downloadSingleFast）

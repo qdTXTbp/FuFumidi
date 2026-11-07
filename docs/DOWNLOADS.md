@@ -181,6 +181,10 @@ await FastDL.downloadMany(
 ## 6. 新增一个资源下载点的清单
 
 1. 候选 URL 用 `main/download-source.js` 的 `orderUrls` / `githubMirrorCandidates` 拼接（按用户下载源偏好）。
+   **模型类条目别自己拼** —— 用 `main/model-sources.js` 的 `mirrorUrls(spec, { source })`：
+   它把「国内端（`cnb.cool`）」与「国外端（GitHub raw / Release）」分组后交给 `orderUrls`，
+   于是「设置 → 下载源」里的 自动 / 国内 / 全球 对每一条都真的生效（`mirrors` 以前被无条件排最前，
+   选「全球」等于白选）。回归用例：`scripts/test-model-sources.mjs`。
 2. 调 `FastDL.downloadFast` 或 `downloadMany`；`label` 必填。
 3. 给出 `minSize`；能拿到确切大小就给 `expectSize`；有官方 SHA-256 就校验。
 4. 大文件先 `checkDiskSpace`。

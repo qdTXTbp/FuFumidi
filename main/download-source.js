@@ -76,10 +76,13 @@ function preferCnb(source) {
   return s === 'auto' || s === 'cnb';
 }
 
-/** 按偏好把「CNB 地址」与「GitHub 系地址」合成候选列表：国内优先 CNB 打头，全球优先 GitHub 打头 */
+/**
+ * 按偏好把「CNB 地址」与「GitHub 系地址」合成候选列表：国内优先 CNB 打头，全球优先 GitHub 打头。
+ * cnbUrl 既接受单条地址，也接受地址数组（一个资源可能在国内端有多条路径）。
+ */
 function orderUrls(cnbUrl, ghUrls, source) {
   const gh = (Array.isArray(ghUrls) ? ghUrls : [ghUrls]).filter(Boolean);
-  const cnb = cnbUrl ? [cnbUrl] : [];
+  const cnb = (Array.isArray(cnbUrl) ? cnbUrl : [cnbUrl]).filter(Boolean);
   const ordered = preferCnb(source === undefined ? currentSource() : source) ? [...cnb, ...gh] : [...gh, ...cnb];
   return [...new Set(ordered)];
 }
