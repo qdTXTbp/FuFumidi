@@ -56,11 +56,25 @@ export function cmpVersion(a, b) {
 
 /* ── 更新通道 ───────────────────────────────────────────────────────────
    'stable'（默认）：只更新到正式版（GitHub releases/latest 锚点）。
-   'beta'：额外接收测试版（prerelease），提前拿到 X.Y.Z-beta.N / -rc.N。
-   真正的通道分流在主进程（main/update.js）；这里的值通过检查更新与启动更新器
+   'beta'：额外接收测试版（prerelease），提前拿到 X.Y.Z-beta.N / -rc.N / -alpha.N。
+   真正的通道分流在主进程（main/update.js + main/update-channel.js）；这里的值通过检查更新与启动更新器
    的 IPC 参数传过去。localStorage 与 settings.update_channel 双写：前者保证
    启动瞬间就能读到，后者是跨设备/重装的持久值。 */
 const CHANNEL_KEY = 'fufumidi_update_channel';
+
+/** 预发布版本号（带 -alpha/-beta/-rc/-dev 等后缀）。
+ *  ★ 2026-11-07：正式通道用户曾收到测试版更新并更新失败。主进程已做硬隔离，
+ *    前端这里再兜一层：即便检查更新返回了越界版本，也不弹窗、不启动更新器。
+ *    判定规则与 main/update-channel.js 一致（宁可漏报，不可错发）。 */
+export function isPrereleaseVersion(v) {
+  return parseVersion(v).pre.length > 0;
+}
+
+/** 该版本号是否允许出现在用户所选通道里。 */
+export function versionAllowedForChannel(channel, v) {
+  if (normalizeUpdateChannel(channel) === 'stable') return !isPrereleaseVersion(v);
+  return true;
+}
 
 /** 纯归一化：把任意值收敛成合法取值，**不产生任何副作用**（不写 localStorage、不落盘）。
  *  读取设置时必须用它 —— setUpdateChannel 带写副作用，用在「加载」路径上，

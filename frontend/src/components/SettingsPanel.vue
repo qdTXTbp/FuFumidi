@@ -18,7 +18,7 @@ const toast = (m, t) => app.toast(m, t);
 const appVersion = ref('');
 // P0-7：构建时间由 vite define 注入（关于页显示版本 + 构建时间，便于用户报问题时定位）
 const buildTime = (typeof __BUILD_TIME__ !== 'undefined') ? String(__BUILD_TIME__).slice(0, 19).replace('T', ' ') : '';
-import { getAppVersion, cmpVersion, getUpdateChannel, setUpdateChannel, normalizeUpdateChannel, getDownloadSource, setDownloadSource, normalizeDownloadSource } from '../core/version.js';
+import { getAppVersion, cmpVersion, getUpdateChannel, setUpdateChannel, normalizeUpdateChannel, versionAllowedForChannel, getDownloadSource, setDownloadSource, normalizeDownloadSource } from '../core/version.js';
 // 线路测速的呈现层纯函数（格式化 / 按 id 合并流式结果 / 标最快）
 import { pendingRow, markBest, mergeRow, formatLatency, formatSpeed } from '../core/speedtest.js';
 getAppVersion().then(v => { appVersion.value = v; });
@@ -284,6 +284,13 @@ async function updLaunch() {
     if (!r || !r.ok) { upd.status = (r && r.error) || t('检查失败'); upd.failed = true; return; }
     const cur = String(r.current || '');
     const latest = String(r.latest || '');
+    const userChannel = getUpdateChannel();
+    // ★ 2026-11-07：正式通道绝不提示/启动测试版更新（主进程已硬隔离，前端再兜一层）。
+    if (latest && (!versionAllowedForChannel(userChannel, latest) ||
+        (r.channel === 'beta' && userChannel === 'stable'))) {
+      upd.status = t('已是最新版本（') + cur + t('）');
+      return;
+    }
     if (cmpVersion(latest, cur) <= 0) {
       // 远端比本地还旧：多半是发布只推了一边 / 锚点没切。照实说，别让用户以为坏了。
       upd.status = cmpVersion(latest, cur) < 0 && latest
@@ -297,7 +304,9 @@ async function updLaunch() {
     if (!bridge.update || !bridge.update.launchUpdater) { upd.status = t('当前环境不支持增量更新器'); upd.failed = true; return; }
     upd.status = t('正在启动更新器…');
     // 传「这个 latest 实际来自哪个通道」：测试通道下当时若没有测试版，latest 来自正式通道
-    const rr = await bridge.update.launchUpdater(r.channel || getUpdateChannel());
+    // ★ 正式通道用户永远传 stable —— 不信任响应里的 channel（可能已被发布侧污染）。
+    const launchChannel = userChannel === 'stable' ? 'stable' : (r.channel || userChannel);
+    const rr = await bridge.update.launchUpdater(launchChannel);
     if (rr && rr.ok) {
       upd.status = t('更新器已启动，下载与更新进度请在更新器窗口内查看…');
       upd.launched = true;

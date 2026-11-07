@@ -7,6 +7,7 @@ const DS = require('./download-source');
 const createFastDownload = require('./fast-download');
 const { updaterLooksConfigured } = require('./update_util');
 const ST = require('./update-speedtest');
+const UC = require('./update-channel');
 const { fetchManifest, verifyManifest } = require('./update_sign');
 
 // ── 更新通道 ────────────────────────────────────────────────────────────────
@@ -37,10 +38,13 @@ const CHANNEL_API_PATH = {
   stable: 'releases/latest',
   beta: 'releases?per_page=20',
 };
-// 测试通道的版本 tag 形如 v4.4.0-beta.1 / v4.4.0-rc.2
-const BETA_TAG_RE = /^v?\d+\.\d+\.\d+-(?:beta|rc)\.\d+$/i;
+// 测试通道的版本 tag 形如 v4.4.0-beta.1 / -rc.2 / -alpha.3
+// ★ 2026-11-07：只认 beta|rc 是漏洞 —— 线上实际发过 v6.5.0-alpha.3，
+//   beta 用户看不到它还其次，更要命的是这类 tag 混进正式通道时不会被识别成预发布。
+//   统一交给 update-channel.js 判定（alpha/beta/rc/dev/preview/nightly 都算预发布）。
+const BETA_TAG_RE = /^v?\d+\.\d+\.\d+-(?:alpha|beta|rc|dev|preview|nightly|a|b)[.\-\d]*$/i;
 
-function normChannel(v) { return String(v || '').toLowerCase() === 'beta' ? 'beta' : 'stable'; }
+function normChannel(v) { return UC.normChannel(v); }
 function sourceIdOf(mirrorId, channel) { return normChannel(channel) === 'beta' ? mirrorId + '-beta' : mirrorId; }
 
 function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, readSettings }) {
@@ -83,8 +87,20 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, 
     const m = String(text).match(/^version:\s*["']?([^\s"']+)/m);
     if (!m) throw new Error('CNB 版本信息缺失');
     const ver = m[1].replace(/^v/i, '');
+    const tag = 'v' + ver;
+    // ★ 2026-11-07 通道串味修复：CNB 的 latest 锚点可能被测试版发布短暂顶替
+    //   （发布侧误用 make_latest / 镜像缓存）。正式通道读到预发布版本时视为该源无效，
+    //   绝不能把它作为一个候选交给"取最大"比较 —— 6.5.0-beta.1 > 6.4.5 会直接胜出。
+    if (ch === 'stable' && UC.isPrereleaseTag(tag)) {
+      throw new Error('CNB latest 锚点指向预发布版本 ' + tag + '，正式通道忽略该源');
+    }
     const instUrl = ch === 'beta' ? DS.cnbTagUrl('beta', 'FuFumidi.Install.exe') : DS.cnbLatestUrl('FuFumidi.Install.exe');
-    return { tag_name: 'v' + ver, body: '', assets: [{ name: 'FuFumidi.Install.exe', browser_download_url: instUrl, size: 0 }] };
+    return {
+      tag_name: tag,
+      body: '',
+      prerelease: UC.isPrereleaseTag(tag),
+      assets: [{ name: 'FuFumidi.Install.exe', browser_download_url: instUrl, size: 0 }],
+    };
   }
 
   // HEAD 探测可用下载源（每个 6s 超时），失败自动换下一个；全部失败回退最近可达源，再退官方直连
@@ -111,7 +127,14 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, 
   function pickBetaRelease(list) {
     if (!Array.isArray(list)) return null;
     for (const r of list) {
-      if (r && r.prerelease && BETA_TAG_RE.test(String(r.tag_name || ''))) return r;
+      if (!r || !r.tag_name) continue;
+      // 固定锚点 release（tag 就叫 `beta`）只承载分发资产，不对应版本 → 必须先排除。
+      // GitHub 上它是 prerelease:true，若只按标记挑会把它当成"测试版 v1"返回，
+      // 版本号解析成 `beta`，前端比较直接失效。
+      if (/^beta$/i.test(String(r.tag_name).trim())) continue;
+      // 预发布判定同时看 prerelease 标记与 tag 名：远端曾把 v6.5.0-alpha.2 标成
+      // **非 prerelease** 的正式 release，只看标记会把它当成正式版放进来。
+      if (UC.isPrereleaseTag(r.tag_name) || (r.prerelease && /^v?\d+\.\d+\.\d+/.test(String(r.tag_name)))) return r;
     }
     return null;
   }
@@ -128,7 +151,16 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, 
         if (!r.ok) { lastErr = new Error('HTTP ' + r.status); continue; }
         const d = await r.json();
         const rel = ch === 'beta' ? pickBetaRelease(d) : d;
-        if (rel && rel.tag_name) { lastGoodSource = sourceIdOf(m.id, ch); return rel; }
+        if (!rel || !rel.tag_name) { lastErr = new Error('该源无可用版本'); continue; }
+        // ★ 通道硬约束：正式通道只接受正式版。GitHub 的 releases/latest 端点本应跳过
+        //   prerelease，但第三方镜像可能缓存了旧响应、发布侧也可能把 alpha 标成正式 release。
+        //   这里不信任上游标记，自己再判一次：tag 带预发布后缀就换下一个源。
+        if (!UC.allowsRelease(ch, rel)) {
+          lastErr = new Error('镜像 ' + m.id + ' 返回了不属于 ' + ch + ' 通道的版本 ' + rel.tag_name);
+          continue;
+        }
+        lastGoodSource = sourceIdOf(m.id, ch);
+        return rel;
       } catch (e) { lastErr = e; }
     }
     throw lastErr || new Error('无法访问 GitHub');
@@ -168,19 +200,20 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, 
   }
 
   // 决定该给用户报哪个版本。
-  // ★ 2026-11-01（用户报障「检测到新版本却显示已是最新」）：原来"先到先得"——
-  //   正式通道只读 CNB 的 latest.yml，失败才落到 GitHub。两个源**任何一个没同步**
-  //   （发布只推了一边、CDN 缓存、锚点没切），启动检查和手动检查就可能给出不同答案，
-  //   表现为"一会儿说有新版，一会儿说已是最新"。改成：CNB 与 GitHub **都查**，
-  //   取版本更高的那个；两边同版时优先 GitHub（带 release 说明 body）。
-  //   一个源挂了不影响结果 —— 和下载链的多源回退是同一个思路。
+  // ★ 2026-11-07（用户报障「没选测试版却收到测试版更新，而且更新失败」）：
+  //   上一版这里改成"CNB 与 GitHub 都查、取版本更高的"，但**漏了按通道过滤候选**。
+  //   只要某个源的 latest 锚点被测试版短暂顶替（发布侧误用 make_latest、镜像缓存），
+  //   6.5.0-beta.1 > 6.4.5 就会胜出；而 CNB 合成对象没有 prerelease 字段，
+  //   `channel` 被判成 stable → 更新器拿正式锚点的包去装测试版 → metadata 缺失/验签失败。
+  //   现在取最大之前先按通道过滤（正式通道只留正式版），并且 channel 一律由
+  //   release 本身（tag 名 + 标记）决定，不再相信调用方传进来的通道。
   async function resolveRelease(channel) {
     const ch = normChannel(channel);
     const attempts = [];
     // CNB：公开地址、免认证；beta 通道读 beta 锚点里的 latest.yml
     attempts.push(
       fetchCnbRelease(ch).then(
-        (release) => ({ release, channel: ch, via: 'cnb' }),
+        (release) => ({ release, via: 'cnb' }),
         (e) => { try { require('./log').write('WARN', 'optional failure', 'CNB 版本查询失败：' + String((e && e.message) || e)); } catch (_) { /* log failure ignored */ } return null; }
       )
     );
@@ -190,20 +223,30 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, 
         ? fetchChannelRelease('beta').catch(() => fetchChannelRelease('stable'))
         : fetchChannelRelease('stable')
       ).then(
-        (release) => ({ release, channel: release && release.prerelease ? 'beta' : 'stable', via: 'github' }),
+        (release) => ({ release, via: 'github' }),
         (e) => { try { require('./log').write('WARN', 'optional failure', 'GitHub 版本查询失败：' + String((e && e.message) || e)); } catch (_) { /* log failure ignored */ } return null; }
       )
     );
     const settled = await Promise.all(attempts);
-    const hits = settled.filter(Boolean);
-    if (!hits.length) throw new Error('所有更新源都不可达（CNB 与 GitHub 均失败）');
+    // 硬闸门：不属于本通道的 release 一律丢弃，不参与版本比较。
+    const hits = settled.filter(Boolean).filter((h) => {
+      const ok = UC.allowsRelease(ch, h.release);
+      if (!ok) {
+        try { require('./log').write('WARN', 'update channel guard',
+          '丢弃越界版本：' + h.release.tag_name + '（来源 ' + h.via + '，通道 ' + ch + '）'); } catch (_) { /* log failure ignored */ }
+      }
+      return ok;
+    });
+    if (!hits.length) throw new Error('该更新通道没有可用版本（CNB 与 GitHub 均无符合通道的 release）');
     // 取版本更高的源；同版优先 GitHub（有 body 说明）
     let best = hits[0];
     for (const h of hits.slice(1)) {
       const c = cmpSemver(h.release.tag_name, best.release.tag_name);
       if (c > 0 || (c === 0 && best.via === 'cnb' && h.via === 'github')) best = h;
     }
-    return { release: best.release, channel: best.channel };
+    // ★ 命中通道以 release 自身为准：测试通道下若当时没有测试版而回退到正式版，
+    //   必须返回 stable，让下载/验签/更新器都走正式锚点，否则必然装错包。
+    return { release: best.release, channel: UC.channelOfRelease(best.release) };
   }
 
   function assetForPlatform(release) {
@@ -253,10 +296,15 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, 
     try { return normChannel(readSettings && readSettings() && readSettings().update_channel); } catch (e) { return 'stable'; }
   }
 
-  async function downloadInstallPackage(url, win) {
+  async function downloadInstallPackage(url, win, channel) {
     // 按下载源偏好排序：国内优先 → CNB 打头；全球优先 → GitHub（含镜像）打头。
     // githubMirrorCandidates 对非 GitHub 地址原样返回，避免把 CNB 地址套上 gh 镜像前缀。
-    const cnbUrl = DS.cnbLatestUrl('FuFumidi.Install.exe');
+    // ★ 通道必须与本次检查命中的版本一致：以前这里无条件用 CNB 的 latest 锚点，
+    //   测试通道下会拿正式包去配测试版验签清单 → 签名校验失败 / 装错版本。
+    const ch = normChannel(channel || currentChannel());
+    const cnbUrl = ch === 'beta'
+      ? DS.cnbTagUrl('beta', 'FuFumidi.Install.exe')
+      : DS.cnbLatestUrl('FuFumidi.Install.exe');
     const ghChain = DS.githubMirrorCandidates(url);
     const ordered = DS.preferCnb(pref()) ? [cnbUrl, ...ghChain] : [...ghChain, cnbUrl];
     const mirrors = [...new Set(ordered)].filter(Boolean);
@@ -286,7 +334,7 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, 
       // 一旦清单存在，验签失败就删除安装包并拒绝更新（不提供"忽略"开关）。
       let verified = false;
       try {
-        const manifest = await fetchManifest(updateManifestUrls(currentChannel()), net);
+        const manifest = await fetchManifest(updateManifestUrls(ch), net);
         if (manifest) {
           const v = await verifyManifest({ filePath: dest, manifest: manifest });
           if (!v.ok) {
@@ -401,13 +449,18 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, 
       const { release: rel, channel: hit } = await resolveRelease(channel);
       const asset = assetForPlatform(rel);
       const ver = (rel.tag_name || '').replace(/^v/i, '');
+      // ★ 正式通道用户绝不允许被塞测试版：即便上游锚点被污染，这里再兜一次。
+      //   （resolveRelease 已过滤；这是防前端旧版本/缓存传错通道的最后一道。）
+      if (normChannel(channel) === 'stable' && hit !== 'stable') {
+        return { ok: false, error: '正式通道收到测试版版本（' + rel.tag_name + '），已阻止更新' };
+      }
       // 下载源：**直连优先**。以前这里无条件把资源地址套上 ghfast.top ——
       // 等于让所有用户的更新都经过一个第三方代理（代理挂了就更新不了，代理也能改包）。
       // 现在只把代理当兜底：downloadInstallPackage 本来就是多源回退（见本文件上方），
       // 直连失败会自动落到镜像链。
       const directUrl = asset ? asset.browser_download_url : null;
       const mirrorUrl = DS.preferCnb(pref())
-        ? DS.cnbLatestUrl('FuFumidi.Install.exe')
+        ? (hit === 'beta' ? DS.cnbTagUrl('beta', 'FuFumidi.Install.exe') : DS.cnbLatestUrl('FuFumidi.Install.exe'))
         : directUrl;
       return { ok: true, current: app.getVersion(), latest: ver, tag: rel.tag_name, channel: hit, notes: (rel.body || '').slice(0, 500), url: asset ? asset.browser_download_url : null, name: asset ? asset.name : null, mirror: mirrorUrl, source: pref() };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
@@ -419,10 +472,10 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, 
       return { ok: true, body: rel.body || '' };
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
-  ipcMain.handle('update:download', async (evt, url) => {
+  ipcMain.handle('update:download', async (evt, url, channel) => {
     if (!url) return { ok: false, error: 'empty url' };
     const win = BrowserWindow.fromWebContents(evt.sender);
-    return downloadInstallPackage(url, win);
+    return downloadInstallPackage(url, win, channel);
   });
   ipcMain.handle('update:open', async (_e, p) => {
     try { shell.openPath(p); return { ok: true }; } catch (e) { return { ok: false, error: String(e) }; }
@@ -485,6 +538,18 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, 
   ipcMain.handle('update:launchUpdater', async (evt, channel) => {
     try {
       const { spawn } = require('child_process');
+      // ★ 2026-11-07 通道串味硬约束：更新器的 --source 决定它去哪个锚点拉包，
+      //   一旦选错就会「拿正式包去装测试版」（或反过来）→ 更新必然失败。
+      //   channel 参数来自前端 r.channel（可能被污染的检查结果），所以这里以
+      //   **用户设置里的通道**为最终裁决：正式通道用户永远只能走正式源。
+      //   测试通道下若当时没有测试版而回退到正式版，requested 会是 stable，照准。
+      const requested = normChannel(channel);
+      const configured = currentChannel();
+      const ch = configured === 'stable' ? 'stable' : requested;
+      if (requested !== ch) {
+        try { require('./log').write('WARN', 'update channel guard',
+          '阻止以 ' + requested + ' 通道启动更新器（用户当前是 ' + configured + ' 通道）'); } catch (_) { /* log failure ignored */ }
+      }
       const updaterDir = app.isPackaged ? path.dirname(process.execPath) : path.join(app.getAppPath(), 'release', 'win-unpacked');
       let updaterPath = path.join(updaterDir, 'FuFumidi.update.exe');
       const mainExe = path.join(updaterDir, 'FuFumidi.exe');
@@ -498,7 +563,7 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, 
       try {
         if (!updaterLooksConfigured(fs.readFileSync(updaterPath))) {
           try { fs.appendFileSync(path.join(Paths.tempDir(), 'fufumidi-restart.log'), new Date().toTimeString().slice(0, 8) + ' [main] installed updater lacks embedded config; fetching configured one\n'); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
-          const got = await downloadConfiguredUpdater(channel);
+          const got = await downloadConfiguredUpdater(ch);
           if (!got.ok) {
             return { ok: false, error: '已安装的更新器未嵌入应用配置，自动获取新版更新器失败：' + (got.error || '未知错误') + '。请下载完整安装包覆盖安装。' };
           }
@@ -577,9 +642,8 @@ L 'app started'
       // 探测下载源要走 HEAD 请求（最多约 24s），所以这一步必须排在守护进程之前。
       // 主进程也往同一个日志里写几行：更新流程不生效时，看这一份就能知道卡在哪一步。
       const _t = (m) => { try { fs.appendFileSync(_log, new Date().toTimeString().slice(0, 8) + ' [main] ' + m + '\n'); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } } };
-      const ch = normChannel(channel);
       let source = sourceIdOf('github', ch);
-      _t('channel=' + ch);
+      _t('channel=' + ch + ' (configured=' + configured + ', requested=' + requested + ')');
       _t('probing update source');
       try { source = await pickUpdateSource(ch); } catch (_) { try { require('./log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
       _t('source=' + source);

@@ -194,6 +194,10 @@ GitHub 侧发布完成后，按 **§5.6** 把这批资产镜像一份到 CNB
 - **正式**：`.../-/releases/latest/download/...`。CNB 的 `is_latest` 由平台自动指向**最高 semver 的非预发布 release**
   （实测：把 v4.3.0 → v4.2.2 → … → v4.0.2 按版本降序批量建完 release 后，`latest` 仍指向 4.3.0，
   可排除「按创建时间」这一可能）。**所以正式渠道不需要在 CNB 上手工维护锚点，镜像新版本即可自动跟上。**
+  ★ **但这条也是最大的坑**：判断依据是「非预发布」，不是「版本号不含 `-alpha`」。若有人把
+  `v6.5.0-alpha.2` 建成**非 prerelease 的正式 release**（2026-11-07 真实发生过），
+  它就会以 6.5.0 > 6.4.5 顶掉 `latest` 锚点，正式用户的检查更新会拿到测试版号。
+  → 发布侧规则见 §5.3；主进程现在也不再信任锚点（§5.2）。
 - **测试**：`.../-/releases/download/beta/...`，固定 tag `beta`，每次内测覆盖上传同名资产 —— 原因与 §5.1 完全相同
   （kachina 的源地址编译在 exe 里，必须是「内容会变、地址不变」的锚点）。
 - **CNB 没有测试版的版本元数据**（`beta` 不是 semver，`latest.yml` 只反映正式版），
@@ -211,8 +215,11 @@ kachina 更新器的下载地址是**编译进 exe 的固定字符串**（`build
 
 `releases/latest` 会跳过 prerelease，所以这个锚点永远不会影响正式用户。
 
-> 固定 tag `beta` 的 release 只是分发锚点，不对应版本。`main/update.js` 取最新测试版时
-> 按 `/^v?\d+\.\d+\.\d+-(beta|rc)\.\d+$/` 过滤，把它排除掉。
+> 固定 tag `beta` 的 release 只是分发锚点，不对应版本。`main/update.js` 的
+> `pickBetaRelease()` 会先排除 `tag === 'beta'`，再按 `main/update-channel.js` 的
+> `isPrereleaseTag()` 判定（alpha/beta/rc/dev/preview/nightly 都算预发布）。
+> ★ 不能只按 `prerelease` 标记挑：远端曾把 `v6.5.0-alpha.2` 标成非 prerelease；
+> 也不能只按 `beta|rc` 正则：线上真实发过 `v6.5.0-alpha.3`。
 
 **通道生效的前提**：beta 源是新增到 `kachina.config.json` 的，而该配置**编译在更新器 exe 里**。
 所以已经装在用户机器上的旧版本（更新器里没有 beta 源）只能走正式通道 —— 它们要能收到测试版，
@@ -259,6 +266,35 @@ python scripts/upload-release-asset.py $env:GH_TOKEN qdTXTbp/FuFumidi beta `
 > 第 4 步漏掉的话，测试通道用户检查到的版本会更新、但下载到的仍是上一版离线包。
 > 反过来，`--prerelease` 一定不能漏 —— 一旦 `beta` 锚点变成正式 release，
 > `releases/latest` 会指向它，所有正式用户都会收到内测包。
+>
+> ★ **2026-11-07 事故**：有人把 `v6.5.0-alpha.2` / `v6.5.0-alpha.1` 这类**带后缀测试版**
+> 发成了**非 prerelease 的正式 release**（CNB 上 `v6.5.0-alpha.2` 至今仍是 REL）。
+> 版本号 `6.5.0` 比正式版 `6.4.5` 高，于是 CNB 的 `latest` 锚点被顶替，
+> 正式用户收到「6.5.0-alpha.2 更新」，更新器却拿正式锚点的包去装 →
+> `metadata-<ver>.json` 缺失 / 验签不过 → 更新失败。
+> **测试版发布三条硬约束（缺一不可）**：
+> ① tag 带 `-alpha/-beta/-rc` 后缀；② `prerelease=true`；③ `make_latest=false`
+> （CNB 的 POST /-/releases 默认可能把 latest 挪到新 release 上，务必显式关掉）。
+> 发布后用公开接口自查：`.../releases/latest/download/latest.yml` 的 `version`
+> 必须等于刚发的正式版号，且不含任何后缀。
+
+#### 5.3.0 代码侧兜底（发布侧再犯错也不会串味）
+
+光靠发布流程约束不够 —— 2026-11-07 就漏了。主进程现在有四道硬闸门
+（`main/update.js` + `main/update-channel.js`），**正式通道永不接受预发布版本**：
+
+1. `fetchCnbRelease` / `fetchChannelRelease` 拿到 release 后按通道过滤候选，
+   正式通道读到带后缀 tag（或 `prerelease=true`）直接判该源无效，不参与版本比较。
+2. `resolveRelease` 在「多源取最大」**之前**再过滤一次，并明确记录丢弃日志。
+   取最大本身没错，错的是没有先按通道筛候选 —— `6.5.0-beta.1 > 6.4.5` 会赢。
+3. 命中的 `channel` 由 **release 自身**（tag 名 + 标记）决定，不再用
+   `release.prerelease` 单字段判断：CNB 的 `latest.yml` 合成对象没有这个字段，
+   测试版会被误标成 `stable`，导致下载/验签/更新器全走错锚点。
+4. `update:check` / `update:launchUpdater` 再兜一层：正式通道用户无论前端传什么，
+   都强制走正式源；前端 `App.vue` / `SettingsPanel.vue` 也会拒绝弹测试版更新窗。
+
+回归测试：`npm run test:update-channel`（9 项，含「CNB 锚点被顶替」「GitHub 返回
+被误标为正式的 alpha」「测试通道仍能拿到测试版」等场景）。
 
 第 4 步完成后，还要按 **§5.6** 把 `beta` 锚点的资产镜像到 CNB，
 否则「下载源 = 自动 / 国内」的测试者探测不到 CNB 锚点，会回退到 ghfast。

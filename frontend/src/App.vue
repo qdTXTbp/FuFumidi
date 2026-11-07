@@ -30,7 +30,7 @@ import { applyMaterial } from './core/material.js';
 import { installSfxClicks } from './core/sfx.js';
 import { playbackPrefs, applyPlaybackSettings } from './core/playback_prefs.js';
 import { holdRate, isEditableTarget } from './core/transport_keys.js';
-import { getAppVersion, cmpVersion, getUpdateChannel } from './core/version.js';
+import { getAppVersion, cmpVersion, getUpdateChannel, versionAllowedForChannel } from './core/version.js';
 import { getBuiltinChangeLogs, fetchRemoteChangeLog } from './core/changelog.js';
 import { applyTheme, loadTheme } from './core/theme.js';
 import { viewFromPath } from './router';
@@ -362,6 +362,11 @@ async function startupUpdateCheck() {
   if (!r || !r.ok) return; // 检查失败静默，不打扰用户
   const cur = String(r.current || '');
   const latest = String(r.latest || '');
+  const userChannel = getUpdateChannel();
+  // ★ 2026-11-07：正式通道绝不弹测试版。主进程已做硬隔离，这里是最后一道闸门
+  //   （防止旧版主进程 / 镜像缓存的越界响应打扰正式用户）。
+  if (!versionAllowedForChannel(userChannel, latest)) return;
+  if (r.channel === 'beta' && userChannel === 'stable') return;
   if (!latest || cmpVersion(latest, cur) <= 0) return;
   setTimeout(() => {
     if (state.dialog) return; // 已有其他弹窗时不叠加
@@ -378,7 +383,9 @@ async function startupUpdateCheck() {
         app.toast(t('正在启动增量更新器，完成后自动重启…'));
         // 更新器要按「这个 latest 实际来自哪个通道」去下载：测试通道下若当时没有测试版，
         // latest 其实是正式版，必须用正式锚点，否则会下载错包。
-        bridge.update.launchUpdater(r.channel || getUpdateChannel()).then(rr => {
+        // ★ 但正式通道用户永远传 stable —— 不信任响应里的 channel 字段（可能已被污染）。
+        const launchChannel = userChannel === 'stable' ? 'stable' : (r.channel || userChannel);
+        bridge.update.launchUpdater(launchChannel).then(rr => {
           if (!rr || !rr.ok) app.toast((rr && rr.error) || t('更新失败，当前安装未受影响'), 'error');
         }).catch(() => {});
       });
