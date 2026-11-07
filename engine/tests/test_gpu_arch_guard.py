@@ -130,7 +130,14 @@ def _fake_muscriptor(monkeypatch, tmp_path, fail_first=True):
     monkeypatch.setattr(M, "_require_package", lambda: None)
     monkeypatch.setattr(M, "_count_notes", lambda p: 0)
     wav = tmp_path / "in.wav"
-    wav.write_bytes(b"RIFF")
+    # ★ 2026-11-07 起默认路径把原文件交给官方 transcribe（audio_io 探针判定），
+    #   b"RIFF" 假文件会被判「官方读不了」转投 ffmpeg 而炸 —— 必须是真实 PCM WAV。
+    import wave as _wave
+    with _wave.open(str(wav), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(16000)
+        wf.writeframes(b"\x00\x00" * 1600)   # 0.1s 静音
     import audio_io
     monkeypatch.setattr(audio_io, "decode_to_wav", lambda p, sr=16000: str(wav))
     monkeypatch.setattr(audio_io, "remove_temp", lambda p: None)
