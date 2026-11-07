@@ -280,11 +280,13 @@ async function updLaunch() {
   if (!bridge || !bridge.updateCheck) { upd.status = t('当前环境不支持检查更新'); upd.failed = true; return; }
   upd.status = t('正在检查更新…'); upd.failed = false; upd.launched = false;
   try {
-    const r = await bridge.updateCheck(getUpdateChannel());
+    // ★ 通道以设置面板已加载的权威值为准（updateChannel 从 settings 加载，
+    //   localStorage 会跨版本残留 —— 见 version.js effectiveUpdateChannel 注释）。
+    const r = await bridge.updateCheck(updateChannel.value);
     if (!r || !r.ok) { upd.status = (r && r.error) || t('检查失败'); upd.failed = true; return; }
     const cur = String(r.current || '');
     const latest = String(r.latest || '');
-    const userChannel = getUpdateChannel();
+    const userChannel = updateChannel.value;
     // ★ 2026-11-07：正式通道绝不提示/启动测试版更新（主进程已硬隔离，前端再兜一层）。
     if (latest && (!versionAllowedForChannel(userChannel, latest) ||
         (r.channel === 'beta' && userChannel === 'stable'))) {
@@ -401,7 +403,7 @@ async function loadSpeedSources() {
   const bridge = window.fuBridge;
   if (!bridge || !bridge.updateSources) return;
   try {
-    const list = await bridge.updateSources(getUpdateChannel());
+    const list = await bridge.updateSources(updateChannel.value);
     speedRows.value = (list || []).map(pendingRow);
   } catch (e) { speedRows.value = []; }
 }
@@ -413,7 +415,7 @@ async function runSpeedtest() {
   speedBusy.value = true;
   await loadSpeedSources();
   try {
-    const res = await bridge.updateSpeedtest(getUpdateChannel());
+    const res = await bridge.updateSpeedtest(updateChannel.value);
     if (Array.isArray(res) && res.length) speedRows.value = markBest(res);
   } catch (e) {
     toast(t('线路测速失败：') + ((e && e.message) || e));

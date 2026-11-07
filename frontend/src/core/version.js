@@ -87,6 +87,16 @@ export function getUpdateChannel() {
   try { return normalizeUpdateChannel(localStorage.getItem(CHANNEL_KEY)); } catch (e) { return 'stable'; }
 }
 
+/** 生效通道：settings（主进程持久值，用户最后一次明确保存的意愿）优先，
+ *  localStorage 仅作 settings 未加载时的启动兜底。
+ *  ★ 2026-11-07 二次事故：kachina 更新 / 覆盖安装不清 userData —— 用户在测试版上
+ *  选过「测试通道」后，localStorage 里的 'beta' 跨版本残留（settings 早已改回 stable），
+ *  正式用户检查更新直接收到 beta 锚点的内测包。读通道必须以 settings 为准。 */
+export function effectiveUpdateChannel(settingsLike) {
+  const v = settingsLike && settingsLike.update_channel;
+  return normalizeUpdateChannel(v || getUpdateChannel());
+}
+
 export function setUpdateChannel(v) {
   const ch = normalizeUpdateChannel(v);
   try { localStorage.setItem(CHANNEL_KEY, ch); } catch (e) {}

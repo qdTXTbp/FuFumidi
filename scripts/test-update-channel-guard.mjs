@@ -17,8 +17,9 @@ const STABLE = { tag_name: 'v6.4.5', prerelease: false, assets: [{ name: 'FuFumi
 
 /** 构造一个假的更新服务，返回 update:check handler。
  *  cnbVersion：CNB latest.yml 的 version；ghStable：GitHub releases/latest 的返回；
- *  ghList：GitHub releases?per_page=20（beta 通道用）。 */
-function harness({ cnbVersion = '6.4.5', ghStable = STABLE, ghList = [], cnbBetaVersion = null } = {}) {
+ *  ghList：GitHub releases?per_page=20（beta 通道用）；
+ *  settings：主进程 readSettings() 返回（通道权威来源）。 */
+function harness({ cnbVersion = '6.4.5', ghStable = STABLE, ghList = [], cnbBetaVersion = null, settings = { update_channel: 'stable' } } = {}) {
   const handlers = {};
   const calls = [];
   const net = {
@@ -41,7 +42,7 @@ function harness({ cnbVersion = '6.4.5', ghStable = STABLE, ghList = [], cnbBeta
     BrowserWindow: { fromWebContents: () => null },
     app: { getVersion: () => '6.4.5' },
     path, fs,
-    readSettings: () => ({ update_channel: 'stable' }),
+    readSettings: () => settings,
   });
   return { check: handlers['update:check'], calls };
 }
@@ -119,6 +120,7 @@ test('测试通道确实能拿到测试版，并返回 beta 通道（不能被�
     cnbVersion: '6.4.5',
     cnbBetaVersion: '6.5.0-beta.1',
     ghStable: STABLE,
+    settings: { update_channel: 'beta' },   // 真实的测试通道用户
     // 固定锚点 release（tag=beta、prerelease=true）混在列表里，必须被跳过
     ghList: [{ tag_name: 'beta', prerelease: true, assets: STABLE.assets }, betaRel],
   });
@@ -133,9 +135,53 @@ test('测试通道当时没有测试版 → 回退正式版，且必须返回 st
     cnbVersion: '6.4.5',
     cnbBetaVersion: '6.4.5',
     ghStable: STABLE,
+    settings: { update_channel: 'beta' },
     ghList: [],   // GitHub 上也没有 prerelease
   });
   const r = await check(null, 'beta');
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.latest, '6.4.5');
+  assert.equal(r.channel, 'stable');
+});
+
+// ── ★ 2026-11-07 二次事故：localStorage 通道残留 ────────────────────────
+// kachina 更新 / 覆盖安装不清 userData：用户在测试版上选过测试通道后，
+// localStorage fufumidi_update_channel='beta' 跨版本残留（settings 已是 stable），
+// 前端 6.4.5/6.4.6 把这个残留值传给 update:check → 收到 beta 锚点的 6.5.0-beta.1，
+// 且锚点缺 metadata 装不上。主进程必须以 settings 为权威。
+test('★ localStorage 残留：settings=stable 但前端传来 beta → 必须按正式通道报正式版', async () => {
+  const { check } = harness({
+    cnbVersion: '6.4.5',
+    cnbBetaVersion: '6.5.0-beta.1',   // beta 锚点上真实躺着 6.5.0-beta.1
+    ghStable: STABLE,
+    settings: { update_channel: 'stable' },
+  });
+  const r = await check(null, 'beta');   // 前端残留的通道参数
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.latest, '6.4.5', '绝不能报 beta 锚点的测试版');
+  assert.equal(r.channel, 'stable');
+});
+
+test('反向残留：settings=beta 但前端传来 stable → 测试用户仍能收到测试版', async () => {
+  const { check } = harness({
+    cnbVersion: '6.4.5',
+    cnbBetaVersion: '6.5.0-beta.1',
+    ghStable: STABLE,
+    settings: { update_channel: 'beta' },
+  });
+  const r = await check(null, 'stable');
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.latest, '6.5.0-beta.1');
+  assert.equal(r.channel, 'beta');
+});
+
+test('settings 没有 update_channel 字段（旧配置）→ 回落前端参数，不拒绝服务', async () => {
+  const { check } = harness({
+    cnbVersion: '6.4.5',
+    ghStable: STABLE,
+    settings: {},   // 旧版 settings.json 没有这个字段
+  });
+  const r = await check(null, 'stable');
   assert.equal(r.ok, true, JSON.stringify(r));
   assert.equal(r.latest, '6.4.5');
   assert.equal(r.channel, 'stable');

@@ -446,12 +446,26 @@ function registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, 
   // 拉起更新器时必须把它一起传回去 —— 否则会出现「报的是测试版版本、却从正式锚点下载」。
   ipcMain.handle('update:check', async (_e, channel) => {
     try {
-      const { release: rel, channel: hit } = await resolveRelease(channel);
+      // ★ 2026-11-07 二次事故：channel 来自前端 localStorage（fufumidi_update_channel），
+      //   而 kachina 更新 / 覆盖安装不清 userData —— 用户在测试版上选过「测试通道」后，
+      //   localStorage 里的 'beta' 会跨版本残留，settings.json 早已改回 stable。
+      //   表现：正式用户检查更新直接收到 beta 锚点的内测包（6.5.0-beta.1），
+      //   还因锚点缺 metadata 装不上。与 update:launchUpdater 同一裁决：
+      //   **settings 记录了通道就以 settings 为准**（不管值是什么），
+      //   settings 没有该字段（旧配置）才回落前端参数。
+      const requested = normChannel(channel);
+      const rawConfigured = (readSettings && readSettings() && readSettings().update_channel) || null;
+      const ch = rawConfigured ? normChannel(rawConfigured) : requested;
+      if (requested !== ch) {
+        try { require('./log').write('WARN', 'update channel guard',
+          '检查更新忽略前端通道 ' + requested + '（用户设置是 ' + ch + '）'); } catch (_) { /* log failure ignored */ }
+      }
+      const { release: rel, channel: hit } = await resolveRelease(ch);
       const asset = assetForPlatform(rel);
       const ver = (rel.tag_name || '').replace(/^v/i, '');
       // ★ 正式通道用户绝不允许被塞测试版：即便上游锚点被污染，这里再兜一次。
       //   （resolveRelease 已过滤；这是防前端旧版本/缓存传错通道的最后一道。）
-      if (normChannel(channel) === 'stable' && hit !== 'stable') {
+      if (normChannel(ch) === 'stable' && hit !== 'stable') {
         return { ok: false, error: '正式通道收到测试版版本（' + rel.tag_name + '），已阻止更新' };
       }
       // 下载源：**直连优先**。以前这里无条件把资源地址套上 ghfast.top ——

@@ -30,7 +30,7 @@ import { applyMaterial } from './core/material.js';
 import { installSfxClicks } from './core/sfx.js';
 import { playbackPrefs, applyPlaybackSettings } from './core/playback_prefs.js';
 import { holdRate, isEditableTarget } from './core/transport_keys.js';
-import { getAppVersion, cmpVersion, getUpdateChannel, versionAllowedForChannel } from './core/version.js';
+import { getAppVersion, cmpVersion, getUpdateChannel, effectiveUpdateChannel, versionAllowedForChannel } from './core/version.js';
 import { getBuiltinChangeLogs, fetchRemoteChangeLog } from './core/changelog.js';
 import { applyTheme, loadTheme } from './core/theme.js';
 import { viewFromPath } from './router';
@@ -357,12 +357,13 @@ async function checkChangeLog() {
    通道（正式 / 测试）来自设置，主进程按通道给出 latest 与它实际命中的通道。 */
 async function startupUpdateCheck() {
   if (!bridge || typeof bridge.updateCheck !== 'function') return;
+  // ★ 通道以 settings 为权威（localStorage 会跨版本残留，见 version.js effectiveUpdateChannel）
+  const userChannel = effectiveUpdateChannel(settingsStore.settings);
   let r = null;
-  try { r = await bridge.updateCheck(getUpdateChannel()); } catch (e) { return; }
+  try { r = await bridge.updateCheck(userChannel); } catch (e) { return; }
   if (!r || !r.ok) return; // 检查失败静默，不打扰用户
   const cur = String(r.current || '');
   const latest = String(r.latest || '');
-  const userChannel = getUpdateChannel();
   // ★ 2026-11-07：正式通道绝不弹测试版。主进程已做硬隔离，这里是最后一道闸门
   //   （防止旧版主进程 / 镜像缓存的越界响应打扰正式用户）。
   if (!versionAllowedForChannel(userChannel, latest)) return;
