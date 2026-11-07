@@ -6,9 +6,13 @@ param([Parameter(Mandatory=$true)][string]$Version, [switch]$SkipUi)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
-if (-not $SkipUi) { & npm --prefix frontend run build; if ($LASTEXITCODE -ne 0) { throw "frontend build failed" } }
+# ★ node 类子进程（npm/npx）一律经 cmd /c 启动：PowerShell 5.1 会把它们的 stderr
+#   包装成 NativeCommandError 走自己的错误流，vite 渲染 chunks 时的警告输出在
+#   后台/CI 会话里没人消费该管道就会阻塞整条构建（2026-11-07 6.4.7 两次实测）。
+#   cmd /c 让 stderr 直接落到重定向文件，绕开这套包装。
+if (-not $SkipUi) { & cmd /c "npm --prefix frontend run build"; if ($LASTEXITCODE -ne 0) { throw "frontend build failed" } }
 Write-Host "[1/3] electron-builder --win dir" -ForegroundColor Cyan
-& npx electron-builder --win dir --x64; if ($LASTEXITCODE -ne 0) { throw "dir build failed" }
+& cmd /c "npx electron-builder --win dir --x64"; if ($LASTEXITCODE -ne 0) { throw "dir build failed" }
 # P1 包体：bundle-python 产出的运行时仍带 pyc/lib/headers/tests（实测约 296 MiB），
 # 在 dir 之后、kachina/NSIS 之前裁掉；并用真实 import 自检，失败直接中止构建。
 $pyRoot = Join-Path $root "release\win-unpacked\resources\python"
@@ -24,7 +28,7 @@ if (Test-Path (Join-Path $pyRoot "python.exe")) {
 Write-Host "[2/3] build-kachina.ps1" -ForegroundColor Cyan
 & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "build-kachina.ps1") -Version $Version; if ($LASTEXITCODE -ne 0) { throw "kachina failed" }
 Write-Host "[3/3] electron-builder --win nsis (更新器已在 gen 之后同步)" -ForegroundColor Cyan
-& npx electron-builder --win nsis --x64; if ($LASTEXITCODE -ne 0) { throw "nsis build failed" }
+& cmd /c "npx electron-builder --win nsis --x64"; if ($LASTEXITCODE -ne 0) { throw "nsis build failed" }
 # 断言：安装包同级/win-unpacked 的更新器必须已嵌入配置
 $up = Join-Path $root "release\update\FuFumidi.update.exe"
 $bytes = [System.IO.File]::ReadAllBytes($up)
