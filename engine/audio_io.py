@@ -140,6 +140,87 @@ def decode_to_wav(src, sr):
     return out
 
 
+def _ffmpeg_wav_keep_shape(src):
+    """ffmpeg 解码为「原始采样率、原始声道数」的 PCM16 WAV 临时文件。
+
+    ★ 与 ffmpeg_to_wav 的区别：**不加 -ar / -ac** —— 采样率与声道数原样保留，
+    下混与重采样全部留给 muscriptor 官方 load_audio（float 域 mean + julius sinc）。
+    位深取 pcm_s16le：bench3 隔离实验证明经官方重采样路径时位深不影响质量
+    （48k PCM16 → 官方 = 5 乐器组 / 1472 音符）。
+    """
+    ffmpeg = find_ffmpeg()
+    if not ffmpeg:
+        raise RuntimeError(
+            "未找到 ffmpeg，无法解码该格式。请双击运行 install.bat 完成依赖安装。"
+        )
+
+    fd, tmp = tempfile.mkstemp(prefix=TEMP_PREFIX, suffix=".wav")
+    os.close(fd)
+    cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+           "-i", src, "-vn", "-c:a", "pcm_s16le", tmp]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=3600)
+    except Exception as e:  # 超时 / 无法启动
+        _try_remove(tmp)
+        raise RuntimeError(f"ffmpeg 解码异常: {e}")
+
+    if result.returncode != 0 or not os.path.isfile(tmp):
+        err = (result.stderr or b"").decode("utf-8", errors="replace").strip()
+        err = err or (result.stdout or b"").decode("utf-8", errors="replace").strip()
+        _try_remove(tmp)
+        raise RuntimeError(f"音频解码失败: {err[:300]}")
+    return tmp
+
+
+def _official_loadable(src):
+    """判断 muscriptor 官方 load_audio 能否原生读这个文件。
+
+    官方分发逻辑（muscriptor/utils/audio.py load_audio，0.3.0 逐字核对）：
+      1) 先用 stdlib wave 读（按内容判定，wave.Error / EOFError 才往下走）；
+      2) 其余交给 soundfile（float32 读，同样按内容判定）。
+    这里用**完全相同的两个读取器**做探针 —— 同一解释器、同一库版本，
+    探针通过 = 官方能读，我们就可以原样交文件、不做任何 DSP。
+    """
+    import wave as _wave
+    try:
+        with _wave.open(str(src), "rb") as wf:
+            if (wf.getnchannels() >= 1 and wf.getframerate() > 0
+                    and wf.getsampwidth() in (1, 2, 3, 4)):
+                return True
+    except (getattr(_wave, "Error", Exception), EOFError):
+        pass
+    try:
+        import soundfile as _sf
+        info = _sf.info(str(src))
+        return bool(info.frames > 0 and info.samplerate > 0)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def prepare_for_muscriptor(src):
+    """把任意音频准备成 muscriptor 官方推理路径的最优输入。
+
+    ★★ 2026-11-07 质量修复（用户报障「转出来只有钢琴、音色一段一段」的根因）：
+      官方训练分布的输入 = 原始采样率文件 → float32 → **julius sinc** 重采样到 16k。
+      旧做法 decode_to_wav(src, 16000) 自己做 librosa/线性插值重采样 + PCM16 量化，
+      绕开了官方重采样器 → 输入分布偏离训练。bench3 隔离 A/B（同一段 30s 音频）：
+        原始 48k 交官方路径            5 乐器组 / 1472 音符
+        预解码 16k FLOAT（线性插值）    3 组 / 1535
+        预解码 16k PCM16（旧引擎现状）  2 组 / 425（吉他/贝斯整轨消失）
+      位深与声道已排除（同实验隔离），唯一变量就是「谁来做重采样」。
+    因此这里**不做任何重采样/下混/位深转换**：
+      · 官方能原生读的（PCM WAV / soundfile 可读格式）→ 原文件直接交；
+      · 官方读不了的（非标准 MP3 / 改名容器 / 损坏头，3.2.6 热修覆盖的场景）→
+        ffmpeg 转成「原始采样率、原始声道数」的 PCM16 WAV（不加 -ar/-ac），
+        重采样与下混仍由官方路径完成。
+    返回 (path, is_temp)；is_temp=True 时调用方负责 remove_temp()。
+    """
+    if os.path.isfile(src) and _official_loadable(src):
+        return src, False
+    return _ffmpeg_wav_keep_shape(src), True
+
+
 def load_audio_float32(src, sr):
     """读取任意格式音频为 float32 单声道数组（重采样到 sr）。
 

@@ -793,7 +793,16 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
     if not os.environ.get("FUFUMIDI_MS_MODERN"):
         import audio_io
         import json as _json_l
-        wav_tmp = audio_io.decode_to_wav(audio_path, 16000)
+        # ★ 2026-11-07 音频输入回归官方等价（修复「只有钢琴/音色一段一段」）：
+        #   官方 load_audio = 原始采样率 → float32 → julius sinc 重采样；旧代码
+        #   预解码成 16k PCM16（librosa/线性插值）绕开了它 → bench3 实测乐器组
+        #   5→2、音符 1472→425（吉他/贝斯整轨丢失）。现在：官方能读的文件原样
+        #   交路径，读不了的才由 ffmpeg 转码且保留原始采样率/声道（见
+        #   audio_io.prepare_for_muscriptor）。重采样权永远在官方手里。
+        wav_tmp, _wav_is_temp = audio_io.prepare_for_muscriptor(audio_path)
+        _log(log_cb, "音频输入：%s"
+             % ("原始文件直读（官方 julius sinc 重采样）" if not _wav_is_temp
+                else "ffmpeg 转码（保留原始采样率/声道数，重采样交给官方）"))
         _mi_l = params.get("muscriptor_instruments")
         _constrain_l = None
         if _mi_l:
@@ -865,10 +874,11 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                     continue
                 raise
         _log(log_cb, f"[计时] muscriptor 推理（4.3.x 兼容模式）：{time.perf_counter() - t0:.1f}s")
-        try:
-            audio_io.remove_temp(wav_tmp)
-        except Exception:  # noqa: BLE001
-            pass
+        if _wav_is_temp:
+            try:
+                audio_io.remove_temp(wav_tmp)
+            except Exception:  # noqa: BLE001
+                pass
         with open(output_midi, "wb") as f:
             f.write(data)
         _n_l = _count_notes(output_midi)

@@ -194,8 +194,16 @@ def run_transcribe(monkeypatch, tmp_path):
         monkeypatch.setattr(M, "_require_package", lambda: None)
         monkeypatch.setattr(M, "_find_local_model", lambda size: str(tmp_path / "model.safetensors"))
         monkeypatch.setattr(M, "_ensure_config", lambda *a, **k: None)
+        # ★ 2026-11-07 起默认路径把**原文件**交给官方 transcribe（不再预解码），
+        #   所以这里必须是真实可读的 PCM WAV —— 假文件会被 audio_io 探针判为
+        #   「官方读不了」而转投 ffmpeg，测试环境里必炸。
         wav = tmp_path / "in.wav"
-        wav.write_bytes(b"RIFF")
+        import wave as _wave
+        with _wave.open(str(wav), "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(16000)
+            wf.writeframes(b"\x00\x00" * 3200)   # 0.2s 静音
         monkeypatch.setattr(audio_io, "decode_to_wav", lambda p, sr=16000: str(wav))
         monkeypatch.setattr(audio_io, "remove_temp", lambda p: None)
         logs = []
