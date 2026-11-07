@@ -15,7 +15,10 @@ param(
   [switch]$KeepStaging
 )
 
-$ErrorActionPreference = 'Stop'
+# ★ 不能用 'Stop'：kachina-builder / robocopy 的 stderr 输出经重定向会变成
+#   NativeCommandError 被当成终止性错误冤杀构建；失败由各步显式的
+#   `$LASTEXITCODE -ne 0 → throw` 把关。
+$ErrorActionPreference = 'Continue'
 $root = Split-Path -Parent $PSScriptRoot
 $builder = Join-Path $root 'tools\kachina-builder.exe'
 $config = Join-Path $root 'Build\kachina.config.json'

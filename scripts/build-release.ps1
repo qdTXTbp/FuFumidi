@@ -3,7 +3,12 @@
 #   否则安装包内嵌的是「无配置更新器」，用户点更新会报「安装包损坏，请重新下载」。
 # 用法: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-release.ps1 -Version 5.2.3
 param([Parameter(Mandatory=$true)][string]$Version, [switch]$SkipUi)
-$ErrorActionPreference = 'Stop'
+# ★ 不能用 'Stop'：本脚本大量调用原生命令（npm/npx/node/python/kachina-builder），
+#   它们的 stderr 警告（vite chunk 提示、basic-pitch 的 CoreML 警告等）经 2>&1
+#   重定向时会变成 NativeCommandError 被当成终止性错误，把整条构建冤杀
+#   （2026-11-07 6.4.7 连续三次实测）。真正的失败由每一步的显式
+#   `$LASTEXITCODE -ne 0 → throw` 把关，不依赖它。
+$ErrorActionPreference = 'Continue'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 # ★ node 类子进程（npm/npx）一律经 cmd /c 启动：PowerShell 5.1 会把它们的 stderr
@@ -31,6 +36,7 @@ Write-Host "[3/3] electron-builder --win nsis (更新器已在 gen 之后同步)
 & cmd /c "npx electron-builder --win nsis --x64"; if ($LASTEXITCODE -ne 0) { throw "nsis build failed" }
 # 断言：安装包同级/win-unpacked 的更新器必须已嵌入配置
 $up = Join-Path $root "release\update\FuFumidi.update.exe"
+if (-not (Test-Path $up)) { throw ("[断言失败] 更新器不存在：" + $up) }
 $bytes = [System.IO.File]::ReadAllBytes($up)
 $s = [System.Text.Encoding]::GetEncoding(28591).GetString($bytes)
 # ★ 只查 "FuFumidi" 不够（文件名/图标里就有这串），必须查**嵌入配置里的特征字段**：
