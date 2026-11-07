@@ -1,11 +1,15 @@
 # -*- coding: utf-8 -*-
 """转录「暂停 / 继续」闸门（用户 2026-10-14 要求：正在转录的那一首也要能暂停，继续后接着跑）。
 
-引擎侧实现见 engine_muscriptor._pause_gate：每吐出一项（5 秒块）之前，若暂停标记文件存在就
-原地等，直到文件被删掉。这里钉住三件事：
+实现已统一到 `pause_gate` 模块：MuScriptor 把**官方惰性事件流**包进 gate_stream，
+每吐出一项（5 秒块）之前，若暂停标记文件存在就原地等，直到文件被删掉。
+★ 2026-11-07：引擎本地的 `_pause_gate` / 模型包装器已随整体回退删除 —— 现在只有
+一份实现（pause_gate），模型侧不做任何 monkeypatch（调用形态保持官方）。
+这里钉住四件事：
   1. 没有标记文件 → 原样透传（不影响正常转录）；
   2. 标记文件存在 → **卡住不产出**（而不是继续跑），删掉后从原处接着往下走；
-  3. 暂停/继续各只打一行日志（别每 0.2 秒刷屏）。
+  3. 暂停/继续各只打一行日志（别每 0.2 秒刷屏）；
+  4. 每次 install 重绑日志回调（第二首的日志不许打到第一首上）。
 """
 import os
 import sys
@@ -16,53 +20,11 @@ ENGINE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ENGINE not in sys.path:
     sys.path.insert(0, ENGINE)
 
-import engine_muscriptor as EM  # noqa: E402
-
 
 def _drain(gate_gen, out, done):
     for x in gate_gen:
         out.append(x)
     done.set()
-
-
-def test_passes_through_without_flag(tmp_path):
-    gate = tmp_path / 'pause.flag'          # 不创建 = 没暂停
-    logs = []
-    out = list(EM._pause_gate(iter([1, 2, 3]), str(gate), logs.append))
-    assert out == [1, 2, 3]
-    assert logs == []
-
-
-def test_blocks_while_flag_exists_then_resumes(tmp_path):
-    gate = tmp_path / 'pause.flag'
-    gate.write_text('1', encoding='utf-8')
-    logs = []
-    produced = []
-    done = threading.Event()
-    t = threading.Thread(target=_drain, args=(EM._pause_gate(iter([1, 2, 3]), str(gate), logs.append), produced, done), daemon=True)
-    t.start()
-    time.sleep(0.8)
-    assert produced == [], '暂停期间不许继续产出：%r' % (produced,)
-    assert any('暂停' in s for s in logs), logs
-    gate.unlink()                            # ← 「继续」
-    assert done.wait(5.0), '删掉标记后应当接着跑完'
-    assert produced == [1, 2, 3], produced
-    assert sum(1 for s in logs if s.startswith('[暂停]')) == 1, logs
-    assert sum(1 for s in logs if s.startswith('[继续]')) == 1, logs
-
-
-def test_missing_log_callback_is_safe(tmp_path):
-    """log_cb 允许为 None（引擎的若干内部调用就不传）。"""
-    gate = tmp_path / 'pause.flag'
-    gate.write_text('1', encoding='utf-8')
-    produced = []
-    done = threading.Event()
-    t = threading.Thread(target=_drain, args=(EM._pause_gate(iter([9]), str(gate), None), produced, done), daemon=True)
-    t.start()
-    time.sleep(0.5)
-    gate.unlink()
-    assert done.wait(5.0)
-    assert produced == [9]
 
 
 # ---------- 共享闸门（pause_gate 模块）：三类引擎共用一份实现 ----------
@@ -158,41 +120,55 @@ def test_gate_stream_passthrough_without_pause_file(monkeypatch):
     assert list(PG.gate_stream(iter([1, 2, 3]))) == [1, 2, 3]
 
 
-def test_muscriptor_wrapper_skips_models_without_token_stream():
-    """不走 token 流的模型（测试替身 / 别的引擎）不许因为"暂停"这个可选功能炸掉。"""
-    class _Plain:
-        pass
+def test_muscriptor_streams_through_gate(tmp_path, monkeypatch):
+    """★ 引擎必须把官方 transcribe() 的惰性事件流交给 gate_stream ——
+    这是「暂停在块与块之间生效」的唯一实现方式（不改事件、只延迟）。"""
+    import engine_muscriptor as EM
 
-    m = _Plain()
-    EM._install_pause_wrapper(m)          # 不抛异常
-    assert not hasattr(m, '_fufumidi_pause_wrapped')
-
-
-def test_muscriptor_wrapper_uses_current_gate(tmp_path, monkeypatch):
-    """MuScriptor 的包装器只装一次，但拦的是**当前**闸门 —— 第二个文件照样能暂停。"""
     flag = tmp_path / 'pause.flag'
     monkeypatch.setenv('FUFUMIDI_PAUSE_FILE', str(flag))
+    seen = []
+    real = PG.gate_stream
 
-    class _Model:
-        def _generate_token_stream(self):
-            yield 1
-            yield 2
+    def _spy(stream, gate=None):
+        seen.append(stream)
+        return real(stream, gate)
 
-    model = _Model()
-    EM._install_pause_wrapper(model)
-    assert model._fufumidi_pause_wrapped is True
-    EM._install_pause_wrapper(model)          # 只包一次，不叠加
-    logs = []
-    PG.install(logs.append)
-    flag.write_text('1', encoding='utf-8')
-    produced = []
-    done = threading.Event()
-    t = threading.Thread(target=_drain, args=(model._generate_token_stream(), produced, done), daemon=True)
-    t.start()
-    time.sleep(0.6)
-    assert produced == [], '暂停期间不许产出：%r' % (produced,)
-    flag.unlink()
-    assert done.wait(5.0)
-    assert produced == [1, 2]
-    assert sum(1 for s in logs if s.startswith('[暂停]')) == 1, logs
-    assert sum(1 for s in logs if s.startswith('[继续]')) == 1, logs
+    monkeypatch.setattr(PG, 'gate_stream', _spy)
+    # 用假模型跑一遍最小转录（不碰模型权重）
+    import muscriptor
+    calls = {}
+
+    class _Fake:
+        _device = type('D', (), {'type': 'cpu'})()
+
+        @classmethod
+        def load_model(cls, arg, **kw):
+            return cls()
+
+        def detect_beat_grid_for(self, audio, mode='best-effort'):
+            return None
+
+        def transcribe(self, audio, **kw):
+            calls['kw'] = kw
+            return iter([object(), object()])
+
+        def events_to_midi_bytes(self, events, beat_grid=None):
+            calls['events'] = list(events)
+            return b'MThd\x00\x00\x00\x06\x00\x01\x00\x01\x00\x60'
+
+    monkeypatch.setattr(muscriptor, 'TranscriptionModel', _Fake)
+    monkeypatch.setattr(EM, '_require_package', lambda: None)
+    monkeypatch.setattr(EM, '_find_local_model', lambda size: str(tmp_path / 'm.safetensors'))
+    monkeypatch.setattr(EM, '_ensure_config', lambda *a, **k: None)
+    monkeypatch.setattr(EM, '_count_notes', lambda p: 0)
+    monkeypatch.setattr(EM, '_midi_note_count_bytes', lambda d: 1)
+    import audio_io
+    monkeypatch.setattr(audio_io, 'prepare_for_muscriptor', lambda p: (str(p), False))
+    audio = tmp_path / 'in.wav'
+    audio.write_bytes(b'RIFF')
+
+    EM.transcribe_muscriptor(str(audio), str(tmp_path / 'out.mid'))
+    assert len(seen) == 1, '事件流必须经过 gate_stream'
+    assert len(calls['events']) == 2, '过闸门后事件不许被吞'
+    assert calls['kw'] == {}, '过闸门不许改变调用形态'

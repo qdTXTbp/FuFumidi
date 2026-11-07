@@ -181,17 +181,14 @@ def main(argv=None):
         wav, ref = synth_material(a.out_dir, a.seconds)
     # ★ 2026-10-21：「识别片段长度」/静音分段/分段探测（分块转录）已全部移除，
     #   基准一律用上游默认块长 + 整曲一次推理。
+    # ★ 2026-11-07：MuScriptor 已整体回退成官方用法（load_model + transcribe_to_midi 等价调用，
+    #   默认参数）—— 预设层（乐器组探测 / 生成参数 / 精度 / 延音）全部删除，这里只剩
+    #   一个「官方默认」配置；`--repeat` 仍可用来量测同一配置的耗时抖动与可复现性。
     base = {
         "model_size": a.model_size, "perf_mode": "quality",
-        "prelude_forcing": True, "muscriptor_instruments": "none",
-        "temperature": 1.0, "cfg_coef": 1.0, "beam_size": 1,
-        "precision": "fp32", "max_note_hold": 0,
-        "timbre_stabilize": False,
     }
     configs = [
-        ("optimal", {"muscriptor_instruments": "none", "timbre_stabilize": False}),
-        ("probe_only", {"muscriptor_instruments": "probe", "timbre_stabilize": False}),
-        ("stable", {"muscriptor_instruments": "probe", "timbre_stabilize": True}),
+        ("official", {}),
     ]
     rows = []
     for name, params in configs:

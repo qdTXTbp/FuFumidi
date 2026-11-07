@@ -61,11 +61,6 @@ const bassBoost = ref(false);            // 低音增强（仅 basic 子模型�
 // 开了以后同一音符可以挂多条弯音（颤音/滑音），**会真的落进导出的 MIDI**。
 // 默认关 —— 对钢琴/鼓这类素材它只会让 MIDI 多出大量无用事件。
 const pitchBends = ref(false);
-// 节拍网格检测（仅 MuScriptor）。★ 2026-10-14：**装了 beat_this 模型就默认开**
-// （用户要求）。仍然可以在界面上关掉 —— 手动改过之后不再被默认值覆盖。
-// 未下载 / 加载失败时引擎侧会自动跳过，不阻断转录。
-const beatGrid = ref(false);
-let beatGridUserSet = false;             // 用户是否手动改过（改过就不再用默认值覆盖）
 // ④ 批 A：引擎早就有、界面一直没入口的模型选项。默认值一律保持「原来的行为」，
 // 所以不碰这些控件时输出与旧版一致（质量相关的开关默认关，见计划文档 §6）。
 const maxFreq = ref(0);                  // 最高音高 Hz（仅 basic，0 = 不限制）：滤掉高频噪声/镲片串音
@@ -73,53 +68,10 @@ const minFreq = ref(0);                  // 最低音高 Hz（仅 basic，0 = �
                                          // ★ 2026-10-14：从「低音增强」里独立出来。用户决定**显式控件优先** ——
                                          //   勾「低音增强」只设 no_melodia（不再顺带把 min_freq 钉成 40）。
 const exportTempo = ref(0);              // 导出 BPM（0 = 用引擎默认 120 / 自动 BPM 优先）
-// ④ 批 B：MuScriptor 生成参数。默认全部保持「不传」—— 不传时上游走贪婪解码，
-// 结果可复现；调了 temperature / cfg_coef 才自动开采样（采样关着时这两个值是空转）。
-const msTemp = ref(1.0);                 // 采样温度（1.0 = 不传）
-const msCfg = ref(1.0);                  // 引导系数（1.0 = 不传）
-const msBeam = ref(1);                   // 束搜索宽度（1 = 不传）
-// 跨块延音（模型侧续接，默认开）：它让模型在 5 秒块边界把没结束的音按原乐器续进下一块，
-// 是「音色统一 + 音符不丢」的关键机制（= 4.3.x 的稳定行为）。关掉＝模型逐块重判乐器，
-// 改由解码后缝合补连续性。
-const msPrelude = ref(true);
-// MuScriptor 乐器组：none=不限定（默认）；limit=手动硬约束
-// MuScriptor 乐器组：none=不限定（默认）；limit=手动硬约束；
-// probe_segments=按 6.2.1 的做法逐段探测乐器组并按段约束。
-const msMode = ref('none');
-
-const msGroups = ref(['voice', 'drums']);
-// 音频标签模型：只用于「自动探测乐器组」，不参与 MIDI 生成。
-const tagModel = ref('audioset'); // audioset | ced
-const msProbeSegSec = ref(60);   // 自动探测（分段）的段长
-function toggleMsGroup(id) {
-  const i = msGroups.value.indexOf(id);
-  if (i >= 0) { if (msGroups.value.length > 1) msGroups.value.splice(i, 1); return; }
-  msGroups.value.push(id);
-}
-const MS_GROUPS = [
-  { id: 'voice', cn: '人声' }, { id: 'acoustic_piano', cn: '钢琴' }, { id: 'electric_piano', cn: '电钢琴' },
-  { id: 'acoustic_guitar', cn: '原声吉他' }, { id: 'clean_electric_guitar', cn: '清音电吉他' },
-  { id: 'distorted_electric_guitar', cn: '失真电吉他' }, { id: 'electric_bass', cn: '电贝斯' },
-  { id: 'acoustic_bass', cn: '原声贝斯' }, { id: 'string_ensemble', cn: '弦乐组' }, { id: 'violin', cn: '小提琴' },
-  { id: 'viola', cn: '中提琴' }, { id: 'cello', cn: '大提琴' }, { id: 'contrabass', cn: '低音提琴' },
-  { id: 'orchestral_harp', cn: '管弦竖琴' }, { id: 'flutes', cn: '长笛' }, { id: 'organ', cn: '风琴' },
-  { id: 'synth_lead', cn: '合成主音' }, { id: 'synth_pad', cn: '合成铺底' }, { id: 'synth_strings', cn: '合成弦乐' },
-  { id: 'brass_section', cn: '铜管组' }, { id: 'trumpet', cn: '小号' }, { id: 'trombone', cn: '长号' },
-  { id: 'tuba', cn: '大号' }, { id: 'french_horn', cn: '圆号' }, { id: 'soprano_and_alto_sax', cn: '萨克斯' },
-  { id: 'tenor_sax', cn: '次中音萨克斯' }, { id: 'baritone_sax', cn: '上低音萨克斯' }, { id: 'oboe', cn: '双簧管' },
-  { id: 'english_horn', cn: '英国管' }, { id: 'clarinet', cn: '单簧管' }, { id: 'bassoon', cn: '巴松管' },
-  { id: 'drums', cn: '鼓' }, { id: 'timpani', cn: '定音鼓' }, { id: 'chromatic_percussion', cn: '色彩打击乐' },
-  { id: 'orchestra_hit', cn: '管弦齐奏' },
-];
-const msInstrValue = computed(() => {
-  if (msMode.value === 'probe_segments') return 'probe_segments';
-  if (msMode.value === 'limit') return msGroups.value.join(',');
-  return 'none';
-});
-// ② 计算精度：默认 fp32（不传）—— bf16 改数值精度、属影响质量的开关，默认关。
-// 实测：CPU（Zen 5/AVX512-BF16）10 分钟素材待复测、15 秒素材 +43%；GPU 上 ≈0%；
-// 长素材（10 分钟/120 块）质量逐项相同，误差不累积。
-const msPrec = ref('fp32');
+// ★ 2026-11-07：MuScriptor 的生成参数（采样温度 / 引导系数 / 束搜索 / 跨块延音 / 精度）、
+//   乐器组约束（限定 · 自动探测 · 标签模型 · 探测段长）、节拍网格开关**全部删除**。
+//   引擎已整体回退成官方用法（load_model + transcribe_to_midi 等价调用，默认参数），
+//   这些开关不再有任何消费方 —— 留着只会让人以为「调了它就会变」。
 const busy = ref(false);
 const done = ref(false);
 const progress = ref(0);
@@ -153,10 +105,6 @@ async function refreshModelStatus() {
         sepModel.value = (sepArr.find(m => m.exists) || sepArr[0] || {}).id || '';
       }
       if (sepModel.value) applyMsPresetForModel(sepModel.value);
-      // ★ 节拍网格：模型装了（beat_this = true）就默认勾上；
-      //   用户手动关过则尊重用户的选择。modelInstalled 返回 null 表示「未知」，
-      //   那种情况**不动** —— 别把默认值建立在一个没查清的状态上。
-      if (!beatGridUserSet && modelInstalled('beat_this') === true) beatGrid.value = true;
     }
   } catch (e) {}
 }
@@ -570,14 +518,10 @@ const PERF_DESC = () => ({
   fast: t('限制到 2 核 + 最小批量：低配/小显存机器更稳，正常机器上会更慢'),
 }[perf.value] || '');
 
-/* 「速度组」这一栏该不该出现。
- * ★ 该组目前只有两项（束搜索宽度 / 计算精度），**两项都只适用于 MuScriptor** ——
- *   束搜索影响生成耗时，计算精度影响显存/内存。其余模型（basic-pitch / 钢琴）没有任何
- *   「只花时间或显存、不改结果」的参数，就不该看到这个组标题：
- *   否则会出现「有分类标题、下面一个控件都没有」的空组（用户实测反馈）。
- * ★ 以后往这一组里加控件，**必须同时改这个判断** —— 它的语义是「本组至少有一个控件会渲染」。
- *   （separate 模式整块高级参数都不显示，所以不必单独判。） */
-const showSpeedGroup = computed(() => mode.value === 'universal' && umodel.value === 'muscriptor');
+/* ★ 2026-11-07：原「速度组」（束搜索宽度 / 计算精度）两项都随 MuScriptor 回退删除，
+ *   组标题的 showSpeedGroup 判断一并去掉。以后再加「只花时间、不改结果」的控件时，
+ *   记得同时加回它的显隐判断，别留下「只有标题、没有控件」的空组。 */
+
 // 模型键 → 内置默认预设名。★ 权威表在 engine/presets.py:MODEL_DEFAULT_PRESET，
 // 桌面端由 presets.list 下发（model_defaults）；下面这份是**网页版兜底**（无桥接时用），
 // 两边名字必须逐字一致，否则网页版「切模型自动套默认」找不到预设。
@@ -602,7 +546,7 @@ const WEB_BUILTIN_PRESETS = () => {
   const basic = {
     model: 'basic', onset_threshold: 0.5, frame_threshold: 0.3, minimum_note_length: 128,
     melodia: true, min_freq: 0, max_freq: 0,
-    beat_grid: true, tempo: 0, perf: 'quality',
+    tempo: 0, perf: 'quality',
     auto_bpm: true, denoise_mode: 'off',
   };
   const piano = {
@@ -618,9 +562,8 @@ const WEB_BUILTIN_PRESETS = () => {
       model: 'miros' } },
     { name: 'MuScriptor · 最优', mode: 'universal', params: { ...basic,
       model: 'muscriptor', model_size: 'medium',
-      // ★ 2026-11-01：与 engine/presets.py 一致，全面回退 4.3.x 转录逻辑 ——
-      // 预设只保留模型选择；乐器组探测/生成参数/prelude_forcing 一律不传
-      // （引擎默认走 4.3.x 兼容路径，多余 kwargs 在旧版 muscriptor 包上是 TypeError）。
+      // ★ 2026-11-07：与 engine/presets.py 一致 —— MuScriptor 已整体回退成官方默认调用，
+      // 预设只保留模型选择；乐器组 / 生成参数 / 节拍网格开关都不再存在。
       } },
     { name: '钢琴 · 最优', mode: 'piano', params: { ...piano, model: 'piano_pt' } },
     { name: 'Aria-AMT · 最优', mode: 'piano', params: { ...piano, model: 'aria' } },
@@ -1311,18 +1254,10 @@ function collectPresetParams() {
       minimum_note_length: iv(minNote.value),
       melodia: !bassBoost.value,
       min_freq: iv(minFreq.value), max_freq: iv(maxFreq.value),
-      beat_grid: beatGrid.value,
     });
     if (umodel.value === 'basic') p.multiple_pitch_bends = pitchBends.value;
-    if (umodel.value === 'muscriptor') Object.assign(p, {
-      model_size: msSize.value,
-      muscriptor_instruments: msInstrValue.value,
-      audio_tagger: tagModel.value,
-      probe_segment_sec: Number(msProbeSegSec.value),
-      temperature: Number(msTemp.value), cfg_coef: Number(msCfg.value),
-      beam_size: iv(msBeam.value), prelude_forcing: msPrelude.value,
-      precision: msPrec.value,
-    });
+    // ★ MuScriptor 只传模型规格：其余全部由引擎按官方默认值调用（见 engine_muscriptor）。
+    if (umodel.value === 'muscriptor') p.model_size = msSize.value;
   } else if (mode.value === 'piano') {
     Object.assign(p, {
       model: pmodel.value,
@@ -1379,7 +1314,6 @@ function applyPresetParams(p, opts) {
   if (has('auto_bpm')) autoBpm.value = !!pr.auto_bpm;
   if (has('stem_format') && ['wav', 'flac', 'mp3'].indexOf(pr.stem_format) >= 0) stemFormat.value = pr.stem_format;
   if (has('tempo')) exportTempo.value = Math.max(0, Math.round(numOr('tempo', 0)));
-  if (has('beat_grid')) beatGrid.value = !!pr.beat_grid;
   if (has('multiple_pitch_bends')) pitchBends.value = !!pr.multiple_pitch_bends;
   // 主旋律强化：新键 melodia，历史预设写 no_melodia（界面上的「低音增强」= 关掉 melodia）
   if (has('melodia')) bassBoost.value = pr.melodia === false;
@@ -1394,23 +1328,8 @@ function applyPresetParams(p, opts) {
   if (lf !== null) minFreq.value = lf;
   const hf = freq('max_freq', 'maximum_frequency');
   if (hf !== null) maxFreq.value = hf;
-  // MuScriptor 生成参数
-  if (has('temperature')) msTemp.value = Math.max(0, numOr('temperature', 1.0));
-  if (has('cfg_coef')) msCfg.value = Math.max(0, numOr('cfg_coef', 1.0));
-  if (has('beam_size')) msBeam.value = Math.max(1, Math.round(numOr('beam_size', 1)));
-  if (has('prelude_forcing')) msPrelude.value = pr.prelude_forcing !== false;
-  if (has('muscriptor_instruments') && typeof pr.muscriptor_instruments === 'string') {
-    const v = pr.muscriptor_instruments.trim();
-    if (!v || v === 'none') msMode.value = 'none';
-    else if (v === 'probe' || v === 'probe_segments' || v === 'segments' || v === 'auto' || v === 'smart') msMode.value = 'probe_segments';
-    else {
-      const groups = v.split(',').map((s) => s.trim()).filter((g) => MS_GROUPS.some((x) => x.id === g));
-      if (groups.length) { msGroups.value = groups; msMode.value = 'limit'; }
-    }
-  }
-  if (has('audio_tagger') && ['audioset', 'ced'].indexOf(String(pr.audio_tagger)) >= 0) tagModel.value = String(pr.audio_tagger);
-  if (has('probe_segment_sec')) msProbeSegSec.value = clamp(Math.round(numOr('probe_segment_sec', 60)), 20, 120);
-  if (has('precision') && ['fp32', 'fp16'].indexOf(pr.precision) >= 0) msPrec.value = pr.precision;
+  // ★ MuScriptor 的生成参数 / 乐器组 / 标签模型 / 精度键一律不再读取：引擎已回退成
+  //   官方默认调用，老预设里残留的这些键会被静默忽略（不报错、不影响结果）。
   // 降噪档位：只认引擎支持的三个值；老预设没有这个键时保持当前值（默认 off）
   if (has('denoise_mode') && ['off', 'light', 'strong'].indexOf(String(pr.denoise_mode)) >= 0) {
     denoiseMode.value = String(pr.denoise_mode);
@@ -1578,27 +1497,8 @@ function collectParams() {
       cfg.no_melodia = true;
     }
     if (umodel.value === 'muscriptor') {
+      // ★ 2026-11-07 整体回退：MuScriptor 只传模型规格，其余一律用上游默认值。
       cfg.model_size = msSize.value;
-      cfg.beat_grid = beatGrid.value;
-      cfg.muscriptor_instruments = msInstrValue.value;
-      cfg.audio_tagger = tagModel.value;
-      cfg.probe_segment_sec = Number(msProbeSegSec.value);
-      // 乐器组约束：'none' / '人声,鼓' 这样的组名列表。
-      // 注意这条链路有三跳（渲染端 → 主进程 worker 请求体 → 引擎），少任何一跳界面选了都不生效。
-      // ★ 2026-10-14 更正：这段注释原先描述的是**已被移除**的批量推理行为
-      //   （`bca0a55`「移除批量推理功能」）。现在：
-      //   · `prelude_forcing` 是**独立开关**（见下面的 msPrelude），与性能档无关；
-      //     2026-10-18b 起这个开关的**实现换了**：不再让模型 teacher-force 跨块 tie
-      //     （那是僵尸长音的产地），改成解码后按「同轨同音高 + 边界两侧相接」缝合（见
-      //     engine_muscriptor._stitch_chunk_boundaries）。界面开关含义不变：开＝要延音连续。
-      //   · 性能档只决定「线程数」与 engine_pt 的**批量前向上限**：
-      //       quality → 全核 + 上限 32（CUDA）/ 16（CPU）
-      //       balanced → 4 核 + 16 / 8
-      //       fast     → 2 核 + 8 / 4
-      //     —— 所以同机上 `quality` 反而最快，`fast` 是给低配/小显存机器防 OOM 的。
-      //   · 旧的显存实测（RTX 5070 Ti 12GB：medium batch=4 峰值 4.2GB / batch=8 峰值 7.9GB
-      //     仅余 2GB / batch=16 触发驱动回退、速度暴跌 5 倍）仍解释了
-      //     `engine_pt._PERF_BATCH` 为什么封在 32 —— 保留作依据，但它已不决定界面行为。
     }
   }
   // ④ 批 A：上面三个 if 之外，还有一批「引擎早就有、界面没入口」的选项。
@@ -1608,14 +1508,6 @@ function collectParams() {
     if (umodel.value === 'basic' && pitchBends.value) cfg.multiple_pitch_bends = true;
     if (umodel.value === 'basic' && maxFreq.value > 0) cfg.max_freq = maxFreq.value;
     if (umodel.value === 'basic' && minFreq.value > 0) cfg.min_freq = minFreq.value;
-    if (umodel.value === 'muscriptor') {
-      if (msTemp.value !== 1.0) cfg.temperature = msTemp.value;
-      if (msCfg.value !== 1.0) cfg.cfg_coef = msCfg.value;
-      if (msBeam.value > 1) cfg.beam_size = msBeam.value;
-      // 开（默认）不传参数 = 引擎默认「缝合延音」；关掉才显式 false = 不缝合
-      if (!msPrelude.value) cfg.prelude_forcing = false;
-      if (msPrec.value && msPrec.value !== 'fp32') cfg.precision = msPrec.value;
-    }
   }
   // 转录前降噪（默认 off = 旧行为；只有显式选择才发送）
   if (mode.value !== 'separate' && denoiseMode.value && denoiseMode.value !== 'off') cfg.denoise_mode = denoiseMode.value;
@@ -2517,55 +2409,9 @@ onBeforeUnmount(() => {
             <NumSlider v-model="minFreq" :min="0" :max="2000" :step="5" />
 
           </div>
-          <!-- WP1-5：同上；MuScriptor 的采样类参数留在质量组，束搜索/精度归速度组 -->
-          <!-- ④ 批 B：MuScriptor 生成参数（都属「影响质量」，默认保持原行为） -->
-          <div class="tr-slider" v-if="mode === 'universal' && umodel === 'muscriptor'">
-            <label>{{ t('采样温度') }}<b>{{ msTemp.toFixed(1) }}</b></label>
-            <NumSlider v-model="msTemp" :min="0.1" :max="2" :step="0.1" />
-
-          </div>
-          <div class="tr-slider" v-if="mode === 'universal' && umodel === 'muscriptor'">
-            <label>{{ t('引导系数') }}<b>{{ msCfg.toFixed(1) }}</b></label>
-            <NumSlider v-model="msCfg" :min="1" :max="5" :step="0.1" />
-
-          </div>
-          <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
-            <label><span><b>{{ t('跨块延音（模型续接）') }}</b></span><input type="checkbox" v-model="msPrelude"></label>
-          </div>
-          <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
-            <label><span><b>{{ t('节拍网格检测') }}</b></span><input type="checkbox" v-model="beatGrid" @change="beatGridUserSet = true"></label>
-          </div>
-          <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
-            <label>
-              <span><b>{{ t('乐器组') }}</b></span>
-              <select v-model="msMode" class="select-input" style="width:auto;padding:2px 6px;font-size:var(--fs-xs)">
-                <option value="none">{{ t('不限定') }}</option>
-                <option value="limit">{{ t('限定乐器组') }}</option>
-                <option value="probe_segments">{{ t('自动探测（分段）') }}</option>
-              </select>
-            </label>
-          </div>
-          <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'probe_segments'">
-            <label>
-              <span><b>{{ t('音频标签模型') }}</b><small class="fb-hint" style="margin-left:6px">{{ t('只用于自动探测乐器组') }}</small></span>
-              <select v-model="tagModel" class="select-input" style="width:auto;padding:2px 6px;font-size:var(--fs-xs)">
-                <option value="audioset">{{ t('AudioSet zipformer-small（内置）') }}</option>
-                <option value="ced">{{ t('CED-Small（约 23 MB）') }}</option>
-              </select>
-            </label>
-          </div>
-          <div class="tr-slider" v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'probe_segments'">
-            <label>{{ t('探测段长') }}<b>{{ msProbeSegSec }}s</b></label>
-            <NumSlider v-model="msProbeSegSec" :min="20" :max="120" :step="10" unit="s" />
-          </div>
-
-          <div class="tr-switch" style="display:block" v-if="mode === 'universal' && umodel === 'muscriptor' && msMode === 'limit'">
-            <div style="display:flex;flex-wrap:wrap;gap:var(--sp-2);max-height:150px;overflow:auto;padding:2px 0">
-              <button v-for="g in MS_GROUPS" :key="g.id" type="button" class="fu-ctl tr-pill"
-                      :class="{ active: msGroups.includes(g.id) }" :title="g.id"
-                      @click="toggleMsGroup(g.id)">{{ t(g.cn) }}</button>
-            </div>
-          </div>
+          <!-- ★ 2026-11-07：MuScriptor 的质量类开关（采样温度 / 引导系数 / 跨块延音 /
+               节拍网格 / 乐器组限定与自动探测 / 标签模型 / 探测段长）已全部删除 ——
+               引擎回退成官方一次性调用（默认参数），这些开关没有消费方。 -->
           <div class="tr-switch" v-if="mode === 'separate'">
             <label><span><b>{{ t('输出鼓组节奏轨') }}</b></span><input type="checkbox" v-model="drums"></label>
           </div>
@@ -2585,30 +2431,8 @@ onBeforeUnmount(() => {
 
           <!-- 电平统一：恒定开启，所以不再做成开关（做成开关就等于又造一个"可能没作用"的选项）。 -->
 
-
-          <!-- WP1-5：速度组。全表里只有这两项是为「省时间 / 省显存」存在的，
-               其余都会改变识别或导出结果，所以都在上面的质量组里。
-               ★ 组标题必须与它的成员同门控：这两项都是 MuScriptor 专属，
-                 别的模型下会出现"只有标题、没有控件"的空组（用户实测反馈）。 -->
-          <div class="tr-group" v-if="showSpeedGroup">{{ t('速度组（影响耗时与显存/内存占用）') }}</div>
-          <div class="tr-slider" v-if="mode === 'universal' && umodel === 'muscriptor'">
-            <label>{{ t('束搜索宽度') }}<b>{{ msBeam }}</b></label>
-            <NumSlider v-model="msBeam" :min="1" :max="5" :step="1" />
-
-          </div>
-          <div class="tr-switch" v-if="mode === 'universal' && umodel === 'muscriptor'">
-            <label>
-              <span>
-                <b>{{ t('计算精度') }}</b>
-
-              </span>
-              <select v-model="msPrec">
-                <option value="fp32">{{ t('fp32（默认，最稳）') }}</option>
-                <option value="bf16">{{ t('bf16（省显存，实测不更快）') }}</option>
-                <option value="fp16">{{ t('fp16（更激进，未验证）') }}</option>
-              </select>
-            </label>
-          </div>
+          <!-- ★ 2026-11-07：速度组（束搜索宽度 / 计算精度）随 MuScriptor 回退一并删除，
+               两项都是生成参数，官方默认值已足够。 -->
           <div class="tr-preset-row">
             <label class="fb-label" style="margin:0">{{ t('参数预设') }}</label>
             <div class="row" style="gap:var(--sp-2)">

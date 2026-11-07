@@ -332,8 +332,16 @@ def transcribe(audio_path, output_midi, mode=None, params=None, log_cb=None,
             _engine_label = f"universal/{umodel}"
             if umodel == "muscriptor":
                 import engine_muscriptor
+                # ★ 2026-11-07：MuScriptor 自己也测速 —— 官方 transcribe_to_midi 默认
+                #   detect_tempo="best-effort"，会把节拍网格与速度一起写进 MIDI，并把音符
+                #   起点贴到网格上。再叠一层 _apply_auto_bpm（整曲按检测到的 BPM 重缩放）
+                #   等于把官方的网格结果二次拉伸，节奏反而更歪 → 拿到网格时视为内置测速。
+                #   没拿到（Beat This! 权重没下载）才退回我们的测速兜底，别让 MIDI 停在占位 120。
+                native_bpm = True
                 n = engine_muscriptor.transcribe_muscriptor(audio_path, output_midi, params=params,
                                                             log_cb=log_cb, num_threads=num_threads)
+                if not (getattr(engine_muscriptor, "LAST_BEAT_GRID", {}) or {}).get("used"):
+                    native_bpm = False
             elif umodel == "yourmt3":
                 import engine_yourmt3
                 n = engine_yourmt3.transcribe_yourmt3(audio_path, output_midi, params=params,

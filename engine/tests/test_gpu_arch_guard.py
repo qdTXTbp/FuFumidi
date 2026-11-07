@@ -123,6 +123,10 @@ def _fake_muscriptor(monkeypatch, tmp_path, fail_first=True):
                     "CUDA error: no kernel image is available for execution on the device")
             return []
 
+        def detect_beat_grid_for(self, audio, mode="best-effort"):
+            # 引擎按官方默认走节拍网格；这里给 None = 「没有可用网格」，不影响调用形态
+            return None
+
         def events_to_midi_bytes(self, events, beat_grid=None):
             return b"MThd" + b"\x00" * 10
 

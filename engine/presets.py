@@ -142,7 +142,6 @@ def _builtin_presets():
         "minimum_note_length": 128.0,
         "melodia": True,              # 主旋律强化开（关掉 = 界面的「低音增强」）
         "min_freq": 0, "max_freq": 0,  # 0 = 不限制音高范围
-        "beat_grid": True,            # 节拍网格检测：装了 beat_this 就开
         "tempo": 0,                   # 0 = 引擎默认 120（自动 BPM 优先）
         "perf": "quality",
         "denoise_mode": "off", "auto_bpm": True,
@@ -167,13 +166,12 @@ def _builtin_presets():
             "params": {
                 **basic,
                 "model": "muscriptor", "model_size": "medium",
-                # ★ 2026-11-01：全面回退 4.3.x 转录逻辑（用户报障「muscriptor 无法转录」）。
-                #   预设只保留模型选择 —— 乐器组探测（probe_segments）/ 生成参数
-                #   （temperature/cfg_coef/beam_size/precision）/ prelude_forcing /
-                #   max_note_hold 一律不传：引擎默认走 4.3.x 裸路径
-                #   （engine_muscriptor 的 FUFUMIDI_MS_MODERN 分支），旧版 muscriptor
-                #   包上的任何多余 kwargs 都是 TypeError 隐患。
-                #   auto_bpm 来自 basic（engine.py 层的后处理，与转录逻辑无关）。
+                # ★ 2026-11-07：引擎已整体回退成**官方用法**（load_model + transcribe_to_midi
+                #   等价调用，默认参数）。预设只保留模型选择：乐器组、生成参数
+                #   （temperature/cfg_coef/beam_size/precision/prelude_forcing）、
+                #   节拍网格开关都不再存在，传了也只是被忽略。
+                #   auto_bpm 来自 basic，只在引擎没拿到官方节拍网格时兜底速度。
+                #   ★ 切规格不会把 model 写回 medium —— 见上面 _builtin_presets 的说明。
             },
         },
         "钢琴 · 最优": {"mode": "piano", "params": {**piano, "model": "piano_pt"}},

@@ -172,7 +172,11 @@ def _resolve_params(args, mode):
     _mm = getattr(args, "memory_mode", None)
     if _mm in ("auto", "low", "allow"):
         p["memory_mode"] = str(_mm)
-    if getattr(args, "timbre_stabilize", False): p["timbre_stabilize"] = True
+    # ★★ 2026-11-07：以下 muscriptor 专属参数（乐器组 / 标签模型 / 探测段长 / 批量推理 /
+    #   节拍网格 / 延长音符上限 / 音色稳定）在引擎侧**已全部不再读取** —— MuScriptor 走官方
+    #   默认调用（见 engine_muscriptor）。这里保留解析只为兼容旧队列 / 旧预设文件：
+    #   老配置照样能载入，只是这些键不再改变结果。新代码不要再往里加参数。
+    #   ★ no_merge / no_velnorm 与 muscriptor 无关，照旧生效（见下两行）。
     if getattr(args, "no_merge", False): p["merge_overlap"] = False
     if getattr(args, "no_velnorm", False): p["normalize_vel"] = False
     # 子模型选择：universal → basic / muscriptor；piano → piano_pt / aria / transkun
