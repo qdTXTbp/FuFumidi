@@ -44,7 +44,13 @@ Start-Sleep -Seconds 3
 # P1 包体：bundle-python 产出的运行时仍带 pyc/lib/headers/tests（实测约 296 MiB），
 # 在 dir 之后、kachina/NSIS 之前裁掉；并用真实 import 自检，失败直接中止构建。
 $pyRoot = Join-Path $root "release\win-unpacked\resources\python"
-if (Test-Path (Join-Path $pyRoot "python.exe")) {
+# ★ 应急兜底：Windows 上偶尔会出现「刚落盘的文件被内核 minifilter 卡住」，
+#   此时连 fs.unlinkSync 单个 pdb 都无限阻塞（不是 EPERM，是永不返回、CPU 0），
+#   任何重试次数都无解。裁剪只是体积优化（NSIS 阶段本来会重新整目录复制
+#   resources/python），跳过不影响可用性。设 FUFUMIDI_SKIP_PRUNE=1 即可绕过。
+if ($env:FUFUMIDI_SKIP_PRUNE -eq '1') {
+  Write-Host "[prune] 按 FUFUMIDI_SKIP_PRUNE=1 跳过（文件句柄被内核占用）" -ForegroundColor Yellow
+} elseif (Test-Path (Join-Path $pyRoot "python.exe")) {
   Write-Host "[prune] Python 运行时裁剪" -ForegroundColor Cyan
   $env:FUFUMIDI_PY = $pyRoot
   & node (Join-Path $root "scripts\prune-python-bundle.cjs"); if ($LASTEXITCODE -ne 0) { throw "prune-python-bundle failed" }
