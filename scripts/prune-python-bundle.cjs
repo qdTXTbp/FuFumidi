@@ -66,6 +66,31 @@ function bump(key, bytes, sample) {
   }
 }
 
+// Windows 上 electron-builder 刚写完的 200MB exe / pdb 常被 Defender、索引器短暂占住：
+// 此时 unlink / writeFile 会直接 EPERM。裁剪是**体积优化**，删不掉某个文件不影响
+// 运行时（后面还有一次真实 import 自检），所以这里重试几次，仍失败就明确告警并跳过，
+// 绝不能让一个 pdb 没删掉就把整条发布链打断（2026-11-08 6.4.9 实测两次）。
+function sleepSync(ms) {
+  const buf = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(buf, 0, 0, ms);
+}
+
+function tryRemove(full) {
+  for (let i = 0; i < 5; i++) {
+    try { fs.rmSync(full, { recursive: true, force: true }); return true; }
+    catch (e) {
+      if (i === 4) {
+        failed.push({ path: path.relative(ROOT, full), error: (e && e.code) || String(e) });
+        return false;
+      }
+      sleepSync(150 * (i + 1));
+    }
+  }
+  return false;
+}
+
+const failed = [];
+
 function walk(dir) {
   let ents;
   try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
@@ -78,8 +103,9 @@ function walk(dir) {
     const hit = CATEGORIES.find((c) => (isDir ? c.dir && c.dir(full, e.name, parts) : c.match && c.match(full, e.name, parts)));
     if (hit) {
       const n = getSize();
-      if (!DRY) fs.rmSync(full, { recursive: true, force: true });
-      bump(hit.key, n, path.relative(ROOT, full));
+      const removed = DRY || tryRemove(full);
+      if (removed) bump(hit.key, n, path.relative(ROOT, full));
+      else bytesBefore += n;   // 删不掉就如实算作「仍在包里」
       continue;
     }
     if (isDir) walk(full);
@@ -95,6 +121,12 @@ for (const [key, bytes] of totals) {
   console.log('  ' + key.padEnd(10) + (bytes / 1048576).toFixed(1).padStart(8) + ' MB   ' + (samples.get(key) || []).join(', '));
 }
 console.log('合计释放 ' + (freed / 1048576).toFixed(1) + ' MB；剩余 ' + ((bytesBefore) / 1048576).toFixed(1) + ' MB');
+if (failed.length) {
+  // 不抛错：这些文件只是没被裁掉，功能不受影响。明确列出来，避免「静默兜底」。
+  console.warn('[prune] ' + failed.length + ' 项被占用、跳过删除（不影响运行，稍后可重试裁剪）：');
+  for (const f of failed.slice(0, 20)) console.warn('  ' + f.path + '  ' + f.error);
+  if (failed.length > 20) console.warn('  …其余 ' + (failed.length - 20) + ' 项略');
+}
 if (!DRY) {
   console.log('下一步：跑一次导入自检 ——');
   console.log('  "' + path.join(ROOT, 'python.exe') + '" -c "import numpy, scipy, librosa, soundfile, pretty_midi, mido, yaml, PIL, onnxruntime, basic_pitch"');

@@ -17,7 +17,25 @@ Set-Location $root
 #   cmd /c 让 stderr 直接落到重定向文件，绕开这套包装。
 if (-not $SkipUi) { & cmd /c "npm --prefix frontend run build"; if ($LASTEXITCODE -ne 0) { throw "frontend build failed" } }
 Write-Host "[1/3] electron-builder --win dir" -ForegroundColor Cyan
-& cmd /c "npx electron-builder --win dir --x64"; if ($LASTEXITCODE -ne 0) { throw "dir build failed" }
+# ★ electron-builder 刚写完 200MB 的 FuFumidi.exe 就要回写 asar 完整性，Windows
+#   Defender / 索引器偶尔会短暂占住它 → EPERM 导致整条构建冤死（2026-11-08 6.4.9）。
+#   失败时把半成品目录改名挪开（比删 2 万多个文件可靠，也不触发批量删除确认），
+#   再完整重跑一次 dir；最多 3 次。
+$dirOk = $false
+for ($try = 1; $try -le 3 -and -not $dirOk; $try++) {
+  & cmd /c "npx electron-builder --win dir --x64"
+  if ($LASTEXITCODE -eq 0) { $dirOk = $true; break }
+  Write-Host ("[1/3] 第 " + $try + " 次 dir 失败，挪开半成品后重试…") -ForegroundColor Yellow
+  Start-Sleep -Seconds 5
+  $half = Join-Path $root "release\win-unpacked"
+  if (Test-Path $half) {
+    $stale = "_stale-win-unpacked-retry" + $try + "-" + (Get-Date -Format 'HHmmss')
+    try { Rename-Item -LiteralPath $half -NewName $stale -Force } catch { Write-Host ("  挪开失败：" + $_.Exception.Message) -ForegroundColor Yellow }
+  }
+}
+if (-not $dirOk) { throw "dir build failed" }
+# 让杀软/索引器把刚落盘的句柄放掉，再做下一步的裁剪（裁剪本身也会重试 + 告警）
+Start-Sleep -Seconds 3
 # P1 包体：bundle-python 产出的运行时仍带 pyc/lib/headers/tests（实测约 296 MiB），
 # 在 dir 之后、kachina/NSIS 之前裁掉；并用真实 import 自检，失败直接中止构建。
 $pyRoot = Join-Path $root "release\win-unpacked\resources\python"
