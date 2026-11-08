@@ -118,7 +118,11 @@ def _builtin_presets():
     · **影响结果、且"值越高越不稳定"的 → 取中性值**：`temperature=1.0`、
       `cfg_coef=1.0`、`beam_size=1`。中性值**就是**稳定性锚点 ——
       "越高越准"没有任何实测支撑，不拿它换不确定性。
-    · **不干预 > 强行干预**：`muscriptor_instruments='none'`（不硬禁乐器组）。少一层猜测就少一层引入错误的机会。
+    · **整曲锁定 > 逐块自由改判**：`muscriptor_instruments='probe'`。这是官方
+      `transcribe(instruments=...)` 硬约束，不是模型外的补丁层；2026-10-18 A/B
+      （medium / 30s 双音色）实测音色切换 5→0、F1 0.4914→0.7692、显存不变。
+      MuScriptor 逐 5 秒块判乐器，不锁就会「同一段旋律突然换音色、鼓点断续」。
+      用户仍可在转录页切「不限定」回到官方自动识别。
     · ★ **`max_note_hold` 保持 0（不截断）**：僵尸音符已改为**音频证据式收尾** ——
       引擎在块边界按音频判断该音是否还有能量，没能量才收尾（收在静音开始处）。
       按时长硬截断会误伤音频里真实存在的长音（用户明确否掉）。上限仍保留为可选兜底。
@@ -167,9 +171,12 @@ def _builtin_presets():
                 **basic,
                 "model": "muscriptor", "model_size": "medium",
                 # ★ 2026-11-07：引擎已整体回退成**官方用法**（load_model + transcribe_to_midi
-                #   等价调用，默认参数）。预设只保留模型选择：乐器组、生成参数
-                #   （temperature/cfg_coef/beam_size/precision/prelude_forcing）、
-                #   节拍网格开关都不再存在，传了也只是被忽略。
+                #   等价调用，默认参数）。生成参数（temperature/cfg_coef/beam_size/
+                #   precision/prelude_forcing）与节拍网格开关都不再存在，传了也只是被忽略。
+                # ★ 2026-11-08：恢复唯一经 A/B 验证有效的官方杠杆 —— 整曲锁定乐器组。
+                #   它只是官方 transcribe(instruments=...) 参数，不改音频/事件/MIDI 字节。
+                #   与前端 WEB_BUILTIN_PRESETS 必须保持一致（CLI、队列、界面同一默认）。
+                "muscriptor_instruments": "probe",
                 #   auto_bpm 来自 basic，只在引擎没拿到官方节拍网格时兜底速度。
                 #   ★ 切规格不会把 model 写回 medium —— 见上面 _builtin_presets 的说明。
             },

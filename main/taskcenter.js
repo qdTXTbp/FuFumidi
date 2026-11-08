@@ -120,6 +120,19 @@ function createTaskCenter(opts = {}) {
     prune();
     return { ok: true };
   }
+  /** 业务侧自己报告「已取消/已暂停」：不需要 onCancel，也不要求任务 cancelable。
+   *  下载桥接的任务刻意不可从任务中心取消（断点在各资源页手里），但仍要如实终态化。 */
+  function markCanceled(id) {
+    const t = tasks.get(String(id));
+    if (!t) return { ok: false, error: '任务不存在' };
+    if (t.status !== 'running') return { ok: false, error: '任务已结束' };
+    t.status = 'canceled';
+    t.endedAt = now();
+    dirty = true;
+    flush();
+    prune();
+    return { ok: true };
+  }
   function get(id) { const t = tasks.get(String(id)); return t ? snapshot(t) : null; }
   function size() { return tasks.size; }
   function clear() { tasks.clear(); flush(); }
@@ -132,7 +145,7 @@ function createTaskCenter(opts = {}) {
     return { ok: true, removed: n };
   }
 
-  return { register, cancel, list, get, size, clear, clearFinished, flush };
+  return { register, cancel, markCanceled, list, get, size, clear, clearFinished, flush };
 }
 
 /** 单例（主进程用）：main.js 创建并注入 emit（Electron 窗口广播） */
@@ -141,6 +154,11 @@ function getTaskCenter(opts) {
   if (!_center) _center = createTaskCenter(opts || {});
   return _center;
 }
+/** 只**窥视**已建好的中心，绝不创建。
+ *  下载模块在 app.whenReady 早期就注册了 IPC（早于 main.js 里建中心那一行），
+ *  若此时调 getTaskCenter() 会抢先造一个没有 emit 的单例，后续真正的中心就拿不到
+ *  广播能力了。业务 handler 统一用这个 peek，取不到就退化为不登记任务。 */
+function peekTaskCenter() { return _center; }
 
 /**
  * 注册 IPC（由 main.js 调用）。
@@ -175,4 +193,4 @@ function registerTaskIpc({ ipcMain, center, e2e = false } = {}) {
   }
 }
 
-module.exports = { createTaskCenter, getTaskCenter, registerTaskIpc };
+module.exports = { createTaskCenter, getTaskCenter, peekTaskCenter, registerTaskIpc };

@@ -26,6 +26,12 @@ const isDesktop = !!(bridge && bridge.convert);
 const mode = ref('universal');           // universal | piano | separate
 const umodel = ref('basic');             // 通用子模型：basic | muscriptor
 const msSize = ref('medium');            // MuScriptor 规格：small | medium | large
+// 官方 instruments= 硬约束（对照官方 API / 第三方 --instrument）。
+// 'probe' = 默认：整曲预分析后锁定（2026-10-18 A/B：音色切换 5→0、F1 0.49→0.77）；
+// 'none' = 官方自动识别；逗号分隔组名 = 手动硬约束。
+// 6.4.8 回退时把这一项连同其它补丁一起删了，于是模型逐 5 秒块自由改判乐器，
+// 用户报「同一段旋律突然换音色、鼓点断断续续」——这里按 A/B 固化过的默认恢复。
+const msInstruments = ref('probe');
 const pmodel = ref('piano_pt');          // 钢琴子模型：piano_pt | aria | transkun | hft
 /* ★ Aria-AMT 需要 CUDA（2026-10-17 用户：「Aria-AMT 在转录页标注需要 CUDA」）。
    实测：没有 CUDA 时它直接抛 AssertionError: CUDA device not found，而界面只说「未下载」，
@@ -562,8 +568,10 @@ const WEB_BUILTIN_PRESETS = () => {
       model: 'miros' } },
     { name: 'MuScriptor · 最优', mode: 'universal', params: { ...basic,
       model: 'muscriptor', model_size: 'medium',
-      // ★ 2026-11-07：与 engine/presets.py 一致 —— MuScriptor 已整体回退成官方默认调用，
-      // 预设只保留模型选择；乐器组 / 生成参数 / 节拍网格开关都不再存在。
+      // ★ 2026-11-07 回退成官方裸调用；2026-11-08 恢复唯一有效的官方杠杆：
+      //   整曲锁定乐器组（2026-10-18 A/B：音色切换 5→0、F1 0.49→0.77）。
+      //   注意它不是「模型外的补丁层」——只是官方 transcribe(instruments=...) 参数。
+      muscriptor_instruments: 'probe',
       } },
     { name: '钢琴 · 最优', mode: 'piano', params: { ...piano, model: 'piano_pt' } },
     { name: 'Aria-AMT · 最优', mode: 'piano', params: { ...piano, model: 'aria' } },
@@ -1256,8 +1264,11 @@ function collectPresetParams() {
       min_freq: iv(minFreq.value), max_freq: iv(maxFreq.value),
     });
     if (umodel.value === 'basic') p.multiple_pitch_bends = pitchBends.value;
-    // ★ MuScriptor 只传模型规格：其余全部由引擎按官方默认值调用（见 engine_muscriptor）。
-    if (umodel.value === 'muscriptor') p.model_size = msSize.value;
+    // ★ MuScriptor 只传模型规格 + 可选的官方乐器组硬约束；其余全走官方默认值。
+    if (umodel.value === 'muscriptor') {
+      p.model_size = msSize.value;
+      if (msInstruments.value.trim()) p.muscriptor_instruments = msInstruments.value.trim();
+    }
   } else if (mode.value === 'piano') {
     Object.assign(p, {
       model: pmodel.value,
@@ -1293,6 +1304,9 @@ function applyPresetParams(p, opts) {
     else if (['piano_pt', 'aria', 'transkun', 'hft'].indexOf(pr.model) >= 0) pmodel.value = pr.model;
   }
   if (!keep && has('model_size') && ['small', 'medium', 'large'].indexOf(pr.model_size) >= 0) msSize.value = pr.model_size;
+  // 官方乐器组硬约束：老预设/旧队列没有这个键时回到 A/B 固化的默认 probe
+  if (has('muscriptor_instruments')) msInstruments.value = String(pr.muscriptor_instruments || 'probe');
+  else if (!keep && umodel.value === 'muscriptor') msInstruments.value = 'probe';
   // 性能档：用户手动选过就尊重用户的选择（自动套预设不改它）
   if (has('perf') && ['quality', 'balanced', 'fast'].indexOf(pr.perf) >= 0 && !(keep && perfUserSet)) perf.value = pr.perf;
   if (has('onset_threshold')) onset.value = clamp(num('onset_threshold'), 0, 1);
@@ -1498,7 +1512,9 @@ function collectParams() {
     }
     if (umodel.value === 'muscriptor') {
       // ★ 2026-11-07 整体回退：MuScriptor 只传模型规格，其余一律用上游默认值。
+      // ★ 2026-11-08：恢复官方 instruments= 硬约束（默认留空 = 官方自动识别）。
       cfg.model_size = msSize.value;
+      if (msInstruments.value.trim()) cfg.muscriptor_instruments = msInstruments.value.trim();
     }
   }
   // ④ 批 A：上面三个 if 之外，还有一批「引擎早就有、界面没入口」的选项。
@@ -2137,6 +2153,21 @@ onBeforeUnmount(() => {
           <button class="fu-ctl tr-pill" :class="{ active: msSize === 'small' }" @click="msSize = 'small'">Small · 100M<i v-if="modelInstalled('muscriptor_small') !== null" class="fu-badge ms-badge" :class="modelInstalled('muscriptor_small') ? 'ok' : 'miss'">{{ modelInstalled('muscriptor_small') ? t('已下载') : t('未下载') }}</i></button>
           <button class="fu-ctl tr-pill" :class="{ active: msSize === 'medium' }" @click="msSize = 'medium'">{{ t('Medium · 300M（推荐）') }}<i v-if="modelInstalled('muscriptor_medium') !== null" class="fu-badge ms-badge" :class="modelInstalled('muscriptor_medium') ? 'ok' : 'miss'">{{ modelInstalled('muscriptor_medium') ? t('已下载') : t('未下载') }}</i></button>
           <button class="fu-ctl tr-pill" :class="{ active: msSize === 'large' }" @click="msSize = 'large'">Large · 1.3B<i v-if="modelInstalled('muscriptor_large') !== null" class="fu-badge ms-badge" :class="modelInstalled('muscriptor_large') ? 'ok' : 'miss'">{{ modelInstalled('muscriptor_large') ? t('已下载') : t('未下载') }}</i></button>
+        </div>
+        <div v-if="umodel === 'muscriptor'" class="tr-ms-instruments">
+          <div class="fu-ctl tr-pills">
+            <button class="fu-ctl tr-pill" :class="{ active: msInstruments === 'probe' }" @click="msInstruments = 'probe'">{{ t('自动锁定（音色稳定 · 默认）') }}</button>
+            <button class="fu-ctl tr-pill" :class="{ active: msInstruments === 'none' }" @click="msInstruments = 'none'">{{ t('不限定（官方自动识别）') }}</button>
+            <button class="fu-ctl tr-pill" :class="{ active: msInstruments !== 'probe' && msInstruments !== 'none' }" @click="msInstruments = ''">{{ t('手动限定') }}</button>
+          </div>
+          <input v-if="msInstruments !== 'probe' && msInstruments !== 'none'" class="text-input" v-model="msInstruments"
+                 :placeholder="t('限定乐器组（留空 = 官方自动识别），例：drums,acoustic_piano,electric_bass')">
+          <div v-if="msInstruments !== 'probe' && msInstruments !== 'none'" class="fu-ctl tr-pills">
+            <button class="fu-ctl tr-pill" @click="msInstruments = 'drums,acoustic_piano,acoustic_guitar,clean_electric_guitar,electric_bass,voice'">{{ t('常用编制 + 鼓') }}</button>
+            <button class="fu-ctl tr-pill" @click="msInstruments = 'drums,acoustic_piano'">{{ t('钢琴 + 鼓') }}</button>
+            <button class="fu-ctl tr-pill" @click="msInstruments = 'none'">{{ t('清空（自动识别）') }}</button>
+          </div>
+          <div class="tr-perf-hint">{{ t('官方硬约束：整曲锁定乐器组后不再逐 5 秒块改判，可压住跨块换音色、鼓点断续；A/B 实测音色切换 5→0、F1 0.49→0.77。代价是多跑约 1 分钟预分析（CPU 更久），且探测没听到的长尾乐器会被挡住，这类曲子可切「不限定」。') }}</div>
         </div>
         <div class="tr-perf-hint" v-if="umodel === 'muscriptor'">{{ t('未下载时请到资源中心 → 模型文件 按规格下载') }}</div>
         <div class="tr-perf-hint tr-warn" v-if="umodel === 'muscriptor' && msSize === 'large'">{{ t('Large 1.3B 是离线转录里最慢的一档：5 秒一段串行生成，3 分钟音频可能等十几到几十分钟；追求速度建议 Medium 300M，质量优先再选 Large。') }}</div>

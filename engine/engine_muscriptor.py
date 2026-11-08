@@ -24,7 +24,20 @@ MuScriptor 通用多乐器转录引擎（Mirelo × Kyutai）
      1) 本地权重解析（资源中心下载到 FUFUMIDI_MODELS_DIR，离线可用）
      2) 暂停闸门（只延迟事件流出，不改事件）
      3) GPU 失败/显存不足 → 换 CPU 重跑一次（同一行调用，参数不变）
+
+★★ 2026-11-08：对照官方提交 302343e8 与第三方包装 music-to-midi 后补两件事，
+   **都不是模型外的补丁层**，只是把官方 API 用完整：
+   a) 官方 `transcribe()` 的事件流每 5 秒块交织一个 ProgressEvent，
+      而 `events_to_midi_bytes()` 会把它 `continue` 掉 —— 必须在流上拦截转成
+      ###PROG，否则任务中心永远停在「推理中」。
+   b) 官方 `prelude_forcing=True`（跨块续音按原乐器，fix issue #3）与
+      `instruments=[...]`（硬掩其它乐器/鼓 token，第三方 CLI 的 --instrument）
+      是跨块音色/鼓组稳定的唯一官方杠杆。旧 wheel 不认这些 kwargs（6.4.5 曾因此
+      整次 TypeError），所以先用 inspect.signature 探测能力，再显式传，失败静默退回
+      零 kwargs —— 绝不改事件、不改音频、不改 MIDI 字节。
 """
+import inspect
+import json
 import os
 import time
 
@@ -203,6 +216,109 @@ def _detect_grid(model, wav, log_cb):
         return None
 
 
+def _progress_stream(events, log_cb):
+    """把官方 ProgressEvent 透传成任务中心进度（**事件本身原样往下传**）。
+
+    官方 transcribe() 在开头 yield 一个 (completed=0, total=N)，之后每完成一个
+    5 秒块 yield 一个；events_to_midi_bytes 会 `continue` 掉它们。主进程
+    main/engine.js 认 `###PROG {"completed":n,"total":m}`（见 :159），
+    所以这里只加日志，不碰事件顺序、不做缓冲 —— 流式语义与暂停闸门都保持。
+    """
+    last = -1
+    for ev in events:
+        done = getattr(ev, "completed", None)
+        total = getattr(ev, "total", None)
+        if (isinstance(done, int) and isinstance(total, int)
+                and total > 0 and done != last):
+            last = done
+            _log(log_cb, "###PROG " + json.dumps({"completed": done, "total": total}))
+            if done:
+                _log(log_cb, "[推理] 已转录 %d/%d 个 5 秒片段" % (done, total))
+        yield ev
+
+
+def _valid_instruments(groups):
+    """用官方词表过滤名字，避免上游 ValueError 把整次转录炸掉。"""
+    try:
+        from muscriptor.tokenizer.mt3 import MT3_FULL_PLUS_GROUP_NAMES as valid
+        return [g for g in groups if g in valid]
+    except Exception:  # noqa: BLE001
+        return groups      # 词表拿不到就交给上游自己校验
+
+
+def _transcribe_kwargs(model, wav, params, log_cb):
+    """只在「本机 muscriptor 支持」时显式传官方参数；旧 wheel 一律零 kwargs。
+
+    两项都是**官方 API**，不是模型外的补丁层（不改音频、不改事件、不改 MIDI 字节）：
+      · prelude_forcing=True —— 官方默认：把上一块没结束的音按原乐器续进下一块。
+        管的是「续音」，管不了「新起音被判成别的乐器」。
+      · instruments=[...]   —— 官方硬约束：整曲掩掉列表外的 program/drum token。
+        第三方包装 CLI 的 --instrument 就是它。2026-10-18 A/B（medium，30s 双音色）
+        实测「整曲锁定」把音色切换 5 → 0、F1 0.4914 → 0.7692，峰值显存不变，
+        代价约 +1s 预分析（GPU）。因此 **默认 probe**：先用同一模型在 3 段
+        20 秒代表窗上短推理，取并集锁定（drums 探测到就必留，见 instrument_probe）。
+
+    取值：'probe'(默认) / 'none'、'off'、'free' / 逗号分隔的官方组名 / 组名列表。
+    预分析失败、或旧 wheel 不认 instruments，都静默退回「官方自动识别」并留日志，
+    绝不让预分析拖垮整次转录。
+    """
+    try:
+        names = set(inspect.signature(model.transcribe).parameters)
+    except Exception:  # noqa: BLE001
+        return {}
+    kw = {}
+    if "prelude_forcing" in names:
+        kw["prelude_forcing"] = True
+    else:
+        # ★ 旧 wheel 没有 teacher forcing：块边界会用错误乐器重新起音、鼓点断续
+        #   （官方 issue #3）。内置 Python 运行时受 ignoreFolderPath 保护、
+        #   不随应用更新升级，装得早的用户极易命中这一条，必须说清楚。
+        _log(log_cb, "[模型] 当前 MuScriptor 运行时过旧（缺 prelude_forcing）：跨块"
+             "音色与鼓点可能不稳定；建议重装完整安装包或更新内置运行时")
+
+    raw = (params or {}).get("muscriptor_instruments")
+    mode, groups = "probe", []
+    try:
+        import instrument_probe as _ip
+        mode, groups = _ip.parse_mode(raw if raw is not None else "probe")
+    except Exception:  # noqa: BLE001
+        # 探测模块不可用时仍支持手动组名
+        if isinstance(raw, str) and raw.strip() and raw.strip().lower() not in ("none", "off", "free", "-", "probe"):
+            mode, groups = "limit", [x.strip() for x in raw.split(",") if x.strip()]
+
+    if mode in ("probe", "probe_segments", "segments"):
+        if "instruments" not in names:
+            _log(log_cb, "[模型] 当前 muscriptor 不支持 instruments，无法自动锁定乐器组")
+        else:
+            try:
+                import instrument_probe as _ip
+                _log(log_cb, "[预分析] 扫描整曲代表片段，锁定乐器组（音色稳定）…")
+                r = _ip.probe(model, wav, log=lambda s: _log(log_cb, s))
+                groups = list(r.get("groups") or [])
+                if groups:
+                    _log(log_cb, "[预分析] 整曲锁定：%s" % ", ".join(groups))
+                else:
+                    _log(log_cb, "[预分析] 没探到可用乐器组（%s），按官方自动识别"
+                         % (r.get("reason") or "unknown"))
+            except Exception as e:  # noqa: BLE001
+                _log(log_cb, "[预分析] 失败（%s），按官方自动识别" % str(e)[:120])
+                groups = []
+
+    if groups and "instruments" in names:
+        ok = _valid_instruments(groups)
+        if ok:
+            kw["instruments"] = ok
+            _log(log_cb, "[模型] 限定乐器组（官方硬约束）：%s" % ", ".join(ok))
+            if len(ok) != len(groups):
+                _log(log_cb, "[模型] 忽略无效乐器名：%s"
+                     % ", ".join(g for g in groups if g not in ok))
+        else:
+            _log(log_cb, "[模型] 乐器组名字全部无效，已按官方自动识别")
+    elif groups:
+        _log(log_cb, "[模型] 当前 muscriptor 不支持 instruments，忽略限定乐器组")
+    return kw
+
+
 def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                           num_threads=None, **kwargs):
     """官方用法：一次 load_model + 一次 transcribe，参数一律用上游默认值。
@@ -243,9 +359,11 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
             _log(log_cb, "推理中（多乐器转录）…")
             # ★★ 官方调用，逐字对齐 Quickstart：
             #   detect_tempo="best-effort" → 节拍网格（把音符起点贴到网格上）
-            #   transcribe() 不带任何 kwargs → prelude_forcing/贪心解码/块长全用上游默认
+            #   transcribe() 只带「官方默认/官方选项」，不带任何自定义生成参数
             beat_grid = _detect_grid(model, wav, log_cb)
-            events = _pause_gate_mod.gate_stream(model.transcribe(wav))
+            kw = _transcribe_kwargs(model, wav, params, log_cb)
+            raw_events = _pause_gate_mod.gate_stream(model.transcribe(wav, **kw))
+            events = _progress_stream(raw_events, log_cb)
             data = model.events_to_midi_bytes(events, beat_grid=beat_grid)
             if _midi_note_count_bytes(data) == 0:
                 raise RuntimeError(

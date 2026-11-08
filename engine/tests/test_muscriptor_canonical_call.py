@@ -13,7 +13,9 @@
 本项目历史上把这行拆开以后，陆续往中间塞了音频预处理、乐器组探测、生成参数、
 证据式收尾、跨块缝合、token 回放……每一层都改变模型听到的东西或写出的 MIDI，
 用户侧表现是「效果一直不稳」。本测试锁三条：
-  1) `transcribe()` **不许带任何 kwargs**（prelude_forcing/batch_size/temperature… 全默认）
+  1) `transcribe()` **不许带任何自定义生成参数**（batch_size/temperature/cfg_coef/beam_size…
+     一律默认）；只允许官方默认 prelude_forcing 与官方选项 instruments，见
+     test_muscriptor_official_stream.py
   2) 必须用官方节拍网格（`detect_beat_grid_for(..., "best-effort")`）并把网格交给写出函数
   3) 音频输入必须原样交给官方（不做重采样/预处理）
 """
@@ -72,14 +74,20 @@ def fake(monkeypatch, tmp_path):
     return M, calls, grid_token, str(audio)
 
 
-def test_transcribe_called_with_zero_kwargs(fake, tmp_path):
-    """`transcribe()` 只能收音频路径 —— 任何 kwargs 都是「我们替模型做了决定」。"""
+def test_transcribe_has_no_custom_generation_params(fake, tmp_path):
+    """`transcribe()` 只能收音频路径 + 官方默认/官方选项 —— 其它 kwargs 一律不许。
+
+    这个 FakeModel 用 `**kw` 签名，能力探测看不到 prelude_forcing/instruments，
+    因此恰好覆盖「旧 wheel 零 kwargs」路径；新 wheel 的能力探测在
+    test_muscriptor_official_stream.py 里单独锁。
+    """
     M, calls, grid_token, audio = fake
     M.transcribe_muscriptor(audio, str(tmp_path / "out.mid"), params={"model_size": "medium"})
     assert len(calls["transcribe"]) == 1
     passed_audio, kwargs = calls["transcribe"][0]
     assert passed_audio == audio
-    assert kwargs == {}, "不许传任何生成参数：%r" % (kwargs,)
+    assert set(kwargs) <= {"prelude_forcing", "instruments"}, \
+        "不许传任何自定义生成参数：%r" % (kwargs,)
 
 
 def test_official_beat_grid_is_used(fake, tmp_path):

@@ -235,10 +235,11 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
     };
     // 注意：这里漏一个键，渲染端设了也到不了引擎 —— 乐器组约束（muscriptor_instruments）
     // 之前就是漏在这张表里，界面选「人声」完全没有效果。
-    // ★ 2026-11-07：乐器组 / 标签模型 / 探测段长 / 节拍网格 / 生成参数（batch·temperature·
-    //   cfg_coef·beam_size·prelude_forcing·precision）随 MuScriptor 整体回退一并移除 ——
-    //   引擎只认 model_size，其余一律走上游默认值。
-    const map = { denoise_mode:'denoise_mode', onset_threshold:'onset_threshold', frame_threshold:'frame_threshold', min_note_length:'min_note_length', min_note_ms:'min_note_ms', merge_gap_ms:'merge_gap_ms', tempo:'tempo', stem_format:'stem_format', model:'model', model_size:'model_size', min_freq:'min_freq', max_freq:'max_freq',
+    // ★ 2026-11-07：标签模型 / 探测段长 / 自定义生成参数（batch·temperature·
+    //   cfg_coef·beam_size·precision）随回退移除，引擎不认。
+    // ★ 2026-11-08：恢复官方 `instruments` 硬约束（对照官方 API 与第三方 --instrument），
+    //   它是「跨块鼓组/音色不稳定」的唯一官方杠杆；默认不传 = 官方自动识别。
+    const map = { denoise_mode:'denoise_mode', onset_threshold:'onset_threshold', frame_threshold:'frame_threshold', min_note_length:'min_note_length', min_note_ms:'min_note_ms', merge_gap_ms:'merge_gap_ms', tempo:'tempo', stem_format:'stem_format', model:'model', model_size:'model_size', min_freq:'min_freq', max_freq:'max_freq', muscriptor_instruments:'muscriptor_instruments',
       // ★ 2026-10-21 审计抓到：静音分段的五个键在引擎侧全都有（argparse + Namespace + params），
       //   但**这张表里一个都没有** —— 界面上「跳过静音分段（长音频加速）」因此一直是死的。
       segment_sec:'segment_sec', memory_mode:'memory_mode', max_note_hold:'max_note_hold' };

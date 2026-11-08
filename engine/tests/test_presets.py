@@ -96,11 +96,14 @@ def test_quality_policy_highest_quality_and_stable():
         assert p["params"].get("perf") == "quality", f"{name} 没选最重的性能档"
     b = presets._builtin_presets()
     ms = b["MuScriptor · 最优"]["params"]
-    # ★ 2026-11-01 全面回退 4.3.x 转录逻辑（用户报障「muscriptor 无法转录」）：
-    #   预设只保留模型选择 —— 探测/生成参数/prelude/上限一律不写，
-    #   引擎默认 model.transcribe(wav) 裸调用（零 kwargs，旧版包也兼容）。
+    # ★ 2026-11-01 全面回退 4.3.x 转录逻辑：预设不写任何生成参数
+    #   （旧版包不认新 kwargs，会整次 TypeError）。
+    # ★ 2026-11-08：但 `muscriptor_instruments='probe'` 必须写 —— 它是官方
+    #   transcribe(instruments=...) 硬约束，不是补丁层；2026-10-18 A/B 实测
+    #   音色切换 5→0、F1 0.4914→0.7692。引擎按 wheel 能力探测，旧包自动忽略。
     assert ms["model"] == "muscriptor" and ms["model_size"] == "medium"
-    for k in ("muscriptor_instruments", "temperature", "cfg_coef", "beam_size",
+    assert ms["muscriptor_instruments"] == "probe", "整曲锁定乐器组必须保持默认"
+    for k in ("temperature", "cfg_coef", "beam_size",
               "precision", "prelude_forcing", "max_note_hold"):
         assert k not in ms, "MuScriptor 预设不该写 %s" % k
     assert b["钢琴 · 最优"]["params"]["include_pedal"] is True

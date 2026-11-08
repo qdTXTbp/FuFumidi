@@ -74,9 +74,24 @@ const { registerSoundfontWorkshopIpc } = require('./main/soundfonts');
 const { registerUserMetaIpc } = require('./main/usermeta');
 const { createWindow, configureSession, openFileFromArgv, openPath, takePendingOpen } = require('./main/window');
 const { pyLit, parsePyJson } = require('./main/py-util');
+const DownloadRegistry = require('./main/download-registry');
 
 const APP_ID = 'com.fufumidi.app';
 app.setAppUserModelId(APP_ID);
+
+// 统一下载管理：旁路监听各下载模块**原有**的进度 IPC，登记到任务中心。
+// 不改任何事件名/字段（App.vue / ViewResources / ViewModels / ViewTranscribe 都在消费它们），
+// 也不接管取消（各资源页自己的 abort 表才握着断点）。见 docs/DOWNLOADS.md。
+app.on('browser-window-created', (_e, win) => {
+  try {
+    const wc = win.webContents;
+    const origSend = wc.send.bind(wc);
+    wc.send = (channel, ...args) => {
+      try { DownloadRegistry.observe(channel, args[0]); } catch (_) { /* 旁路失败不许影响主链路 */ }
+      return origSend(channel, ...args);
+    };
+  } catch (_) { /* 拿不到 webContents 时退化成不登记 */ }
+});
 
 // ---------- GPU 加速开关（须在 app ready 前设置）----------
 // 动态壁纸等全屏视频渲染：启用硬件视频解码 + GPU 光栅化 + 零拷贝，

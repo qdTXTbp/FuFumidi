@@ -168,6 +168,35 @@ await FastDL.downloadMany(
 
 ---
 
+## 4.5 任务层：所有下载统一登记到任务中心（2026-11-08）
+
+传输层统一之后，**任务层**长期各写一套：8 个下载模块各有自己的进度 IPC 事件名、
+取消表和进度字段，`main/taskcenter.js` 里预留的 `download/model/update/omr` 分类
+一直是死代码（`main.js` 只把 `center` 注入了转录队列和导出）。
+
+现在的做法（`main/download-registry.js`）：
+
+- **纯加法**：各模块原有的事件名 / 字段 / 返回值一律不动（`App.vue`、
+  `ViewResources.vue`、`ViewModels.vue`、`ViewTranscribe.vue` 四处都在消费
+  `model:progress`，改字段会同时打破它们）。
+- `main.js` 在 `browser-window-created` 时给 `webContents.send` 挂一层旁路，
+  `DownloadRegistry.observe(channel, payload)` 按白名单把进度登记成任务；
+  `task:update` 等无关通道直接忽略，不会递归。
+- 进度字段归一化：`percent 0..100` / `progress 0..1` / `received+total` / `done`
+  统一成 `0..1`（见 `normalize`），文本只在变化时写日志，避免刷屏。
+- **不接管取消**：桥接任务 `cancelable:false`，断点仍由各资源页自己的
+  `abort` 表掌握（挂错会把 `.part` 断点丢掉）；业务自己报的
+  `canceled/paused` 用 `center.markCanceled(id)` 如实终态化。
+- 模块也可以主动 `DL.start({domain,key,title,onCancel})` 拿到
+  `ctrl` / `isUserAbort` 直接喂给 FastDL，并让任务中心的取消按钮真正生效。
+- 回归：`scripts/test-download-registry.mjs`（并入 `npm run test:download`）。
+- ADR：官方/第三方包装同样**不改事件**（第三方 README：不添加去重、短音符
+  过滤、力度平滑、复音限制或 NoteEvent 重建）；转录侧的乐器组锁定走
+  官方 `transcribe(instruments=...)`，不是后处理，见
+  `docs/plans/2026-10-18-muscriptor-preset-ab.md`。
+
+---
+
 ## 5. 禁止的写法（代码评审直接打回）
 
 - `net.fetch` 之后自己 `createWriteStream` 写正文；`http/https` 模块自己收流。

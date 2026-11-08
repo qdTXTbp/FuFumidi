@@ -55,15 +55,18 @@ def test_builtin_presets_never_force_segment_sec():
 def test_builtin_presets_keep_expected_shape():
     """改默认值不能顺手改掉别的默认值。
 
-    ★ 2026-11-01 全面回退 4.3.x 转录逻辑：MuScriptor 预设只保留模型选择，
-      补丁层参数（乐器组探测/生成参数/prelude/上限）一律不写 ——
-      引擎默认走 4.3.x 裸调用，预设里任何一个多余 kwargs 都是旧包 TypeError 隐患。
+    ★ 2026-11-01 全面回退 4.3.x 转录逻辑：生成参数/prelude/上限一律不写
+      （旧包不认新 kwargs，会整次 TypeError）。
+    ★ 2026-11-08：唯一的例外是 `muscriptor_instruments='probe'` —— 官方
+      transcribe(instruments=...) 硬约束，A/B 固化过的默认；引擎按 wheel
+      能力探测后决定是否传，旧包自动忽略，不构成 TypeError 隐患。
     """
     b = P._builtin_presets()
     ms = b["MuScriptor · 最优"]["params"]
     assert ms["model"] == "muscriptor"
     assert ms["model_size"] == "medium"
-    for k in ("muscriptor_instruments", "prelude_forcing", "precision",
+    assert ms["muscriptor_instruments"] == "probe", "整曲锁定乐器组必须保持默认"
+    for k in ("prelude_forcing", "precision",
               "max_note_hold", "temperature", "cfg_coef", "beam_size"):
         assert k not in ms, "MuScriptor 预设不该写 %s（4.3.x 回退后引擎按上游默认跑）" % k
     assert b["钢琴 · 最优"]["params"]["model"] == "piano_pt"
