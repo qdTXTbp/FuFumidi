@@ -75,21 +75,25 @@ function sleepSync(ms) {
   Atomics.wait(buf, 0, 0, ms);
 }
 
+// ★ 全局重试预算：杀软整批扫描时可能「几千个文件一起被占住」，若每个文件都
+//   退避 5 次，构建会无声卡上几十分钟（2026-11-08 6.4.9 实测）。预算用完后
+//   每个文件只试一次、删不掉就跳过并告警 —— 裁剪只是体积优化，不能拖死发布链。
+const failed = [];
+let retryBudget = 24;
+
 function tryRemove(full) {
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; ; i++) {
     try { fs.rmSync(full, { recursive: true, force: true }); return true; }
     catch (e) {
-      if (i === 4) {
+      if (i >= 4 || retryBudget <= 0) {
         failed.push({ path: path.relative(ROOT, full), error: (e && e.code) || String(e) });
         return false;
       }
-      sleepSync(150 * (i + 1));
+      retryBudget--;
+      sleepSync(200 * (i + 1));
     }
   }
-  return false;
 }
-
-const failed = [];
 
 function walk(dir) {
   let ents;
@@ -114,6 +118,8 @@ function walk(dir) {
 }
 
 console.log((DRY ? '[dry-run] ' : '') + '裁剪目标：' + ROOT);
+// electron-builder 刚写完 python 运行时，先给系统扫描留 6 秒，再开始批量删除
+if (!DRY) sleepSync(6000);
 walk(ROOT);
 let freed = 0;
 for (const [key, bytes] of totals) {

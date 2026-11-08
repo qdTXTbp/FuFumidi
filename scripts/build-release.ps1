@@ -56,7 +56,20 @@ if (Test-Path (Join-Path $pyRoot "python.exe")) {
 Write-Host "[2/3] build-kachina.ps1" -ForegroundColor Cyan
 & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "build-kachina.ps1") -Version $Version; if ($LASTEXITCODE -ne 0) { throw "kachina failed" }
 Write-Host "[3/3] electron-builder --win nsis (更新器已在 gen 之后同步)" -ForegroundColor Cyan
-& cmd /c "npx electron-builder --win nsis --x64"; if ($LASTEXITCODE -ne 0) { throw "nsis build failed" }
+# 与 dir 阶段同样会回写 exe 的 asar 完整性，同样可能撞上 EPERM；失败就挪开半成品重试。
+$nsisOk = $false
+for ($try = 1; $try -le 3 -and -not $nsisOk; $try++) {
+  & cmd /c "npx electron-builder --win nsis --x64"
+  if ($LASTEXITCODE -eq 0) { $nsisOk = $true; break }
+  Write-Host ("[3/3] 第 " + $try + " 次 nsis 失败，挪开半成品后重试…") -ForegroundColor Yellow
+  Start-Sleep -Seconds 5
+  $half = Join-Path $root "release\win-unpacked"
+  if (Test-Path $half) {
+    $stale = "_stale-win-unpacked-nsis" + $try + "-" + (Get-Date -Format 'HHmmss')
+    try { Rename-Item -LiteralPath $half -NewName $stale -Force } catch { Write-Host ("  挪开失败：" + $_.Exception.Message) -ForegroundColor Yellow }
+  }
+}
+if (-not $nsisOk) { throw "nsis build failed" }
 # 断言：安装包同级/win-unpacked 的更新器必须已嵌入配置
 $up = Join-Path $root "release\update\FuFumidi.update.exe"
 if (-not (Test-Path $up)) { throw ("[断言失败] 更新器不存在：" + $up) }
