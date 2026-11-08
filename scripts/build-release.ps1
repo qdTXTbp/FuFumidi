@@ -11,6 +11,11 @@ param([Parameter(Mandatory=$true)][string]$Version, [switch]$SkipUi)
 $ErrorActionPreference = 'Continue'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
+# ★ 只给 electron-builder 进程注入 fs 写入重试：它给 200MB exe 回写 asar 完整性时会
+#   撞上 Defender 对刚落盘文件的瞬时独占（EPERM）。重试整个 dir 阶段无效，必须让
+#   这一次 writeFile 本身重试。见 scripts/retry-fs-write.cjs。
+$fsRetryHook = (Join-Path $PSScriptRoot 'retry-fs-write.cjs') -replace '\\', '/'
+$env:NODE_OPTIONS = "--require=$fsRetryHook"
 # ★ node 类子进程（npm/npx）一律经 cmd /c 启动：PowerShell 5.1 会把它们的 stderr
 #   包装成 NativeCommandError 走自己的错误流，vite 渲染 chunks 时的警告输出在
 #   后台/CI 会话里没人消费该管道就会阻塞整条构建（2026-11-07 6.4.7 两次实测）。
