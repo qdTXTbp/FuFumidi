@@ -195,6 +195,11 @@ def _resolve_params(args, mode):
     # 逗号分隔的组名=直接作为硬约束交给模型；不传=不干预。
     _mi = getattr(args, "muscriptor_instruments", None)
     if _mi: p["muscriptor_instruments"] = str(_mi)
+    # 官方解码档位（2026-11-10）：greedy = 官方 Quickstart 默认，不加任何 kwargs；
+    # sample = 官方 use_sampling=True + temperature=0.9，实测能补上逐块漏掉的鼓点。
+    # 只认这两个白名单值，别的值一律当默认处理，避免旧配置把怪值带进上游。
+    _md = getattr(args, "muscriptor_decode", None)
+    if _md in ("greedy", "sample"): p["muscriptor_decode"] = str(_md)
     # 音频标签模型 / 自动探测（分段）：CLI 与 worker 两条路径都必须进 params，
     # 否则界面选的 CED-Small 会被引擎当成默认 AudioSet。
     _at = getattr(args, "audio_tagger", None)
@@ -504,6 +509,10 @@ def build_parser():
                    help="[muscriptor] 乐器组硬约束：逗号分隔的组名（voice / acoustic_piano /"
                         " clean_electric_guitar / synth_lead / flutes / organ / drums …，"
                         "见 muscriptor list-instruments）。不传=不限定，模型自由判定")
+    g.add_argument("--muscriptor-decode", dest="muscriptor_decode", default=None,
+                   choices=("greedy", "sample"),
+                   help="[muscriptor] 官方解码档位：greedy=官方默认贪心（可复现）；"
+                        "sample=use_sampling + temperature=0.9（补逐块漏鼓，结果有随机性）")
     # ① 回放台（诊断/开发用，界面不暴露）——见 engine_muscriptor.py 顶部说明
     g.add_argument("--temperature", type=float, default=None,
                    help="[muscriptor] 采样温度（默认 1.0=贪婪解码；设了即自动开启采样）")
@@ -600,6 +609,8 @@ def cmd_worker():
                 # 旋律乐器组：漏掉这一项时界面选了「人声」也传不进引擎，
                 # 模型仍会自由改判乐器（甩葱歌那类「同一旋律换音色」的根因）。
                 muscriptor_instruments=req.get('muscriptor_instruments'),
+                # 官方解码档位：serve 常驻会话路径同样要带，漏了界面选的采样档会静默失效
+                muscriptor_decode=req.get('muscriptor_decode'),
                 probe_segment_sec=req.get('probe_segment_sec'),
                 audio_tagger=req.get('audio_tagger'),
                 audio_tagger_window_sec=req.get('audio_tagger_window_sec'),

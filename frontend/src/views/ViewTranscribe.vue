@@ -32,6 +32,11 @@ const msSize = ref('medium');            // MuScriptor 规格：small | medium |
 // 6.4.8 回退时把这一项连同其它补丁一起删了，于是模型逐 5 秒块自由改判乐器，
 // 用户报「同一段旋律突然换音色、鼓点断断续续」——这里按 A/B 固化过的默认恢复。
 const msInstruments = ref('probe');
+// 官方解码方式：'greedy' = 官方 Quickstart 默认（贪心，结果可复现，保持不变）；
+// 'sample' = 官方 use_sampling=True + temperature=0.9。2026-11-10 A/B（NightTheater
+// 前 30s，medium/CPU）：采样档把「逐块漏鼓」的空块 2→0、镲占比 75%→70%，耗时相当；
+// 代价是每次结果略有不同。只做可选档位，不偷偷改默认。
+const msDecode = ref('greedy');
 const pmodel = ref('piano_pt');          // 钢琴子模型：piano_pt | aria | transkun | hft
 /* ★ Aria-AMT 需要 CUDA（2026-10-17 用户：「Aria-AMT 在转录页标注需要 CUDA」）。
    实测：没有 CUDA 时它直接抛 AssertionError: CUDA device not found，而界面只说「未下载」，
@@ -1264,9 +1269,11 @@ function collectPresetParams() {
       min_freq: iv(minFreq.value), max_freq: iv(maxFreq.value),
     });
     if (umodel.value === 'basic') p.multiple_pitch_bends = pitchBends.value;
-    // ★ MuScriptor 只传模型规格 + 可选的官方乐器组硬约束；其余全走官方默认值。
+    // ★ MuScriptor 只传模型规格 + 两个官方可选参数（乐器组硬约束 / 解码方式）；
+    //   其余全走官方默认值。解码默认 'greedy' 与官方 Quickstart 完全一致。
     if (umodel.value === 'muscriptor') {
       p.model_size = msSize.value;
+      p.muscriptor_decode = msDecode.value;
       if (msInstruments.value.trim()) p.muscriptor_instruments = msInstruments.value.trim();
     }
   } else if (mode.value === 'piano') {
@@ -1307,6 +1314,9 @@ function applyPresetParams(p, opts) {
   // 官方乐器组硬约束：老预设/旧队列没有这个键时回到 A/B 固化的默认 probe
   if (has('muscriptor_instruments')) msInstruments.value = String(pr.muscriptor_instruments || 'probe');
   else if (!keep && umodel.value === 'muscriptor') msInstruments.value = 'probe';
+  // 解码档：老预设/旧队列没有这个键时回到官方默认贪心（不擅自改用户已有任务的行为）
+  if (has('muscriptor_decode') && ['greedy', 'sample'].indexOf(pr.muscriptor_decode) >= 0) msDecode.value = pr.muscriptor_decode;
+  else if (!keep && umodel.value === 'muscriptor') msDecode.value = 'greedy';
   // 性能档：用户手动选过就尊重用户的选择（自动套预设不改它）
   if (has('perf') && ['quality', 'balanced', 'fast'].indexOf(pr.perf) >= 0 && !(keep && perfUserSet)) perf.value = pr.perf;
   if (has('onset_threshold')) onset.value = clamp(num('onset_threshold'), 0, 1);
@@ -1513,7 +1523,9 @@ function collectParams() {
     if (umodel.value === 'muscriptor') {
       // ★ 2026-11-07 整体回退：MuScriptor 只传模型规格，其余一律用上游默认值。
       // ★ 2026-11-08：恢复官方 instruments= 硬约束（默认留空 = 官方自动识别）。
+      // ★ 2026-11-10：加官方解码档位（默认 greedy，不改现有行为）。
       cfg.model_size = msSize.value;
+      cfg.muscriptor_decode = msDecode.value;
       if (msInstruments.value.trim()) cfg.muscriptor_instruments = msInstruments.value.trim();
     }
   }
@@ -2168,6 +2180,13 @@ onBeforeUnmount(() => {
             <button class="fu-ctl tr-pill" @click="msInstruments = 'none'">{{ t('清空（自动识别）') }}</button>
           </div>
           <div class="tr-perf-hint">{{ t('官方硬约束：整曲锁定乐器组后不再逐 5 秒块改判，可压住跨块换音色、鼓点断续；A/B 实测音色切换 5→0、F1 0.49→0.77。代价是多跑约 1 分钟预分析（CPU 更久），且探测没听到的长尾乐器会被挡住，这类曲子可切「不限定」。') }}</div>
+        </div>
+        <div v-if="umodel === 'muscriptor'" class="tr-ms-instruments">
+          <div class="fu-ctl tr-pills">
+            <button class="fu-ctl tr-pill" :class="{ active: msDecode === 'greedy' }" @click="msDecode = 'greedy'">{{ t('稳定优先（官方默认贪心）') }}</button>
+            <button class="fu-ctl tr-pill" :class="{ active: msDecode === 'sample' }" @click="msDecode = 'sample'">{{ t('补足鼓点（采样 0.9）') }}</button>
+          </div>
+          <div class="tr-perf-hint">{{ t('官方解码参数：采样档实测可补上逐块漏掉的鼓点、并让镲片偏多的程度略降（空鼓块 2→0、镲 75%→70%），耗时基本不变。代价是每次转录结果略有不同、不可复现；默认贪心与官方 Quickstart 完全一致。') }}</div>
         </div>
         <div class="tr-perf-hint" v-if="umodel === 'muscriptor'">{{ t('未下载时请到资源中心 → 模型文件 按规格下载') }}</div>
         <div class="tr-perf-hint tr-warn" v-if="umodel === 'muscriptor' && msSize === 'large'">{{ t('Large 1.3B 是离线转录里最慢的一档：5 秒一段串行生成，3 分钟音频可能等十几到几十分钟；追求速度建议 Medium 300M，质量优先再选 Large。') }}</div>

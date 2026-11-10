@@ -72,6 +72,8 @@ function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngi
         precision: '--precision',
         memory_mode: '--memory-mode',
         muscriptor_batch: '--batch-size',
+        // 官方解码档位：worker 失败回退到命令行时也必须带上，否则用户选的采样档会静默失效
+        muscriptor_decode: '--muscriptor-decode',
       };
       for (const [k, flag] of Object.entries(map)) {
         if (cfg[k] !== undefined && cfg[k] !== null) args.push(flag, String(cfg[k]));

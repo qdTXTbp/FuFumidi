@@ -257,8 +257,13 @@ def _transcribe_kwargs(model, wav, params, log_cb):
         实测「整曲锁定」把音色切换 5 → 0、F1 0.4914 → 0.7692，峰值显存不变，
         代价约 +1s 预分析（GPU）。因此 **默认 probe**：先用同一模型在 3 段
         20 秒代表窗上短推理，取并集锁定（drums 探测到就必留，见 instrument_probe）。
+      · muscriptor_decode='sample' —— 官方 use_sampling=True + temperature=0.9。
+        2026-11-10 A/B（NightTheater 前 30s，medium/CPU）：采样把「逐块整段漏鼓」
+        的空块 2 → 0、镲占比 75% → 70%，耗时相当；代价是结果略有随机性。
+        **默认 greedy**（零额外 kwargs，与官方 Quickstart 逐字一致），只做可选档位。
 
-    取值：'probe'(默认) / 'none'、'off'、'free' / 逗号分隔的官方组名 / 组名列表。
+    取值：muscriptor_instruments = 'probe'(默认) / 'none'、'off'、'free' /
+          逗号分隔的官方组名 / 组名列表；muscriptor_decode = 'greedy'(默认) / 'sample'。
     预分析失败、或旧 wheel 不认 instruments，都静默退回「官方自动识别」并留日志，
     绝不让预分析拖垮整次转录。
     """
@@ -275,6 +280,16 @@ def _transcribe_kwargs(model, wav, params, log_cb):
         #   不随应用更新升级，装得早的用户极易命中这一条，必须说清楚。
         _log(log_cb, "[模型] 当前 MuScriptor 运行时过旧（缺 prelude_forcing）：跨块"
              "音色与鼓点可能不稳定；建议重装完整安装包或更新内置运行时")
+
+    # 官方采样解码（可选档位，默认 greedy 不进这个分支 —— 零额外 kwargs）
+    if str((params or {}).get("muscriptor_decode") or "greedy").lower() == "sample":
+        if "use_sampling" in names and "temperature" in names:
+            kw["use_sampling"] = True
+            kw["temperature"] = 0.9
+            _log(log_cb, "[模型] 官方采样解码（temperature=0.9）：补足逐块漏鼓，"
+                 "结果略有随机性")
+        else:
+            _log(log_cb, "[模型] 当前 muscriptor 不支持采样解码，忽略「补足鼓点」档")
 
     raw = (params or {}).get("muscriptor_instruments")
     mode, groups = "probe", []

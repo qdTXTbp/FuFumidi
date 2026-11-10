@@ -8,6 +8,10 @@
    instruments= 硬约束。本机 muscriptor 支持时才传（旧 wheel 必须退回零 kwargs，
    6.4.5 曾因无条件传新参数 TypeError 整次失败）。
 
+3) 2026-11-10 增加官方解码档位：`muscriptor_decode='sample'` 才传
+   use_sampling=True + temperature=0.9；**默认 greedy 一个额外 kwargs 都不加**
+   （与官方 Quickstart 逐字一致）。旧 wheel 不认这两个参数时静默忽略并告警。
+
 注意：**不许改事件** —— 进度事件原样往下传，暂停闸门仍然有效。
 """
 import os
@@ -161,3 +165,62 @@ def test_legacy_wheel_falls_back_to_zero_kwargs(fake, tmp_path, monkeypatch):
     _run(M, audio, tmp_path,
          params={"model_size": "medium", "muscriptor_instruments": "drums"})
     assert calls["transcribe"][0][1] == {}
+
+
+def test_sampling_is_optional_off_by_default(fake, tmp_path):
+    """默认 greedy 绝不改官方调用；只有显式 sample 档才带两个原生 kwargs。"""
+    M, _ms, _Modern, Legacy, _calls, audio = fake
+    from muscriptor.events import ProgressEvent
+
+    class DecodeModel:
+        """签名与真实 wheel 一致：能力探测靠 inspect.signature。"""
+        def transcribe(self, audio, prelude_forcing=True, instruments=None,
+                       use_sampling=False, temperature=1.0):
+            yield ProgressEvent(completed=0, total=1)
+
+    base = {"muscriptor_instruments": "none"}
+    logs = []
+    kw_greedy = M._transcribe_kwargs(DecodeModel(), audio, dict(base), logs.append)
+    assert "use_sampling" not in kw_greedy and "temperature" not in kw_greedy
+
+    kw_unknown = M._transcribe_kwargs(DecodeModel(), audio,
+                                      dict(base, muscriptor_decode="weird"), logs.append)
+    assert "use_sampling" not in kw_unknown, "未知取值必须当默认处理"
+
+    kw_sample = M._transcribe_kwargs(DecodeModel(), audio,
+                                     dict(base, muscriptor_decode="sample"), logs.append)
+    assert kw_sample["use_sampling"] is True
+    assert kw_sample["temperature"] == 0.9
+    assert any("采样解码" in s for s in logs)
+
+    # 旧 wheel（签名里没有这两个参数）：忽略，绝不 TypeError
+    logs2 = []
+    kw_legacy = M._transcribe_kwargs(Legacy(), audio,
+                                     dict(base, muscriptor_decode="sample"), logs2.append)
+    assert "use_sampling" not in kw_legacy and "temperature" not in kw_legacy
+    assert any("不支持采样解码" in s for s in logs2)
+
+
+def test_sampling_end_to_end_reaches_official_call(fake, tmp_path, monkeypatch):
+    """选了采样档时，整条链路真的把两个官方参数交到 transcribe()。"""
+    M, muscriptor, Modern, _Legacy, calls, audio = fake
+    from muscriptor.events import ProgressEvent
+
+    class DecodeModel(Modern):
+        def transcribe(self, audio, prelude_forcing=True, instruments=None,
+                       use_sampling=False, temperature=1.0):
+            calls["transcribe"].append((audio, dict(
+                prelude_forcing=prelude_forcing, instruments=instruments,
+                use_sampling=use_sampling, temperature=temperature)))
+            yield ProgressEvent(completed=0, total=1)
+            yield "note-1"
+            yield ProgressEvent(completed=1, total=1)
+
+    monkeypatch.setattr(muscriptor, "TranscriptionModel", DecodeModel)
+    logs = []
+    _run(M, audio, tmp_path,
+         params={"muscriptor_instruments": "none", "muscriptor_decode": "sample"},
+         logs=logs)
+    got = calls["transcribe"][0][1]
+    assert got["use_sampling"] is True and got["temperature"] == 0.9
+    assert any("采样解码" in s for s in logs)

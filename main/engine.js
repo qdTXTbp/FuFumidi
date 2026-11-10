@@ -239,7 +239,8 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
     //   cfg_coef·beam_size·precision）随回退移除，引擎不认。
     // ★ 2026-11-08：恢复官方 `instruments` 硬约束（对照官方 API 与第三方 --instrument），
     //   它是「跨块鼓组/音色不稳定」的唯一官方杠杆；默认不传 = 官方自动识别。
-    const map = { denoise_mode:'denoise_mode', onset_threshold:'onset_threshold', frame_threshold:'frame_threshold', min_note_length:'min_note_length', min_note_ms:'min_note_ms', merge_gap_ms:'merge_gap_ms', tempo:'tempo', stem_format:'stem_format', model:'model', model_size:'model_size', min_freq:'min_freq', max_freq:'max_freq', muscriptor_instruments:'muscriptor_instruments',
+    // ★ 2026-11-10：加官方解码档位（greedy / sample），默认 greedy 不改变任何行为。
+    const map = { denoise_mode:'denoise_mode', onset_threshold:'onset_threshold', frame_threshold:'frame_threshold', min_note_length:'min_note_length', min_note_ms:'min_note_ms', merge_gap_ms:'merge_gap_ms', tempo:'tempo', stem_format:'stem_format', model:'model', model_size:'model_size', min_freq:'min_freq', max_freq:'max_freq', muscriptor_instruments:'muscriptor_instruments', muscriptor_decode:'muscriptor_decode',
       // ★ 2026-10-21 审计抓到：静音分段的五个键在引擎侧全都有（argparse + Namespace + params），
       //   但**这张表里一个都没有** —— 界面上「跳过静音分段（长音频加速）」因此一直是死的。
       segment_sec:'segment_sec', memory_mode:'memory_mode', max_note_hold:'max_note_hold' };
