@@ -330,6 +330,13 @@ contextBridge.exposeInMainWorld('fuBridge', {
     setPreferredSource: (id) => ipcRenderer.invoke('update:setPreferredSource', id),
     onSpeedtest: (cb) => { const w = (_e, row) => cb(row); ipcRenderer.on('update:speedtest:progress', w); return () => ipcRenderer.removeListener('update:speedtest:progress', w); },
   },
+  // 热补丁：小文件覆盖通道（清单固定地址、启动自动应用、可回滚）
+  hotpatch: {
+    check: () => ipcRenderer.invoke('hotpatch:check'),
+    status: () => ipcRenderer.invoke('hotpatch:status'),
+    rollback: () => ipcRenderer.invoke('hotpatch:rollback'),
+    onChanged: (cb) => { const w = (_e, r) => cb(r); ipcRenderer.on('hotpatch:changed', w); return () => ipcRenderer.removeListener('hotpatch:changed', w); },
+  },
   plugins: {
     list: () => ipcRenderer.invoke('plugins:list'),
     setEnabled: (id, enabled) => ipcRenderer.invoke('plugins:setEnabled', id, enabled),

@@ -154,6 +154,9 @@ if (!gotLock) {
     try { installLogging({ app, dir: Paths.logDir(), fs }); } catch (e) { try { require('./main/log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
     registerSystemIpc({ ipcMain, integrity, BrowserWindow, path, shell, app, fs, spawnEngine, dialog });
     registerUpdateIpc({ ipcMain, shell, BrowserWindow, app, path, fs, net, readSettings });
+    // 热补丁：与版本更新解耦的小改动通道，启动后延迟自动验签+静默应用。
+    // 只在打包版生效（开发版直接用工作区源码），FUFUMIDI_NO_HOTPATCH=1 可彻底关闭。
+    require('./main/hotpatch').registerHotpatchIpc({ ipcMain, net, app, BrowserWindow, readSettings });
     registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEngineInline, spawnEngine });
     registerOmrIpc({ ipcMain, BrowserWindow, app, path, fs, shell, net, bundledPython });
   // C2 TaskCenter：全局长任务中心（进度/取消/离开页面不丢）。先建中心，再把句柄分给各业务模块。

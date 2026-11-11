@@ -274,6 +274,49 @@ function onLang() {
   try { localStorage.setItem('fufumidi_lang', form.lang); } catch (e) {}
 }
 
+/* ---------------- 热补丁 ----------------
+   与版本更新解耦：清单放在仓库固定路径，主进程启动后自动验签 + 静默应用。
+   这里只做状态展示、手动检查与回滚；补丁只覆盖 app.asar.unpacked 下的真实文件。 */
+const hp = reactive({ busy: false, status: '', applied: [], lastCheck: '', lastError: '', healthy: null, enabled: true });
+async function hpRefresh(reset = false) {
+  if (!bridge || !bridge.hotpatch) { hp.enabled = false; return; }
+  try {
+    const s = await bridge.hotpatch.status();
+    hp.applied = Array.isArray(s.applied) ? s.applied : [];
+    hp.lastCheck = s.lastCheck || '';
+    hp.lastError = s.lastError || '';
+    hp.healthy = s.healthy;
+    hp.enabled = s.enabled !== false;
+    if (reset || !hp.status) hp.status = hp.applied.length ? t('已应用热补丁') : t('尚未应用热补丁');
+  } catch (e) { if (reset || !hp.status) hp.status = t('读取热补丁状态失败'); }
+}
+async function hpCheck() {
+  if (!bridge || !bridge.hotpatch) { hp.status = t('当前环境不支持热补丁'); return; }
+  hp.busy = true; hp.status = t('正在检查热补丁…');
+  try {
+    const r = await bridge.hotpatch.check();
+    hp.status = r && r.ok
+      ? ({ applied: t('已应用热补丁'), replayed: t('已重新应用热补丁'), 'up-to-date': t('热补丁已是最新'), disabled: t('热补丁已关闭'), none: t('暂无可用热补丁') }[r.status] || t('热补丁检查完成'))
+      : (r && r.error) || t('热补丁检查失败');
+  } catch (e) { hp.status = t('热补丁检查失败'); }
+  finally { hp.busy = false; await hpRefresh(); }
+}
+async function hpRollback() {
+  if (!bridge || !bridge.hotpatch) return;
+  hp.busy = true; hp.status = t('正在回滚热补丁…');
+  try {
+    const r = await bridge.hotpatch.rollback();
+    hp.status = r && r.ok ? t('已回滚热补丁') : ((r && r.error) || t('回滚热补丁失败'));
+  } catch (e) { hp.status = t('回滚热补丁失败'); }
+  finally { hp.busy = false; await hpRefresh(); }
+}
+let hpOff = null;
+onMounted(() => {
+  void hpRefresh(true);
+  if (bridge && bridge.hotpatch && bridge.hotpatch.onChanged) hpOff = bridge.hotpatch.onChanged(() => { void hpRefresh(true); });
+});
+onBeforeUnmount(() => { try { hpOff && hpOff(); } catch (e) {} });
+
 /* ---------------- 更新 ---------------- */
 // 简化更新：只显示当前版本号 + 检查更新。检查到新版本 → 弹窗询问是否更新。
 async function updLaunch() {
@@ -1709,6 +1752,25 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
             <!-- 走到「失败」或「已启动更新器」都显示重试：更新器窗口内的实际失败应用无法感知，
                  只要更新未让应用重启成功（成功会重启到新版本，此态自然消失），即可点重试重新发起 -->
             <button v-if="upd.failed || upd.launched" class="btn sm primary" @click="updLaunch"><Icon name="redo" :size="13" /> {{ t('重试') }}</button>
+          </div>
+
+          <!-- 热补丁：小文件覆盖，不发版、不改版本号 -->
+          <div class="field-row" style="margin-top:18px;border-top:1px solid var(--hairline);padding-top:14px">
+            <div>
+              <div class="fr-label">{{ t('热补丁') }}</div>
+              <div class="fr-hint">{{ t('用于少量可直接覆盖的引擎文件改动：启动时自动验签并静默应用，无需下载完整安装包，也不改变版本号。') }}</div>
+              <div class="fr-hint" v-if="hp.applied.length">{{ t('已应用补丁：') }}{{ hp.applied[hp.applied.length - 1].id }}</div>
+              <div class="fr-hint" v-if="hp.lastCheck">{{ t('上次检查：') }}{{ hp.lastCheck }}</div>
+              <div class="fr-hint" v-if="hp.lastError">{{ t('补丁检查失败：') }}{{ hp.lastError }}</div>
+              <div class="fr-hint" v-if="hp.healthy === false">{{ t('补丁文件可能被完整更新覆盖，下次启动会自动重新应用。') }}</div>
+            </div>
+            <div class="fr-ctl">
+              <button class="btn sm" :disabled="hp.busy" @click="hpCheck">{{ t('检查补丁') }}</button>
+              <button class="btn sm" style="margin-left:var(--sp-2)" :disabled="hp.busy || !hp.applied.length" @click="hpRollback">{{ t('回滚补丁') }}</button>
+            </div>
+          </div>
+          <div style="display:flex;gap:var(--sp-2);margin-top:8px;flex-wrap:wrap;align-items:center">
+            <span style="font-size:var(--fs-sm);color:var(--stone)">{{ hp.status }}</span>
           </div>
 
           <div class="field-row" style="margin-top:18px;border-top:1px solid var(--hairline);padding-top:14px">
