@@ -20,7 +20,7 @@ fufumidi-update/v1
 ## 发布流程（在 build 之后、上传之前）
 
 ```powershell
-# 1) 签名（私钥默认 E:\Midi\_attic\update-signing\ed25519-private.pem，可用 --key / FUFUMIDI_UPDATE_KEY 指定）
+# 1) 签名（私钥默认 E:\ed25519-private.pem，可用 --key / FUFUMIDI_UPDATE_KEY 指定）
 node scripts/sign-update.mjs `
   --exe "release/update/FuFumidi.Install.6.0.0.exe" `
   --version 6.0.0 --name FuFumidi.Install.exe `
@@ -29,8 +29,8 @@ node scripts/sign-update.mjs `
 # 2) 归档（archive-release 会把 update-manifest.json 一起复制并进 SHA256SUMS）
 node scripts/archive-release.mjs 6.0.0
 
-# 3) 上传：把 update-manifest.json 与安装包一起传（stable → latest；beta → beta tag）
-node scripts/fast-upload.mjs --channel gh ... --asset "release/update-manifest.json=update-manifest.json"
+# 3) 上传：八个资产一起发（stable → latest；beta → beta tag）。
+#    现行流程用 scripts/publish-<ver>-{cnb,github}.js，完整步骤见 docs/RELEASE.md。
 ```
 
 ## 验签（应用内，自动）
@@ -47,7 +47,8 @@ node scripts/fast-upload.mjs --channel gh ... --asset "release/update-manifest.j
 
 ## 密钥管理
 
-- 私钥：`E:\Midi\_attic\update-signing\ed25519-private.pem`（构建机本地；**绝不入库**，备份丢失则无法再签同一版本，但可以轮换）。
+- 私钥：`E:\ed25519-private.pem`（构建机本地；**绝不入库**，备份丢失则无法再签同一版本，但可以轮换）。
+  热补丁复用同一把密钥，签名串是 `fufumidi-hotpatch/v1`，见 [`HOTPATCH.md`](HOTPATCH.md)。
 - 公钥：`main/update_sign.js` 里的 `UPDATE_PUBKEY`（SPKI DER base64）。
 - 轮换：生成新密钥对 → 更新内嵌公钥 → 发版一次（老版本只认老公钥，所以旧版用户升级到新版后才会用新公钥）。
 - 测试：`npm run test:update-sign`（临时密钥对全路径：正常/篡改/错 key/坏清单）。

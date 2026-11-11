@@ -37,6 +37,7 @@ What's new in 6.3.1: note audition, multi-note dragging and grid snap, preserved
 - Five primary areas (Home / Music / Workspace / Create / Resources), hash-routed sub-tabs, four interface languages, 12 built-in themes, custom accent and image themes, `Ctrl+K` command palette, 6-chapter onboarding guide, and a unified static + motion wallpaper library.
 - Plugin sandbox that runs third-party code inside its own worker.
 - Integrity check and one-click repair for the bundled runtime.
+- Signed hot-patch channel (from 6.5.0): engine-only fixes ship as a small signed package that is verified and applied at startup - no new installer, no version bump. See [docs/HOTPATCH.md](docs/HOTPATCH.md).
 - Optional native Rust core (`rust-core/`) accelerates batch, CPU-heavy library operations.
 - GPU acceleration options for CUDA and DirectML, with a graceful fallback to CPU.
 
@@ -244,7 +245,8 @@ FuFumidi/
   build/                  Icon, kachina config, installer artwork
   scripts/                Build and verification scripts
   .github/workflows/      CI pipelines
-  docs/                   Language-specific README assets (EN.png, CN.png)
+  docs/                   Design, testing, download, release and hot-patch documentation
+  patches/                Signed hot-patch manifest + package served from the repo (when present)
 ```
 
 ---
@@ -383,6 +385,19 @@ cross-platform verification paths, not release jobs.
 
 Coding conventions are documented in `.github/CODING_GUIDELINES.md`; repository hygiene findings
 and their dispositions in `docs/HYGIENE.md`.
+
+
+## Documentation
+
+| Topic | Document |
+| --- | --- |
+| Hot patches (small engine fixes without a release) | [docs/HOTPATCH.md](docs/HOTPATCH.md) |
+| Full release checklist (build → assets → publish → verify) | [docs/RELEASE.md](docs/RELEASE.md) |
+| Downloads, mirrors and the unified task layer | [docs/DOWNLOADS.md](docs/DOWNLOADS.md) |
+| Update signing (Ed25519 manifest) | [docs/UPDATE-SIGNING.md](docs/UPDATE-SIGNING.md) |
+| Testing (unit, VM matrix, acceptance) | [docs/TESTING.md](docs/TESTING.md) |
+| Known issues and their root causes | [docs/known-issues.md](docs/known-issues.md) |
+| Vendored binaries and licences | [docs/VENDOR.md](docs/VENDOR.md), [docs/licenses.md](docs/licenses.md) |
 
 
 ## Acknowledgements
