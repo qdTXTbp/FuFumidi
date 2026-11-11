@@ -25,12 +25,14 @@ const PATCH_REPO_CNB = 'FuFuCloud-mirror/FuFuMIDI';
 const PATCH_REPO_GH = 'qdTXTbp/FuFumidi';
 const PATCH_DIR = 'patches';
 const MANIFEST_NAME = 'hotpatch.json';
+// ★ 两个远端的默认分支都是 master（git ls-remote --symref 实测）。写 main 会永远 404。
+const PATCH_BRANCH = 'master';
 
 /** 仓库固定地址的候选源（按「设置 → 下载源」排序，另一端留作回落） */
 function urlsFor(name, source) {
   const p = PATCH_DIR + '/' + name;
-  const cnb = DS.cnbRepoRawUrl(PATCH_REPO_CNB, 'main', p);
-  const raw = 'https://raw.githubusercontent.com/' + PATCH_REPO_GH + '/main/' + p;
+  const cnb = DS.cnbRepoRawUrl(PATCH_REPO_CNB, PATCH_BRANCH, p);
+  const raw = 'https://raw.githubusercontent.com/' + PATCH_REPO_GH + '/' + PATCH_BRANCH + '/' + p;
   const gh = ['https://ghfast.top/' + raw, raw];
   return DS.orderUrls(cnb, gh, source === undefined ? DS.currentSource() : source);
 }
@@ -157,6 +159,7 @@ function rollback(stateRoot, targetRoot) {
 
 async function fetchJson(net, urls) {
   let notFound = 0;
+  let errors = 0;
   for (const url of urls) {
     try {
       const ctrl = new AbortController();
@@ -167,15 +170,15 @@ async function fetchJson(net, urls) {
       } finally { clearTimeout(to); }
       if (!r.ok) {
         if (r.status === 404) notFound++;
+        else errors++;
         continue;
       }
       const text = await r.text();
-      if (!text || text.length > 256 * 1024) continue;
-      return { manifest: JSON.parse(text), notFound: false };
-    } catch (_) { /* 换下一个源 */ }
+      if (!text || text.length > 256 * 1024) { errors++; continue; }
+      return { manifest: JSON.parse(text), notFound: 0, errors: 0 };
+    } catch (_) { errors++; /* 换下一个源 */ }
   }
-  // 所有源都 404 = 仓库还没发布任何补丁，属于正常状态，不该每天记一条错误
-  return { manifest: null, notFound: notFound > 0 && notFound === urls.length };
+  return { manifest: null, notFound, errors };
 }
 
 let _queue = Promise.resolve();
@@ -204,9 +207,13 @@ function check(ctx) {
     const fetched = await fetchJson(net, urlsFor(MANIFEST_NAME, source));
     const manifest = fetched.manifest;
     if (!manifest) {
-      return finish(fetched.notFound
-        ? { ok: true, status: 'none' }
-        : { ok: false, status: 'unreachable', error: '所有补丁源都不可用' });
+      // 只要有一个源明确回 404，就说明「仓库还没放补丁」是事实，不是网络故障；
+      // 用户网络里 raw.githubusercontent 常被墙，不能因此每天报一条错误。
+      if (fetched.notFound > 0) {
+        if (fetched.errors) log('INFO', '补丁源：' + fetched.notFound + ' 个 404（无补丁），' + fetched.errors + ' 个不可用');
+        return finish({ ok: true, status: 'none' });
+      }
+      return finish({ ok: false, status: 'unreachable', error: '所有补丁源都不可用（' + fetched.errors + ' 个源失败）' });
     }
     // publicKeyB64 仅用于测试注入临时密钥；生产不传 → 用 update_sign.js 内嵌公钥。
     const v = HM.verifyHotpatch(manifest, { currentVersion: appVersion, publicKeyB64: ctx.publicKeyB64 });

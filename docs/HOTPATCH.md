@@ -25,8 +25,8 @@
 固定地址（客户端按「设置 → 下载源」排序，另一端留作回落）：
 
 ```
-CNB    https://cnb.cool/FuFuCloud-mirror/FuFuMIDI/-/git/raw/main/patches/hotpatch.json
-GitHub https://raw.githubusercontent.com/qdTXTbp/FuFumidi/main/patches/hotpatch.json
+CNB    https://cnb.cool/FuFuCloud-mirror/FuFuMIDI/-/git/raw/master/patches/hotpatch.json
+GitHub https://raw.githubusercontent.com/qdTXTbp/FuFumidi/master/patches/hotpatch.json
        （另有 ghfast.top 加速前缀）
 ```
 
@@ -66,7 +66,7 @@ node scripts/build-hotpatch.mjs \
 源文件会自动映射：`engine/x.py` → `resources/app.asar.unpacked/engine/x.py`；
 不确定时用 `--map "目标相对路径=源路径"` 显式指定（可重复）。
 
-产物 `hotpatch.json`、`hotpatch-<id>.zip`、`README.txt` 一起 push 到两个仓库的 `main` 分支 `patches/` 目录。
+产物 `hotpatch.json`、`hotpatch-<id>.zip`、`README.txt` 一起 push 到两个仓库的 `master` 分支 `patches/` 目录。
 **不需要 tag、不需要 release、不需要改 package.json 版本号。** 两个仓库内容保持一致即可，客户端会多源回退。
 
 改了新文件就重新生成、改一个新的 `id`（递增即可）。`id` 是幂等键：相同 id 且目标文件哈希一致时不会重复写盘。

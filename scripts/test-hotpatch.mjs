@@ -229,6 +229,20 @@ test('check：签名不对 / 源不可用 / 版本不匹配都安全跳过，不
   }));
   assert.equal(none.status, 'none');
   assert.equal(none.ok, true);
+
+  // 现实网络：raw.githubusercontent 被墙 + 另一个源明确 404 → 仍然是「无补丁」，不是「全部不可用」
+  let mixedN = 0;
+  const mixed = await HP.check(ctxFor(f, root, {
+    net: {
+      fetch: async () => {
+        mixedN++;
+        if (mixedN === 1) return { ok: false, status: 404 };
+        throw new Error('blocked');
+      },
+    },
+  }));
+  assert.equal(mixed.status, 'none');
+  assert.equal(mixed.ok, true);
   assert.equal(HP.readState(ctxFor(f, root).stateRoot).lastError, '');
 });
 
@@ -239,6 +253,8 @@ test('urlsFor 按下载源偏好排序，两端都在候选里', () => {
   assert.ok(gh[0].includes('ghfast.top') || gh[0].includes('raw.githubusercontent.com'));
   assert.ok(cnb.some((u) => u.includes('raw.githubusercontent.com')));
   assert.ok(gh.some((u) => u.includes('cnb.cool')));
+  // 两个远端的默认分支都是 master（git ls-remote --symref 实测）；写 main 会永远 404
+  for (const u of [...cnb, ...gh]) assert.ok(u.includes('/master/'), '分支必须是 master：' + u);
 });
 
 /* ---------------- 构建工具端到端 ---------------- */
