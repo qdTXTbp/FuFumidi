@@ -94,7 +94,8 @@ python -m pytest tests/ -q --cov=. --cov-report=term-missing
 | `test_engine_pt_guard.py` | `engine_pt._sane_min_note_ms` 碎音护栏：最短音符 <30ms 时抬到 30ms 并说明原因（实测 10ms 等于关掉过滤器：30 秒样例 71→8037 个音符、3 分钟样例 47967 个 / 517 秒），正常值原样透传、缺省用 60ms 不报警、日志回调抛异常也不影响转录 |
 | `test_engine_pt_pause.py` | `engine_pt._chunked_forward`（替换 pytorch_utils.forward 的逐批循环）：分批结果与一次大批量逐元素相等、闸门在批次之间被检查、暂停后从原处继续不重算、慢机器按实测耗时把后面的批减半、快机器不受影响 |
 | `test_engine_basic_pause.py` | `engine_basic._install_audio_input_gate`（包 basic_pitch 的取窗生成器）：只挂一次不叠加、无标记文件透传、暂停卡在窗与窗之间后接着跑、包装器不捕获 log_cb |
-| `test_muscriptor_canonical_call.py` | ★ 契约：MuScriptor 必须按官方用法调用 —— `transcribe()` **不许带自定义生成参数**（只允许官方默认 `prelude_forcing` 与官方选项 `instruments`）、必须走官方节拍网格（`detect_beat_grid_for(..., "best-effort")` 并把网格交给写出函数）、音频原样交给官方、网格不可用时降级不崩（并上报 `LAST_BEAT_GRID`） |
+| `test_muscriptor_canonical_call.py` | ★ 契约：MuScriptor 必须按官方用法调用 —— `transcribe()` **不许带自定义生成参数**（只允许官方默认 `prelude_forcing` 与官方选项 `instruments`）、必须走官方节拍网格（`detect_beat_grid_for(..., "best-effort")` 并把网格交给写出函数）、不许自己重采样/改位深、网格不可用时降级不崩（并上报 `LAST_BEAT_GRID`） |
+| `test_muscriptor_lead_in.py` | ★ 边界对齐修正（对照 DamRsn/muscriptor.cpp 的 `Transcriber`）：默认前补 0.2s 静音、事件时间整体回移；网格与预分析仍用原音频；`add_lead_in` 只补静音不改样本/采样率/位深；`FUFUMIDI_MS_LEADIN=0` 可关、生成失败降级、临时文件必清 |
 | `test_muscriptor_official_stream.py` | 官方事件流与参数契约：`ProgressEvent(completed,total)` 必须转成 `###PROG`（`events_to_midi_bytes` 会把它丢掉），且事件本身不许被吃掉/改序；`prelude_forcing=True` 与 `instruments=` 只在本机 wheel 支持时传（旧 wheel 退回零 kwargs）；默认 `probe` 整曲锁定乐器组、探测失败降级；`muscriptor_decode='sample'` 才带 `use_sampling`+`temperature=0.9`，**默认 greedy 零额外 kwargs**、旧 wheel 忽略采样档 |
 | `test_engine_auto_bpm.py` | `engine._apply_auto_bpm`：改写 set_tempo 时必须同步缩放**绝对 tick**（只改 BPM 会让时间轴和音频对不上），含 0 音符 / 无 tempo / 非法 BPM 边界 |
 | `test_singing_adapters.py` | `singing` 抽象层对照（M1）：UTAU 适配器输出与直接调用 `render_track` 逐位一致、音素化器字段取自 oto.ini 原值、注册表解析/未知报错/未接渲染器抛 NotImplementedError、DiffSinger 音素化有真实声库才跑（没有就跳过，不假装通过） |

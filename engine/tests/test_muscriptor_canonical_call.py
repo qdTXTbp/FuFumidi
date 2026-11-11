@@ -17,7 +17,10 @@
      一律默认）；只允许官方默认 prelude_forcing 与官方选项 instruments，见
      test_muscriptor_official_stream.py
   2) 必须用官方节拍网格（`detect_beat_grid_for(..., "best-effort")`）并把网格交给写出函数
-  3) 音频输入必须原样交给官方（不做重采样/预处理）
+  3) 音频输入不许被我们重采样/下混/改位深（官方 load_audio 的 julius sinc 是
+     训练分布的一部分，6.4.6 踩过坑）。★ 2026-11-11 起唯一的例外是「边界对齐
+     修正」：前补 0.2s 静音并在事件流上回移时间，见 test_muscriptor_lead_in.py；
+     它不改重采样路径，可用 FUFUMIDI_MS_LEADIN=0 关闭。
 """
 import os
 import sys
@@ -144,7 +147,12 @@ def test_grid_failure_degrades_instead_of_crashing(fake, tmp_path, monkeypatch):
 
 
 def test_audio_is_handed_over_untouched(fake, tmp_path, monkeypatch):
-    """音频不能被我们重采样：官方 load_audio 内部统一转 16k，自己转会绕开它的 sinc 重采样。"""
+    """音频不能被我们重采样：官方 load_audio 内部统一转 16k，自己转会绕开它的 sinc 重采样。
+
+    fixture 里的假 flac 是不可读文件，因此 lead-in 生成失败并降级回原路径 ——
+    这正是「辅助修正绝不能拖垮转录」的保证。真实可解码文件会走 lead-in，
+    由 test_muscriptor_lead_in.py 单独覆盖。
+    """
     M, calls, _grid, audio = fake
     seen = []
     import audio_io

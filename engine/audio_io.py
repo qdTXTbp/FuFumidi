@@ -221,6 +221,44 @@ def prepare_for_muscriptor(src):
     return _ffmpeg_wav_keep_shape(src), True
 
 
+def add_lead_in(src, seconds=0.2):
+    """在信号前补一段静音，返回 (临时 wav 路径, 实际补的秒数)；失败返回 (None, 0.0)。
+
+    ★ 边界对齐修正，来自 DamRsn/muscriptor.cpp 的 `Transcriber`（NeuralNote v2 的
+      C++/ggml 引擎）：官方 Python 实现把「chunk 开头已经在响的声音」当成需要续的
+      tie prologue，drum hit 不发出，于是块首的鼓被整段吞掉；补一段静音并把所有
+      上报时间减掉它，可让每个 5 秒块的开头落在静音上。
+      2026-11-11 实测（NightTheater 前 30s，medium/CPU）：空鼓块 2→0、
+      鼓 236→331、耗时不增，且仍是贪心解码（结果可复现）。
+
+    实现约束（6.4.6 踩过的坑）：**绝不重采样/下混/改位深** —— subtype 跟随源文件，
+    逐块流式复制，内存恒定；重采样仍由官方 load_audio 的 julius sinc 完成。
+    失败一律返回 None 让调用方退回原路径，绝不能拖垮转录。
+    """
+    out = None
+    try:
+        import numpy as np
+        import soundfile as sf
+        info = sf.info(str(src))
+        if info.frames <= 0 or info.samplerate <= 0:
+            return None, 0.0
+        pad_frames = int(round(seconds * info.samplerate))
+        if pad_frames <= 0:
+            return None, 0.0
+        fd, out = tempfile.mkstemp(prefix=TEMP_PREFIX, suffix=".wav")
+        os.close(fd)
+        with sf.SoundFile(str(src)) as inf, sf.SoundFile(
+                out, mode="w", samplerate=info.samplerate,
+                channels=info.channels, subtype=info.subtype or "FLOAT") as of:
+            of.write(np.zeros((pad_frames, info.channels), dtype="float32"))
+            for block in inf.blocks(blocksize=65536, dtype="float32"):
+                of.write(block)
+        return out, float(pad_frames) / float(info.samplerate)
+    except Exception:  # noqa: BLE001
+        _try_remove(out)
+        return None, 0.0
+
+
 def load_audio_float32(src, sr):
     """读取任意格式音频为 float32 单声道数组（重采样到 sr）。
 

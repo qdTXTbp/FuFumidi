@@ -175,7 +175,13 @@ def _wire(monkeypatch, tmp_path):
 
 def test_engine_hands_original_file_to_model(monkeypatch, tmp_path):
     """48k 立体声原文件 → 引擎必须把**原始路径**交给官方 transcribe（零 kwargs），
-    且绝不把用户原文件当临时文件删掉。"""
+    且绝不把用户原文件当临时文件删掉。
+
+    本文件锁的是「谁做重采样」这一条，故用 FUFUMIDI_MS_LEADIN=0 隔离掉
+    2026-11-11 新增的边界对齐修正（它会另生成一份带 0.2s 静音的输入，
+    由 test_muscriptor_lead_in.py 单独覆盖）。
+    """
+    monkeypatch.setenv("FUFUMIDI_MS_LEADIN", "0")
     M, removed = _wire(monkeypatch, tmp_path)
     src = _write_pcm_wav(tmp_path / "real48.wav", sr=48000, channels=2)
     logs = []
@@ -189,7 +195,9 @@ def test_engine_hands_original_file_to_model(monkeypatch, tmp_path):
 
 
 def test_engine_cleans_temp_only_for_converted_audio(monkeypatch, tmp_path):
-    """ffmpeg 转码产物（is_temp=True）→ 推理完必须清掉临时文件。"""
+    """ffmpeg 转码产物（is_temp=True）→ 推理完必须清掉临时文件。
+    同样隔离 lead-in，只验证转码产物这一条。"""
+    monkeypatch.setenv("FUFUMIDI_MS_LEADIN", "0")
     M, removed = _wire(monkeypatch, tmp_path)
     bad = tmp_path / "weird.bin"
     bad.write_bytes(b"junk")

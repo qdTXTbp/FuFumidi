@@ -237,6 +237,31 @@ def _progress_stream(events, log_cb):
         yield ev
 
 
+# 边界对齐修正（默认开启）：见 audio_io.add_lead_in 的注释与 2026-11-11 的 A/B。
+# 与 DamRsn/muscriptor.cpp 的 Transcriber 保持同一个数值，便于两边结果对照。
+LEAD_IN_SEC = 0.2
+
+
+def _shift_events(events, offset):
+    """补了前置静音后，把事件时间整体回移 offset 秒，还原到原曲时间轴。
+
+    ★ 只改时间字段，绝不改事件的数量、顺序或类型：ProgressEvent 没有时间字段，
+      原样下传；NoteEndEvent.start_event 与它对应的 NoteStartEvent 是同一个对象，
+      改一次即可。offset=0 时是纯透传（旧 wheel / 降级路径零开销）。
+    """
+    if not offset:
+        yield from events
+        return
+    for ev in events:
+        t = getattr(ev, "start_time", None)
+        if isinstance(t, (int, float)):
+            ev.start_time = max(0.0, float(t) - offset)
+        e = getattr(ev, "end_time", None)
+        if isinstance(e, (int, float)):
+            ev.end_time = max(0.0, float(e) - offset)
+        yield ev
+
+
 def _valid_instruments(groups):
     """用官方词表过滤名字，避免上游 ValueError 把整次转录炸掉。"""
     try:
@@ -338,8 +363,12 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                           num_threads=None, **kwargs):
     """官方用法：一次 load_model + 一次 transcribe，参数一律用上游默认值。
 
-    与 `TranscriptionModel.transcribe_to_midi()` 完全等价 —— 唯一的区别是事件流过了
-    暂停闸门（只延迟、不改事件），所以界面上「暂停 / 继续」在块与块之间仍然生效。
+    与 `TranscriptionModel.transcribe_to_midi()` 等价，外加三处**不改变模型行为**的包装：
+      · 暂停闸门（只延迟事件流出，不改事件）
+      · ProgressEvent → ###PROG（官方写出函数会丢掉它，不改事件）
+      · 边界对齐修正 lead-in（输入音频前补 0.2s 静音，输出事件时间回移 0.2s）
+    第三项来自 DamRsn/muscriptor.cpp，官方 Python 版没有；设 FUFUMIDI_MS_LEADIN=0
+    可关闭。详见 audio_io.add_lead_in 与 engine/tests/test_muscriptor_lead_in.py。
     """
     _pause_gate_mod.install(log_cb)   # 本次转录的暂停闸门（见 pause_gate 模块）
     _require_package()                # 包缺失先给明确报错，再导入
@@ -359,12 +388,21 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
     _log(log_cb, "设备：%s" % ("GPU（%s）" % _dev if _dev != "cpu" else "CPU（较慢）"))
 
     # 官方能直读的文件一律原样交给 libsndfile（保持原采样率/声道，由官方重采样）；
-    # 只有官方读不了的容器才由内置解码转一份保形状的 WAV。正常文件这里零改动。
+    # 只有官方读不了的容器才由内置解码转一份保形状的 WAV。
     import audio_io
     wav, is_temp = audio_io.prepare_for_muscriptor(audio_path)
-    _log(log_cb, "音频输入：%s"
-         % ("原始文件直读（重采样交给官方）" if not is_temp
-            else "ffmpeg 转码（保留原始采样率/声道数，重采样交给官方）"))
+    base_log = ("原始文件直读（重采样交给官方）" if not is_temp
+                else "ffmpeg 转码（保留原始采样率/声道数，重采样交给官方）")
+    # ★ 边界对齐修正（默认开启）：只补静音，不重采样/下混/改位深。
+    #   节拍网格仍用原音频算（时间基准与原曲一致），预分析窗口也用原路径 ——
+    #   0.2s 偏移对「有哪些乐器」没有影响。失败/被环境变量关闭时自动退回原路径。
+    lead_path, lead_sec = None, 0.0
+    if os.environ.get("FUFUMIDI_MS_LEADIN", "1") != "0":
+        lead_path, lead_sec = audio_io.add_lead_in(wav, LEAD_IN_SEC)
+    transcribe_audio = lead_path or wav
+    _log(log_cb, "音频输入：%s%s" % (
+        base_log,
+        (" + 边界对齐修正（前补 %.2fs 静音，事件时间回移）" % lead_sec) if lead_sec else ""))
 
     t0 = time.perf_counter()
     data = None
@@ -372,13 +410,15 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
     while data is None:
         try:
             _log(log_cb, "推理中（多乐器转录）…")
-            # ★★ 官方调用，逐字对齐 Quickstart：
+            # ★★ 官方调用，逐字对齐 Quickstart（唯一例外是上面的 lead-in 输入修正）：
             #   detect_tempo="best-effort" → 节拍网格（把音符起点贴到网格上）
             #   transcribe() 只带「官方默认/官方选项」，不带任何自定义生成参数
+            # 网格与预分析用原音频（时间基准不变），只有主转录用带静音的输入。
             beat_grid = _detect_grid(model, wav, log_cb)
             kw = _transcribe_kwargs(model, wav, params, log_cb)
-            raw_events = _pause_gate_mod.gate_stream(model.transcribe(wav, **kw))
-            events = _progress_stream(raw_events, log_cb)
+            raw_events = _pause_gate_mod.gate_stream(
+                model.transcribe(transcribe_audio, **kw))
+            events = _shift_events(_progress_stream(raw_events, log_cb), lead_sec)
             data = model.events_to_midi_bytes(events, beat_grid=beat_grid)
             if _midi_note_count_bytes(data) == 0:
                 raise RuntimeError(
@@ -405,7 +445,15 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
                 model = _load_model(size, "cpu", log_cb)
                 _dev = "cpu"
                 continue
+            # 失败路径也要清掉全曲大小的临时 wav（lead-in 副本可达几百 MB）。
+            # remove_temp 幂等且不抛错；真漏了还有 audio_io.sweep_stale_temp 兜底。
+            if lead_path:
+                audio_io.remove_temp(lead_path)
+            if is_temp:
+                audio_io.remove_temp(wav)
             raise
+    if lead_path:
+        audio_io.remove_temp(lead_path)
     if is_temp:
         try:
             audio_io.remove_temp(wav)
