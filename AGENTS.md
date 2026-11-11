@@ -1,6 +1,6 @@
 # AGENTS.md —— 在这个仓库里工作的第一步
 
-七份约定，按顺序读：
+八份约定，按顺序读：
 
 1. **[docs/FOUNDATION.md](docs/FOUNDATION.md)** —— 架构分层、依赖方向、契约（桥 / 引擎 JSON / 持久化 / i18n）、
    新文件落点、变更规则、**每次都要跑的门禁命令**。
@@ -11,6 +11,7 @@
 6. **[docs/DOWNLOADS.md](docs/DOWNLOADS.md)** —— **资源下载的唯一入口**：所有取文件字节的代码都走 `main/fast-download.js`，能力清单、实测数据、禁止写法、新增下载点的清单。
 7. **[docs/COVER-RVC.md](docs/COVER-RVC.md)** —— **翻唱工作流**（分离 → 变声 → 混音）：音色 = 用户导入的
    RVC 模型（`main/rvc.js`）；模型目录快照、导入三种形态、授权（CC-BY-NC-4.0）、`kind=rvc` 加速包。
+8. **[docs/HOTPATCH.md](docs/HOTPATCH.md)** —— **热补丁通道**：只改 `app.asar.unpacked` 下文件时，走固定 `patches/` 目录 + 签名清单，不发版、不 bump 版本。
 
 几条最容易忘的硬规则：
 
@@ -24,3 +25,4 @@
 - **lockfile 必须入库**（根 / `frontend/` / `cloud-sync/worker/`），CI 与发布构建一律 `npm ci`；
   改了 `package.json` 就顺手提交对应的 `package-lock.json`。
 - **空白与编码**：遵循根目录 `.editorconfig` 与 `.gitattributes`（仓库里存 LF，`.ps1` 在工作区是 CRLF 且必须带 BOM）。
+- **热补丁优先**：只改 `resources/app.asar.unpacked/engine/**` 或已 unpack 的 renderer 资源时，走热补丁通道，**不建 release、不 bump 版本号、不上传几百 MB 安装包**；改 `app.asar` 内代码（`main.js`、`main/*.js`、`preload.js`、`renderer/dist/assets/*.js`）、依赖或资源清单时才必须整包发版。完整规则、路径白名单、签名与发布命令见 [docs/HOTPATCH.md](docs/HOTPATCH.md)。
