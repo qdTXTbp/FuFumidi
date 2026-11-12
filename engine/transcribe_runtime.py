@@ -23,6 +23,7 @@ MIROS（通用）—— 在接入时各自写了一份「找目录 / 塞 sys.pat
         repo/ 或 amt/   上游源码 + 权重
 权重/运行时一律**不随安装包分发**，由 main/models.js 的统一安装通道下载。
 """
+import json
 import os
 import sys
 import time
@@ -513,6 +514,49 @@ def pause_points(iterable, every=1):
         if n % max(1, every) == 0:
             gate.wait()
         yield item
+
+
+def emit_progress(log_cb=None, completed=None, total=None, percent=None, label=None):
+    """发一条 `###PROG` 进度行 —— 转录进度的**唯一出口**。
+
+    协议（main/engine.js + 前端 ViewTranscribe 都认）：
+      · `{"completed":n,"total":m}` —— 分块引擎的分块进度（MuScriptor 原有形态）
+      · `{"percent":p,"label":"…"}` —— 阶段百分比；与 completed/total 同时给时
+        消费端 **percent 优先**（它是算好权重的总进度，不会被"阶段切换"拉回去）
+    两个都不给（payload 为空）时不打行。
+
+    log_cb 为空时回落到 `pause_gate.log_line`：那类包装器（模型 forward、
+    token 流）只装一次、拿不到当次 log_cb，否则进度会打到上一次的窗口上。
+    """
+    payload = {}
+    if completed is not None and total is not None:
+        try:
+            payload["completed"] = int(completed)
+            payload["total"] = int(total)
+        except (TypeError, ValueError):
+            pass
+    if percent is not None:
+        try:
+            payload["percent"] = round(float(percent), 1)
+        except (TypeError, ValueError):
+            pass
+    if label:
+        payload["label"] = str(label)
+    if not payload:
+        return False
+    line = "###PROG " + json.dumps(payload, ensure_ascii=False)
+    if log_cb:
+        try:
+            log_cb(line)
+            return True
+        except Exception:
+            pass
+    try:
+        import pause_gate
+        pause_gate.log_line(line)
+        return True
+    except Exception:
+        return False
 
 
 def decode(audio_path, sr):

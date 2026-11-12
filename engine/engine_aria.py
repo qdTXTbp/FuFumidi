@@ -86,6 +86,7 @@ def transcribe_aria(audio_path, output_midi, params=None, log_cb=None,
     # MP3（重命名容器/损坏头）会抛晦涩错误。与 muscriptor 引擎同款修复：统一先经
     # 内置 ffmpeg 预解码为标准 PCM WAV（16000 = Whisper 系模型原生采样率）再喂模型。
     from audio_io import decode_to_wav, remove_temp
+    _stage(log_cb, 3, "解码音频")
     wav = decode_to_wav(audio_path, 16000)
     try:
         cli = _aria_cli()
@@ -98,6 +99,7 @@ def transcribe_aria(audio_path, output_midi, params=None, log_cb=None,
         if device.startswith("cuda") and os.name != "nt":
             cmd.append("-compile")
         _log(log_cb, "运行 " + "aria-amt transcribe …")
+        _stage(log_cb, 20, "推理中")
         before = set(os.listdir(out_dir))
         # 设备为本机 GPU 不可用时，用环境变量强制子进程看不见显卡 ——
         # aria-amt 的 CLI 没有设备开关，这是唯一可靠的「只用 CPU」手段。
@@ -239,3 +241,16 @@ def _log(cb, msg):
             cb(msg)
         except Exception:
             pass
+
+
+def _stage(log_cb, percent, label):
+    """阶段进度（解码 / 推理 / 整理音符 / 写盘）。
+
+    这两个引擎（aria / transkun）是外部 CLI 一次性推理，上游没有分块回调，
+    只能给阶段点；长曲的平滑爬升由前端的时间估算兜底。
+    """
+    try:
+        import transcribe_runtime as _TR
+        _TR.emit_progress(log_cb, percent=percent, label=label)
+    except Exception:
+        pass

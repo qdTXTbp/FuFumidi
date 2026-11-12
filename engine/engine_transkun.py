@@ -52,6 +52,7 @@ def transcribe_transkun(audio_path, output_midi, params=None, log_cb=None,
     # （重命名容器/损坏头）会抛晦涩错误。与 muscriptor 引擎同款修复：统一先经
     # 内置 ffmpeg 预解码为标准 PCM WAV（16000 = 模型原生采样率）再喂 CLI。
     from audio_io import decode_to_wav, remove_temp
+    _stage(log_cb, 3, "解码音频")
     wav = decode_to_wav(audio_path, 16000)
     try:
         cmd = []
@@ -59,6 +60,7 @@ def transcribe_transkun(audio_path, output_midi, params=None, log_cb=None,
             cmd = ["transkun"]
         else:
             cmd = [sys.executable, "-m", "transkun.transcribe"]
+        _stage(log_cb, 20, "推理中")
         cmd += [wav, output_midi, "--device", device]
         if weight:
             cmd += ["--weight", weight]
@@ -73,6 +75,7 @@ def transcribe_transkun(audio_path, output_midi, params=None, log_cb=None,
     finally:
         remove_temp(wav)
 
+    _stage(log_cb, 92, "整理音符")
     n = _count_notes(output_midi)
     _log(log_cb, f"保存 MIDI → {os.path.basename(output_midi)}（{n} 音符）")
     return n
@@ -100,3 +103,16 @@ def _log(cb, msg):
             cb(msg)
         except Exception:
             pass
+
+
+def _stage(log_cb, percent, label):
+    """阶段进度（解码 / 推理 / 整理音符 / 写盘）。
+
+    这两个引擎（aria / transkun）是外部 CLI 一次性推理，上游没有分块回调，
+    只能给阶段点；长曲的平滑爬升由前端的时间估算兜底。
+    """
+    try:
+        import transcribe_runtime as _TR
+        _TR.emit_progress(log_cb, percent=percent, label=label)
+    except Exception:
+        pass

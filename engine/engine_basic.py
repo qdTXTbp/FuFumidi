@@ -169,6 +169,7 @@ def transcribe_basic(audio_path, output_midi,
     auto_bpm = bool(kwargs.get("auto_bpm", False))
 
     _log(log_cb, f"解码音频 → 22050Hz …")
+    _stage(log_cb, 3, "解码音频")
     wav = decode_to_wav(audio_path, 22050)
     try:
         # ★ 转录前音频链（2026-10-15 方案 A/B）：高通 → 降噪 → 电平统一。
@@ -187,6 +188,7 @@ def transcribe_basic(audio_path, output_midi,
                 _log(log_cb, f"智能预处理 · 检测到 BPM = {detected}")
                 midi_tempo = float(detected)
         _log(log_cb, f"推理识别中（basic-pitch 通用模型）…")
+        _stage(log_cb, 20, "推理中")
         _model = make_basic_model(num_threads)
 
         def _do_predict(path):
@@ -231,7 +233,9 @@ def transcribe_basic(audio_path, output_midi,
 
         out_dir = os.path.dirname(os.path.abspath(output_midi))
         os.makedirs(out_dir, exist_ok=True)
+        _stage(log_cb, 92, "整理音符")
         _log(log_cb, f"保存 MIDI → {os.path.basename(output_midi)}")
+        _stage(log_cb, 98, "写入 MIDI")
         midi_data.write(output_midi)
         return _count_notes(midi_data) or len(note_events)
     finally:
@@ -262,3 +266,16 @@ def _log(cb, msg):
             cb(msg)
         except Exception:
             pass
+
+
+def _stage(log_cb, percent, label):
+    """阶段进度（解码 / 推理 / 写盘）。
+
+    basic-pitch 是一次 predict 跑完整首、没有分块回调，所以只能给阶段点；
+    长曲的平滑爬升由前端的时间估算兜底（停滞 20s 后接管）。
+    """
+    try:
+        import transcribe_runtime as _TR
+        _TR.emit_progress(log_cb, percent=percent, label=label)
+    except Exception:
+        pass

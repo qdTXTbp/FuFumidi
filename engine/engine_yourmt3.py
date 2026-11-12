@@ -134,19 +134,35 @@ def _transcribe_yourmt3_inner(audio_path, output_midi, params=None, log_cb=None,
     tmp = None
     try:
         model = _load_model(rt, params.get("precision"))
+        TR.emit_progress(log_cb, percent=3, label="加载模型")
         tmp = audio_io.decode_to_wav(audio_path, 16000)
+        TR.emit_progress(log_cb, percent=14, label="解码音频")
         data, sr = sf.read(tmp, dtype="float32", always_2d=True)
         audio = torch.from_numpy(data.T).mean(0, keepdim=True)
         audio = _resample(audio, sr, model.audio_cfg["sample_rate"])
         segs = slice_padded_array(audio, model.audio_cfg["input_frames"], model.audio_cfg["input_frames"])
         segs = torch.from_numpy(segs.astype("float32")).to(device).unsqueeze(1)
+        n_items = int(segs.shape[0])
         if log_cb:
-            log_cb("YourMT3+：%d 个片段，开始推理" % segs.shape[0])
+            log_cb("YourMT3+：%d 个片段，开始推理" % n_items)
         t_inf = time.perf_counter()
-        pred, _ = model.inference_file(bsz=1, audio_segments=segs)
-        n_items = segs.shape[0]
+        # ★ 进度透传（2026-11-12）：原来 bsz=1 一次性把全部片段丢给 inference_file，
+        #   全程零回调 —— 任务中心停在起始值、结束时跳 100。改成逐段调用
+        #   （上游 bsz=1 时内部本来就是每段一批，**结果逐元素等价**），
+        #   每段打一条 ###PROG 并过暂停闸门。
+        pred = []
+        TR.emit_progress(log_cb, completed=0, total=n_items, label="推理中")
+        import pause_gate as _pg
+        for _i in range(n_items):
+            _chunk, _ = model.inference_file(bsz=1, audio_segments=segs[_i:_i + 1])
+            pred.extend(_chunk)
+            _done = _i + 1
+            TR.emit_progress(log_cb, completed=_done, total=n_items,
+                             percent=20 + 70.0 * _done / max(1, n_items), label="推理中")
+            _pg.wait()
         starts = [model.audio_cfg["input_frames"] * i / model.audio_cfg["sample_rate"]
                   for i in range(n_items)]
+        TR.emit_progress(log_cb, percent=90, label="整理音符")
         pred_notes = []
         for ch in range(model.task_manager.num_decoding_channels):
             arr_ch = [x[:, ch, :] for x in pred]
@@ -157,6 +173,7 @@ def _transcribe_yourmt3_inner(audio_path, output_midi, params=None, log_cb=None,
         mixed = mix_notes(pred_notes)
         outdir = os.path.dirname(os.path.abspath(output_midi)) or "."
         base = os.path.splitext(os.path.basename(output_midi))[0]
+        TR.emit_progress(log_cb, percent=98, label="写入 MIDI")
         write_model_output_as_midi(mixed, outdir + os.sep, base, model.midi_output_inverse_vocab)
         produced = os.path.join(outdir, "model_output", base + ".mid")
         if os.path.exists(produced):

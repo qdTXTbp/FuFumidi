@@ -19,7 +19,6 @@ MIROS = YourMT3+ 架构 + MusicFM 编码器。权重/运行时由资源中心下
 推理入口仍是上游 repo 里的 `transcribe.transcribe(audio, midi)` ——
 **不改上游逻辑**，只把外围（路径/线程/暂停/清理/校验）补齐。
 """
-import json
 import os
 import time
 
@@ -35,27 +34,13 @@ class _UpstreamShapeError(RuntimeError):
 def _emit_prog(log_cb, completed=None, total=None, percent=None, label=None):
     """打一条进度协议行。
 
-    主进程（main/engine.js）与前端（ViewTranscribe）都认两种形态：
-      · `###PROG {"completed":n,"total":m}` —— 分块引擎（MuScriptor / MIROS 推理阶段）
+    实现已收敛到 `transcribe_runtime.emit_progress`（各引擎共用一个出口）：
+      · `###PROG {"completed":n,"total":m}` —— 分块引擎的分块进度
       · `###PROG {"percent":p,"label":"…"}` —— 阶段百分比（加载模型 / 整理音符 等）
     必须**单独一行**且以 ###PROG 开头（worker 的日志转发会加缩进，对端会 trim）。
     """
-    if not log_cb:
-        return
-    payload = {}
-    if completed is not None and total is not None:
-        payload["completed"] = int(completed)
-        payload["total"] = int(total)
-    if percent is not None:
-        payload["percent"] = round(float(percent), 1)
-    if label:
-        payload["label"] = str(label)
-    if not payload:
-        return
-    try:
-        log_cb("###PROG " + json.dumps(payload, ensure_ascii=False))
-    except Exception:
-        pass
+    return TR.emit_progress(log_cb, completed=completed, total=total,
+                            percent=percent, label=label)
 
 
 def _pause_wait():

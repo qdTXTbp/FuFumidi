@@ -87,7 +87,7 @@ def _resolve_gate(gate):
         return None
 
 
-def _chunked_forward(forward_fn, model, x, cap, gate=None, budget_s=None, clock=None):
+def _chunked_forward(forward_fn, model, x, cap, gate=None, budget_s=None, clock=None, progress=None):
     """按 cap 分批前向，**批次之间**过暂停闸门（见 pause_gate 模块）。
 
     为什么要自己写这个循环：`piano_transcription_inference.pytorch_utils.forward` 就是
@@ -97,6 +97,9 @@ def _chunked_forward(forward_fn, model, x, cap, gate=None, budget_s=None, clock=
 
     budget_s：单批耗时目标（秒）。超过它 → 后面的批减半（慢机器，保暂停响应）；
     远低于它 → 批翻倍直到 cap（快机器，把速度还回来）。None = 不按耗时调整。
+
+    progress：`f(done, total)` —— 每批结束后回调（转录进度透传用，见 main/engine.js）。
+    钢琴链路此前完全没有进度：任务中心一直停在起始值、结束时跳 100。
 
     没有闸门（命令行 / 旧主进程）时行为与原来完全一样：一批 cap 段。
     """
@@ -123,6 +126,11 @@ def _chunked_forward(forward_fn, model, x, cap, gate=None, budget_s=None, clock=
         t0 = clock()
         outs.append(forward_fn(model, chunk, len(chunk)))
         pointer += len(chunk)
+        if progress is not None:
+            try:
+                progress(pointer, n)
+            except Exception:
+                pass
         if budget_s:
             dt = clock() - t0
             if dt > budget_s and len(chunk) > 1:
@@ -141,6 +149,32 @@ def _chunked_forward(forward_fn, model, x, cap, gate=None, budget_s=None, clock=
 def _set_quiet(quiet):
     global _QUIET
     _QUIET = quiet
+
+
+def _batch_progress(log_cb):
+    """分批前向的进度回调：推理阶段映射到总进度的 20→90%。
+
+    钢琴链路此前没有任何 ###PROG：任务中心停在起始值、结束时直接跳 100
+    （与 MIROS 同一个毛病）。阶段权重与 MIROS 保持一致，便于用户形成预期。
+    """
+    def _cb(done, total):
+        total = max(1, int(total or 0))
+        try:
+            import transcribe_runtime as _TR
+            _TR.emit_progress(log_cb, completed=done, total=total,
+                              percent=20 + 70.0 * done / total, label="推理中")
+        except Exception:
+            pass
+    return _cb
+
+
+def _emit(log_cb, percent, label):
+    """阶段百分比（解码 / 加载模型 / 推理 / 整理音符 / 写盘）。"""
+    try:
+        import transcribe_runtime as _TR
+        _TR.emit_progress(log_cb, percent=percent, label=label)
+    except Exception:
+        pass
 
 
 def available():
@@ -181,7 +215,7 @@ def _find_bundled_model():
 
 
 def _engine_init(onset_threshold=0.3, frame_threshold=0.1, num_threads=None, perf_mode="quality",
-                 segment_sec=0, memory_mode=None):
+                 segment_sec=0, memory_mode=None, log_cb=None):
     """初始化转录器(惰性, 只初始化一次)。
 
     设备自动选择：CUDA → CPU（见 engine_gpu）。piano_transcription_inference
@@ -224,7 +258,8 @@ def _engine_init(onset_threshold=0.3, frame_threshold=0.1, num_threads=None, per
                 pause_gate.log_line('[钢琴] 分批前向：共 %d 段，性能档上限 %d 段' % (len(x), cap))
                 # 上限按性能档；批次之间过暂停闸门（见 pause_gate），慢机器按实测耗时自适应缩小批
                 return _chunked_forward(_orig_forward, model, x, max(1, min(cap, len(x))),
-                                        budget_s=_PAUSE_BUDGET_S)
+                                        budget_s=_PAUSE_BUDGET_S,
+                                        progress=_batch_progress(log_cb))
             return _batched_forward
 
         _cap = _batch_cap(perf_mode, _device, memory_mode)
@@ -285,6 +320,7 @@ def transcribe_pt(audio_path, output_midi, onset_threshold=0.3, frame_threshold=
     min_note_ms = _sane_min_note_ms(min_note_ms, log_cb)
 
     _log(log_cb, "解码音频 → 16000Hz …")
+    _emit(log_cb, 3, "解码音频")
     # 1. 加载音频到引擎所需的 16kHz 单声道（任意格式）
     audio = load_audio_float32(audio_path, 16000)
 
@@ -301,14 +337,17 @@ def transcribe_pt(audio_path, output_midi, onset_threshold=0.3, frame_threshold=
     # 2. 初始化引擎（设备已规范化：DirectML/MPS 一律 CPU，见 _engine_init）
     from engine_gpu import detect as _gpu_detect
     _gpu = _gpu_detect()
+    _emit(log_cb, 10, "加载模型")
     engine = _engine_init(onset_threshold=onset_threshold,
                           frame_threshold=frame_threshold,
                           num_threads=num_threads,
                           perf_mode=kwargs.get("perf_mode", "quality"),
                           segment_sec=kwargs.get("segment_sec"),
-                          memory_mode=kwargs.get("memory_mode"))
+                          memory_mode=kwargs.get("memory_mode"),
+                          log_cb=log_cb)
     _dev = _DEVICE
     _log(log_cb, f"加载钢琴模型（{'GPU · ' + (_gpu.get('name') or _dev) if _dev == 'cuda' else 'CPU 多核'}）…")
+    _emit(log_cb, 20, "推理中")
 
     # 3. 转录(不写文件, 拿原始音符事件)
     _log(log_cb, "推理识别中（钢琴专用模型）…")
@@ -316,6 +355,7 @@ def transcribe_pt(audio_path, output_midi, onset_threshold=0.3, frame_threshold=
     with _redirect_stdout():
         # inference_mode + autocast 会让钢琴模型漏掉大量音符，改用普通推理
         result = engine.transcribe(audio, None)
+    _emit(log_cb, 92, "整理音符")
 
     # 4. 后处理: 合并同音高近邻短音符 + 过滤过短音符
     notes = clean_notes(result['est_note_events'], min_note_ms, merge_gap_ms)
@@ -323,6 +363,7 @@ def transcribe_pt(audio_path, output_midi, onset_threshold=0.3, frame_threshold=
 
     # 5. 写 MIDI
     from piano_transcription_inference.utilities import write_events_to_midi
+    _emit(log_cb, 98, "写入 MIDI")
     _log(log_cb, f"保存 MIDI → {os.path.basename(output_midi)}")
     with _redirect_stdout():
         write_events_to_midi(start_time=0, note_events=notes,

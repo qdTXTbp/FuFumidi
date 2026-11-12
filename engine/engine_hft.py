@@ -118,6 +118,7 @@ def transcribe_hft(audio_path, output_midi, params=None, log_cb=None, num_thread
     tmp_wav = None
     t_all = time.perf_counter()
     try:
+        TR.emit_progress(log_cb, percent=3, label="解码音频")
         tmp_wav = audio_io.decode_to_wav(audio_path, 16000)
         if log_cb:
             log_cb("hFT：音频解码完成（16 kHz 单声道）")
@@ -135,7 +136,9 @@ def transcribe_hft(audio_path, output_midi, params=None, log_cb=None, num_thread
         if log_cb:
             log_cb("hFT：特征 %s，开始推理" % (tuple(feat.shape),))
         t_inf = time.perf_counter()
+        TR.emit_progress(log_cb, percent=20, label="推理中")
         out = amt.transcript(feat, mode="combination")
+        TR.emit_progress(log_cb, percent=90, label="整理音符")
         _a_onset, _a_off, _a_mpe, _a_vel, o_onset, o_off, o_mpe, o_vel = out
         onset_th = float(params.get("onset_threshold", 0.5) or 0.5)
         frame_th = float(params.get("frame_threshold", 0.5) or 0.5)
@@ -151,6 +154,7 @@ def transcribe_hft(audio_path, output_midi, params=None, log_cb=None, num_thread
                 thred_onset=0.3, thred_offset=0.3, thred_mpe=0.3,
                 mode_velocity="ignore_zero", mode_offset="shorter",
             )
+        TR.emit_progress(log_cb, percent=98, label="写入 MIDI")
         amt.note2midi(notes, output_midi)
         n = len(notes)
         if log_cb:

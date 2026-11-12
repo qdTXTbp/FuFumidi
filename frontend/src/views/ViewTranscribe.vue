@@ -1624,17 +1624,18 @@ async function runBatch() {
     const cur = runItems.find((i) => i.status === 'running');
     let curP = 0;
     if (cur) {
-      // ★ 真实进度优先；没有真实进度时用「已用时间 / 预估耗时」爬升。
-      //   这里**每轮重新按时间算**（并与上一轮取 max 保证单调）：原来把估算值
-      //   写回 cur.progress 后，下一轮 `else if (cur.progress > 0)` 就先命中这个
-      //   死值，估算只生效一次 —— 表现就是不支持进度透传的引擎（MIROS）
-      //   一直停在 3%，任务结束时直接跳 100。
-      if (cur.realPct > 0) curP = Math.min(99, cur.realPct);
+      // ★ 真实进度优先；没有真实进度、或真实进度已停滞 ≥20s（整曲一次性推理的引擎，
+      //   如 Basic Pitch / Aria / TransKun / hFT 只有一个阶段点）→ 用「已用时间 / 预估耗时」
+      //   兜底爬升，与已有值取 max 保证单调，上限 92%（完成后由结果跳到 100）。
+      //   原来把估算值写回 cur.progress 后，下一轮 `else if (cur.progress > 0)` 就先命中
+      //   这个死值，估算只生效一次 —— 表现就是不支持进度透传的引擎一直停在 3%。
+      const _est = (cur.startedAt && cur.estMs)
+        ? Math.min(92, Math.round((Date.now() - cur.startedAt) / cur.estMs * 100)) : 0;
+      const _staleMs = cur._realPctAt ? (Date.now() - cur._realPctAt) : Infinity;
+      if (cur.realPct > 0 && _staleMs < 20000) curP = Math.min(99, cur.realPct);
       else if (cur.progress >= 100) curP = 100;
-      else if (cur.startedAt && cur.estMs) {
-        curP = Math.min(92, Math.round((Date.now() - cur.startedAt) / cur.estMs * 100));
-        if (cur.progress > 0) curP = Math.max(curP, Math.min(92, cur.progress));
-      } else if (cur.progress > 0) curP = cur.progress;
+      else curP = Math.max(cur.realPct > 0 ? Math.min(99, cur.realPct) : 0,
+                           _est, Math.min(92, cur.progress || 0));
       if (curP > 0 && curP < 100) cur.progress = curP;
       const elS = (Date.now() - (cur.startedAt || Date.now())) / 1000;
       const estS = ((cur.estMs || estSec() * 1000 || 60000)) / 1000;
@@ -1971,9 +1972,11 @@ onMounted(() => {
             if (d.percent != null) {
               const pp = Math.max(0, Math.min(99, Math.round(Number(d.percent) || 0)));
               if (pp > (it.realPct || 0)) it.realPct = pp;
+              it._realPctAt = Date.now();
             } else if (d.total > 0) {
               const pp = Math.min(99, Math.round(d.completed / d.total * 100));
               if (pp > (it.realPct || 0)) it.realPct = pp;
+              it._realPctAt = Date.now();
               const _now = Date.now();
               const _comp = Number(d.completed) || 0;
               if (it._etaLastAt && _comp > (it._etaLastCompleted || 0)) {
