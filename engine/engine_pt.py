@@ -372,6 +372,12 @@ def transcribe_pt(audio_path, output_midi, onset_threshold=0.3, frame_threshold=
     # 6. 转录完成：卸载模型（_ENGINE 为模块级全局缓存，需显式置空才能释放 GPU 显存）
     _release_pt_engine()
 
+    try:
+        import transcribe_runtime as _TR
+        _TR.release_memory(log_cb, "钢琴 ")
+    except Exception:
+        pass
+
     return len(notes)
 
 

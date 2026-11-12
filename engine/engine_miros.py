@@ -297,8 +297,8 @@ def _transcribe_miros_inner(audio_path, output_midi, params=None, log_cb=None, n
             raise
     finally:
         os.chdir(cwd)                   # ★ 一定要还原：否则后续队列的临时文件全落错地方
-        TR.release_gpu()
         TR.log_timing(log_cb, "MIROS 总计", t_all)
+        TR.release_memory(log_cb, "MIROS ")
 
     n = TR.count_notes(output_midi)
     if n == 0:

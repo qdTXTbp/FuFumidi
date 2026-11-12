@@ -23,10 +23,16 @@ MIROS（通用）—— 在接入时各自写了一份「找目录 / 塞 sys.pat
         repo/ 或 amt/   上游源码 + 权重
 权重/运行时一律**不随安装包分发**，由 main/models.js 的统一安装通道下载。
 """
+import ctypes
 import json
 import os
 import sys
 import time
+
+try:                       # wintypes 只在 Windows 存在；非 Windows 下相关代码不会被走到
+    from ctypes import wintypes
+except Exception:          # noqa: BLE001
+    wintypes = None
 
 #: 运行时目录在 models 根下的名字 → 引擎标签（日志与报错用）
 RUNTIME_LABELS = {
@@ -621,3 +627,179 @@ def release_gpu():
             torch.cuda.empty_cache()
     except Exception:
         pass
+
+
+# ---------------------------------------------------------------------------
+# 任务完成后释放内存 / 显存（用户 2026-11-12 要求）
+#
+# 为什么不能只调 gc.collect()：
+#   1) 模型/推理会话只要还有一个引用（模块级缓存、闭包），gc 就收不到；
+#   2) torch 的 CUDA 缓存分配器把释放的显存留在自己的池子里，别的进程照样申请不到；
+#   3) Windows 上 Python 释放的内存只回到进程堆，**工作集（Working Set）不会自己降** ——
+#      任务管理器里一直显示占着几个 G，系统可用内存也回不来。MIROS 长歌曲 OOM 的
+#      现场就是这样：跑完一首之后进程还挂着几个 G，下一首更难跑。
+# ---------------------------------------------------------------------------
+
+if wintypes is not None:
+    class _PMC(ctypes.Structure):
+        _fields_ = [
+            ("cb", wintypes.DWORD),
+            ("PageFaultCount", wintypes.DWORD),
+            ("PeakWorkingSetSize", ctypes.c_size_t),
+            ("WorkingSetSize", ctypes.c_size_t),
+            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+            ("PagefileUsage", ctypes.c_size_t),
+            ("PeakPagefileUsage", ctypes.c_size_t),
+        ]
+else:                       # 非 Windows：结构体不需要存在，函数会走 /proc 分支
+    _PMC = None
+
+
+def _win_k32():
+    """kernel32 + psapi 的句柄/函数声明。
+
+    ★ 必须显式声明 restype/argtypes：64 位进程里句柄是 8 字节，ctypes 默认按
+      C int（4 字节）返回——句柄被截断，GetProcessMemoryInfo 只会返回 0、
+      EmptyWorkingSet 永远 False（实测就是这个坑，日志里读不到任何内存数字）。
+    """
+    import ctypes
+    from ctypes import wintypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.GetCurrentProcess.restype = wintypes.HANDLE
+    psapi = ctypes.WinDLL("psapi", use_last_error=True)
+    return k32, psapi, wintypes
+
+
+def proc_mem_mb():
+    """本进程当前工作集 / RSS（MB）。取不到返回 None（只用于打日志）。"""
+    try:
+        if os.name == "nt":
+            import ctypes
+            k32, psapi, wintypes = _win_k32()
+            fn = getattr(psapi, "GetProcessMemoryInfo", None)
+            if fn is None:
+                fn = getattr(k32, "K32GetProcessMemoryInfo")
+            fn.argtypes = [wintypes.HANDLE, ctypes.POINTER(_PMC), wintypes.DWORD]
+            fn.restype = wintypes.BOOL
+            c = _PMC()
+            c.cb = ctypes.sizeof(_PMC)
+            if not fn(k32.GetCurrentProcess(), ctypes.byref(c), c.cb):
+                return None
+            return float(c.WorkingSetSize) / (1024.0 * 1024.0)
+        with open("/proc/self/statm", "r") as f:
+            pages = int(f.read().split()[1])
+        return pages * os.sysconf("SC_PAGE_SIZE") / (1024.0 * 1024.0)
+    except Exception:
+        return None
+
+
+def proc_vram_mb():
+    """本进程（torch）已占用的显存 MB；没有 CUDA 返回 None。"""
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return None
+        free_b, total_b = torch.cuda.mem_get_info()
+        return float(total_b - free_b) / (1024.0 * 1024.0)
+    except Exception:
+        return None
+
+
+def empty_working_set():
+    """Windows：把本进程已释放的页还给系统（等价任务管理器的「收缩工作集」）。
+
+    非 Windows / 调用失败都返回 False，绝不抛 —— 这只是锦上添花的一步。
+    """
+    if os.name != "nt":
+        return False
+    try:
+        k32, psapi, wintypes = _win_k32()
+        fn = getattr(psapi, "EmptyWorkingSet", None)
+        if fn is None:
+            fn = getattr(k32, "K32EmptyWorkingSet", None)
+        if fn is None:
+            return False
+        fn.argtypes = [wintypes.HANDLE]
+        fn.restype = wintypes.BOOL
+        return bool(fn(k32.GetCurrentProcess()))
+    except Exception:
+        return False
+
+
+def _drop_model_caches():
+    """丢掉引擎侧的模型/会话缓存（否则对象还被引用，gc 收不到）。
+
+    只处理**已经导入过**的模块（用 sys.modules 判断），避免为了释放而把
+    engine_pt / engine_perf 拉起来。
+    """
+    dropped = []
+    ep = sys.modules.get("engine_perf")
+    if ep is not None:
+        cache = getattr(ep, "_basic_model_cache", None)
+        if isinstance(cache, dict) and cache:
+            try:
+                cache.clear()
+                dropped.append("basic-pitch")
+            except Exception:
+                pass
+    pt = sys.modules.get("engine_pt")
+    if pt is not None and getattr(pt, "_ENGINE", None) is not None:
+        try:
+            pt._release_pt_engine()      # 自己会 gc + empty_cache
+            dropped.append("钢琴")
+        except Exception:
+            pass
+    return dropped
+
+
+def release_memory(log_cb=None, label="", drop_caches=True):
+    """任务完成后释放内存与显存；返回 (mem_before, mem_after, vram_before, vram_after)。
+
+    顺序不能反：先丢引用 → 再 gc → 再清 CUDA 池 → 最后收缩工作集。
+    任何一步失败都不影响其它步骤，也绝不抛异常（释放失败不能把任务判成失败）。
+    """
+    before = proc_mem_mb()
+    vram_before = proc_vram_mb() if drop_caches else None
+
+    dropped = _drop_model_caches() if drop_caches else []
+
+    try:
+        import gc
+        gc.collect()
+        gc.collect()          # 两轮：第一轮析构，第二轮收循环引用
+    except Exception:
+        pass
+
+    try:
+        import torch
+        if torch.cuda.is_available():
+            try:
+                torch.cuda.synchronize()
+            except Exception:
+                pass
+            torch.cuda.empty_cache()
+            try:
+                torch.cuda.ipc_collect()     # 释放跨进程共享显存句柄
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    empty_working_set()
+
+    after = proc_mem_mb()
+    vram_after = proc_vram_mb() if drop_caches else None
+    if log_cb and before is not None and after is not None:
+        try:
+            txt = "[内存] %s释放：内存 %.0f → %.0f MB" % (label or "", before, after)
+            if vram_before is not None and vram_after is not None:
+                txt += "，显存 %.0f → %.0f MB" % (vram_before, vram_after)
+            if dropped:
+                txt += "（已清模型缓存：%s）" % "、".join(dropped)
+            log_cb(txt)
+        except Exception:
+            pass
+    return (before, after, vram_before, vram_after)

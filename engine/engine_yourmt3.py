@@ -189,8 +189,8 @@ def _transcribe_yourmt3_inner(audio_path, output_midi, params=None, log_cb=None,
     finally:
         if tmp:
             TR.cleanup(tmp)
-        TR.release_gpu()
         TR.log_timing(log_cb, "YourMT3+ 总计", t_all)
+        TR.release_memory(log_cb, "YourMT3+ ")
 
 
 def _resample(audio, sr, target_sr):

@@ -475,6 +475,11 @@ def transcribe_muscriptor(audio_path, output_midi, params=None, log_cb=None,
         del model
     except Exception:  # noqa: BLE001
         pass
+    try:
+        import transcribe_runtime as _TR
+        _TR.release_memory(log_cb, "MuScriptor ")
+    except Exception:
+        pass
     return n
 
 

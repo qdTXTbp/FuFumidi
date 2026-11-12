@@ -178,7 +178,7 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
                   } else if (_total > 0) {
                     _push(_done / _total, '推理中 ' + Math.round(_done / _total * 100) + '%');
                   }
-                } else if (/^\[(预处理|体检|模型|分段探测|推理|音频证据|节拍|收尾|计时)/.test(String(_line).trim()) || String(_line).includes('使用 GPU')) {
+                } else if (/^\[(预处理|体检|模型|分段探测|推理|音频证据|节拍|收尾|计时|内存)/.test(String(_line).trim()) || String(_line).includes('使用 GPU')) {
                   ent.task.log(_line);
                 }
               } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }

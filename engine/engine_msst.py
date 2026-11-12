@@ -413,11 +413,10 @@ def separate(audio_path, out_dir, params=None, log_cb=None, progress_cb=None):
             except Exception:
                 pass
         try:
-            import gc
-            import torch
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            import transcribe_runtime as _TR
+            # 分离模型的显存与内存同样要还（长音频分离一轮能吃满显存），
+            # 并收缩 Windows 工作集（Python 不会把页还给系统）。
+            _TR.release_memory(log_cb, "分离 ")
         except Exception:
             pass
 

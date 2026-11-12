@@ -155,6 +155,13 @@ def transcribe_aria(audio_path, output_midi, params=None, log_cb=None,
 
     n = _count_notes(output_midi)
     _log(log_cb, f"保存 MIDI → {os.path.basename(output_midi)}（{n} 音符）")
+    _stage(log_cb, 99, "完成")
+    # 子进程已退出，但父进程（常驻 worker）仍持有 torch/CUDA 缓存与已释放页
+    try:
+        import transcribe_runtime as _TR
+        _TR.release_memory(log_cb, "Aria ")
+    except Exception:
+        pass
     return n
 
 

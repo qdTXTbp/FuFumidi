@@ -681,9 +681,26 @@ def cmd_worker():
                 res = {'ok': code == 0, 'error': out[-600:]}
             if job is not None:
                 res['_id'] = job
+            # ★ 每个任务处理完都释放内存/显存（用户 2026-11-12 要求）。
+            #   常驻 worker 复用同一进程：模型对象、torch 的 CUDA 缓存池、以及
+            #   Windows 上不会自动归还的进程工作集，不主动清就会一直占着 ——
+            #   跑完一首几 G 的 MIDI 之后下一首更容易 OOM，CPU 端吃满系统内存时游戏/浏览器先崩。
+            #   各引擎自己的 finally 也会调，这里是兜底（覆盖没有 finally 的路径），幂等。
+            #   日志走 _LogTee（仍指向真实 stdout），随 ###LOG 一起送到界面。
+            try:
+                import transcribe_runtime as _TR
+                _TR.release_memory(lambda m: buf.write(m + '\n'), label='任务完成后 ')
+            except Exception:
+                pass
             _sys.stdout.write('###RESULT ' + _json.dumps(res, ensure_ascii=False) + '\n')
             _sys.stdout.flush()
         except Exception as e:
+            # 失败路径同样释放（模型/显存不能因为一次异常就永久占着）
+            try:
+                import transcribe_runtime as _TR
+                _TR.release_memory(None, label='任务失败后 ')
+            except Exception:
+                pass
             _sys.stdout.write('###RESULT ' + _json.dumps({'_id': None, 'ok': False, 'error': str(e)}) + '\n')
             _sys.stdout.flush()
     return 0

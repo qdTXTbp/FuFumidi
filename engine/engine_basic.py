@@ -240,6 +240,12 @@ def transcribe_basic(audio_path, output_midi,
         return _count_notes(midi_data) or len(note_events)
     finally:
         remove_temp(wav)
+        # 释放放在 finally：成功 / 失败都释放，也不干扰上面的 return 与临时文件清理
+        try:
+            import transcribe_runtime as _TR
+            _TR.release_memory(log_cb, "Basic Pitch ")
+        except Exception:
+            pass
 
 
 def _count_notes(midi):

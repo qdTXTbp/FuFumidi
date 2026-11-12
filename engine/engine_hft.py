@@ -167,5 +167,5 @@ def transcribe_hft(audio_path, output_midi, params=None, log_cb=None, num_thread
                 audio_io.remove_temp(tmp_wav)
             except Exception:
                 pass
-        TR.release_gpu()
+        TR.release_memory(log_cb, "hFT ")
         TR.log_timing(log_cb, "hFT-Transformer 总计", t_all)
