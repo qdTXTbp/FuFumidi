@@ -96,6 +96,7 @@ python -m pytest tests/ -q --cov=. --cov-report=term-missing
 | `test_engine_basic_pause.py` | `engine_basic._install_audio_input_gate`（包 basic_pitch 的取窗生成器）：只挂一次不叠加、无标记文件透传、暂停卡在窗与窗之间后接着跑、包装器不捕获 log_cb |
 | `test_muscriptor_canonical_call.py` | ★ 契约：MuScriptor 必须按官方用法调用 —— `transcribe()` **不许带自定义生成参数**（只允许官方默认 `prelude_forcing` 与官方选项 `instruments`）、必须走官方节拍网格（`detect_beat_grid_for(..., "best-effort")` 并把网格交给写出函数）、不许自己重采样/改位深、网格不可用时降级不崩（并上报 `LAST_BEAT_GRID`） |
 | `test_muscriptor_lead_in.py` | ★ 边界对齐修正（对照 DamRsn/muscriptor.cpp 的 `Transcriber`）：默认前补 0.2s 静音、事件时间整体回移；网格与预分析仍用原音频；`add_lead_in` 只补静音不改样本/采样率/位深；`FUFUMIDI_MS_LEADIN=0` 可关、生成失败降级、临时文件必清 |
+| `test_runtime_path_abi.py` | ★ 可选引擎运行时隔离：读 `.pyd` 文件名判断 ABI；cp312 的 `models/*/site` 不挂进 cp311 引擎（否则 `scipy` 报「install broken」）；`prepare_paths` 插了就 `restore_paths` 还原；`sanitize_sys_path` 能清掉上一次任务残留的脏路径且不误伤匹配目录 |
 | `test_muscriptor_official_stream.py` | 官方事件流与参数契约：`ProgressEvent(completed,total)` 必须转成 `###PROG`（`events_to_midi_bytes` 会把它丢掉），且事件本身不许被吃掉/改序；`prelude_forcing=True` 与 `instruments=` 只在本机 wheel 支持时传（旧 wheel 退回零 kwargs）；默认 `probe` 整曲锁定乐器组、探测失败降级；`muscriptor_decode='sample'` 才带 `use_sampling`+`temperature=0.9`，**默认 greedy 零额外 kwargs**、旧 wheel 忽略采样档 |
 | `test_engine_auto_bpm.py` | `engine._apply_auto_bpm`：改写 set_tempo 时必须同步缩放**绝对 tick**（只改 BPM 会让时间轴和音频对不上），含 0 音符 / 无 tempo / 非法 BPM 边界 |
 | `test_singing_adapters.py` | `singing` 抽象层对照（M1）：UTAU 适配器输出与直接调用 `render_track` 逐位一致、音素化器字段取自 oto.ini 原值、注册表解析/未知报错/未接渲染器抛 NotImplementedError、DiffSinger 音素化有真实声库才跑（没有就跳过，不假装通过） |

@@ -97,7 +97,7 @@ def _load_model(rt, precision=None):
         os.chdir(cwd)
 
 
-def transcribe_yourmt3(audio_path, output_midi, params=None, log_cb=None, num_threads=None):
+def _transcribe_yourmt3_inner(audio_path, output_midi, params=None, log_cb=None, num_threads=None):
     params = params or {}
     rt = find_runtime()
     if not rt:
@@ -105,6 +105,14 @@ def transcribe_yourmt3(audio_path, output_midi, params=None, log_cb=None, num_th
     threads = TR.limit_threads(num_threads)
     TR.install_pause(log_cb)
     _install_paths(rt)
+    # ★ 2026-11-12：运行时 site 若是另一种 CPython 构建（cp312 vs 运行时 3.11），
+    #   下面的 import torch 会加载到无法使用的 .pyd；这里先给明确报错。
+    _skip = TR.last_site_skip()
+    if _skip and os.path.normcase(_skip.get("site", "")) == os.path.normcase(os.path.join(rt, "site")):
+        raise RuntimeError(
+            "YourMT3+ 运行时是按 Python %s 构建的，当前引擎是 Python %s，无法加载。"
+            "请到「资源中心 → 转录模型」重新下载匹配当前运行时的版本，或改用 MuScriptor / 其他模型。"
+            % (_skip.get("abi"), _skip.get("python")))
     import torch
     import soundfile as sf
     import audio_io
@@ -173,3 +181,12 @@ def _resample(audio, sr, target_sr):
     if int(sr) == int(target_sr):
         return audio
     return torchaudio.functional.resample(audio, int(sr), int(target_sr))
+
+
+def transcribe_yourmt3(audio_path, output_midi, params=None, log_cb=None, num_threads=None):
+    """对外入口：跑完把本次插进 sys.path 的运行时目录清掉，避免污染后续任务。"""
+    try:
+        return _transcribe_yourmt3_inner(audio_path, output_midi, params=params,
+                                         log_cb=log_cb, num_threads=num_threads)
+    finally:
+        TR.restore_paths()

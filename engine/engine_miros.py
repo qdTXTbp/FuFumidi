@@ -73,7 +73,7 @@ def available():
     return find_musicfm(rt) is not None
 
 
-def transcribe_miros(audio_path, output_midi, params=None, log_cb=None, num_threads=None):
+def _transcribe_miros_inner(audio_path, output_midi, params=None, log_cb=None, num_threads=None):
     rt = find_runtime()
     if not rt:
         raise RuntimeError(TR.runtime_missing_message(_RUNTIME))
@@ -93,6 +93,15 @@ def transcribe_miros(audio_path, output_midi, params=None, log_cb=None, num_thre
     #   现在默认让增强包优先；要排障对照可设 FUFUMIDI_RUNTIME_BUNDLED_TORCH=1。
     bundled_torch = bool(os.environ.get("FUFUMIDI_RUNTIME_BUNDLED_TORCH"))
     TR.prepare_paths(rt, extra_dirs=[repo], keep_env_packages=not bundled_torch)
+    # ★ 2026-11-12：MIROS 的 site 若是另一种 CPython 构建（实测 cp312 vs 运行时 3.11），
+    #   prepare_paths 会拒绝挂载 —— 这里必须立刻给明确报错，不能带着半套依赖继续跑，
+    #   否则后面会以「scipy 坏了 / numpy 找不到」的形式炸在毫无关系的地方。
+    _skip = TR.last_site_skip()
+    if _skip and os.path.normcase(_skip.get("site", "")) == os.path.normcase(site):
+        raise RuntimeError(
+            "MIROS 运行时是按 Python %s 构建的，当前引擎是 Python %s，无法加载。"
+            "请到「资源中心 → 转录模型」重新下载匹配当前运行时的版本，或改用 MuScriptor / 其他模型。"
+            % (_skip.get("abi"), _skip.get("python")))
     info = TR.torch_info()
     if log_cb:
         # 把真正加载的 torch / 设备 / 目录写进日志：慢的时候一眼能看出走的是 CPU 还是 GPU
@@ -127,6 +136,19 @@ def transcribe_miros(audio_path, output_midi, params=None, log_cb=None, num_thre
     if log_cb:
         log_cb("MIROS：输出 %d 个音符 → %s" % (n, os.path.basename(output_midi)))
     return n
+
+
+def transcribe_miros(audio_path, output_midi, params=None, log_cb=None, num_threads=None):
+    """对外入口：跑完把本次插进 sys.path 的运行时目录清掉。
+
+    常驻引擎复用同一个进程；MIROS 的 site 里带着另一套 numpy/torch，
+    留在 sys.path 会污染后续 MuScriptor 任务（症状是「scipy 坏了」）。
+    """
+    try:
+        return _transcribe_miros_inner(audio_path, output_midi, params=params,
+                                       log_cb=log_cb, num_threads=num_threads)
+    finally:
+        TR.restore_paths()
 
 
 import time  # noqa: E402  （放在文件末尾只为让上面的 import 分组保持可读）

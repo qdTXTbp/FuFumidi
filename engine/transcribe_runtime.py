@@ -165,6 +165,73 @@ def torch_compat_warning(runtime, site):
             "退回自带 torch（会走 CPU，但调用面完全对得上）。" % (label, used, have, tip))
 
 
+#: 最近一次 prepare_paths 跳过运行时 site 的原因（ABI 不匹配时）
+_LAST_SITE_SKIP = {}
+#: 最近一次 prepare_paths 实际插进 sys.path 的目录（供 restore_paths 清理）
+_LAST_INSERTED = []
+
+
+def _binary_abi(path):
+    """读目录里二进制包的文件名，判断它要求的 CPython 次版本（'3.11'/'3.12'）。
+
+    ★ 不 import：运行时包可能是另一种 CPython 构建的，import 会直接炸。
+    """
+    import glob
+    import re
+    for pat in ("numpy/core/_multiarray_umath.cp3*.pyd",
+                "numpy/_core/_multiarray_umath.cp3*.pyd",
+                "torch/_C.cp3*.pyd"):
+        hits = glob.glob(os.path.join(path, pat))
+        if hits:
+            m = re.search(r"cp3(\d+)", os.path.basename(hits[0]))
+            if m:
+                return "3." + m.group(1)
+    return ""
+
+
+def site_abi(path):
+    """目录里二进制包要求的 CPython 次版本；看不出来返回 ''。"""
+    return _binary_abi(path)
+
+
+def last_site_skip():
+    """最近一次 prepare_paths 为什么跳过 site（没有跳过则为空 dict）。"""
+    return dict(_LAST_SITE_SKIP)
+
+
+def last_inserted():
+    """最近一次 prepare_paths 插进 sys.path 的目录。"""
+    return list(_LAST_INSERTED)
+
+
+def restore_paths(dirs=None):
+    """把 prepare_paths 插进去的目录移除，避免污染常驻引擎里的后续任务。"""
+    for p in (dirs if dirs is not None else list(_LAST_INSERTED)):
+        while p in sys.path:
+            sys.path.remove(p)
+    _LAST_INSERTED[:] = []
+
+
+def sanitize_sys_path():
+    """清掉 sys.path 里 ABI 不匹配的运行时 site。
+
+    ★ 2026-11-12 修：常驻引擎复用同一进程。上一个 MIROS 任务把
+      `models/miros/site`（Python 3.12 构建）插进 sys.path 后没有移除，
+      下一次 MuScriptor 任务 import scipy 就会加载 cp312 的 numpy，
+      报「The scipy install you are using seems to be broken」。
+    """
+    cur = "%d.%d" % sys.version_info[:2]
+    removed = []
+    for p in list(sys.path):
+        if not p or os.path.basename(p.rstrip("\\/")) != "site":
+            continue
+        abi = _binary_abi(p)
+        if abi and abi != cur and p in sys.path:
+            sys.path.remove(p)
+            removed.append({"site": p, "abi": abi, "python": cur})
+    return removed
+
+
 def prepare_paths(rt, extra_dirs=(), keep_env_packages=True):
     """把运行时的 site / 源码目录塞进 sys.path（幂等）。
 
@@ -176,13 +243,25 @@ def prepare_paths(rt, extra_dirs=(), keep_env_packages=True):
     而且日志里看不出来是谁遮的。现在 site 插在增强包目录**之后**：
     运行时的依赖照样压过 App 自带运行时，但压不过用户显式装的 GPU 包。
 
+    ★ 2026-11-12 修：site 的二进制包（numpy/torch）可能是**另一种 CPython
+    次版本**构建的（MIROS 的 site 实测是 cp312，而运行时是 3.11）。这种目录
+    一旦进 sys.path，之后任何 import numpy/scipy 都会失败，且报错指向
+    「scipy 坏了」，完全看不出真正原因。现在先读文件名判断 ABI，不匹配就
+    跳过并记录到 last_site_skip()，由调用方给出明确提示。
+
     keep_env_packages=False 时退回旧行为（site 最前），留给排障对照用
     （环境变量 FUFUMIDI_RUNTIME_BUNDLED_TORCH=1 会走到这里）。
     """
+    _LAST_SITE_SKIP.clear()
     dirs = []
     site = os.path.join(rt, "site")
     if os.path.isdir(site):
-        dirs.append(site)
+        abi = _binary_abi(site)
+        cur = "%d.%d" % sys.version_info[:2]
+        if abi and abi != cur:
+            _LAST_SITE_SKIP.update({"site": site, "abi": abi, "python": cur})
+        else:
+            dirs.append(site)
     for d in extra_dirs:
         p = d if os.path.isabs(d) else os.path.join(rt, d)
         if os.path.isdir(p):
@@ -195,11 +274,14 @@ def prepare_paths(rt, extra_dirs=(), keep_env_packages=True):
         for i, p in enumerate(sys.path):
             if p in env_dirs:
                 base = i + 1
+    inserted = []
     for p in reversed(dirs):        # insert(0) 会把后面的顶前面，反着插才保持顺序
         if p in sys.path:
             continue
         sys.path.insert(base, p)
-    return dirs
+        inserted.append(p)
+    _LAST_INSERTED[:] = inserted
+    return inserted
 
 
 def dist_versions(site_dir, names=("torch", "torchaudio")):

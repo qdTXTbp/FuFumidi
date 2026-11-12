@@ -686,6 +686,20 @@ def cmd_worker():
 def main():
     args = build_parser().parse_args()
 
+    # ★ 2026-11-12：常驻引擎会复用同一进程。上一个可选引擎任务可能把
+    #   models/<runtime>/site（另一种 CPython 构建）留在 sys.path，导致后续
+    #   MuScriptor 任务 import scipy/numpy 失败（报「scipy 坏了」）。
+    #   每个请求进来先清一遍，详见 transcribe_runtime.sanitize_sys_path()。
+    try:
+        from transcribe_runtime import sanitize_sys_path
+        _bad = sanitize_sys_path()
+        if _bad and args.mode != "worker":
+            print("[清理] 已移除 ABI 不匹配的运行时路径：%s"
+                  % "; ".join("%s(cp%s)" % (os.path.basename(os.path.dirname(b["site"])), b["abi"].replace(".", ""))
+                              for b in _bad), flush=True)
+    except Exception:
+        pass
+
     # 回收上次异常退出（进程被强杀 → finally 没跑）留在系统临时目录里的解码 WAV
     # 与 demucs 声部目录。正常路径下它们都在各自的 finally 里删掉了，这里只兜残留。
     # worker 模式的 stdout 是 ###RESULT 协议，不能掺任何输出，故仅非 worker 模式打印。
