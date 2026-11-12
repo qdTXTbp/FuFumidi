@@ -1,42 +1,72 @@
 {
   "format": "fufumidi-hotpatch/v1",
-  "id": "2026-11-12-02",
-  "notes": "MIROS 报错翻译：HF 配置拉取失败与内存不足都给出可操作建议；转录失败时 traceback 进 stderr（此前只显示最后一行，无法定位）；含 2026-11-12-01 的全部修复",
+  "id": "2026-11-12-03",
+  "notes": "全引擎转录进度透传（MIROS/钢琴/YourMT3+/Basic/Aria/TransKun/hFT 都有百分比，不卡在起始值）；任务完成后释放内存与显存（含 Windows 工作集收缩，MIROS 单曲可降 2GB+）",
   "target": {
     "min": "6.5.0",
     "max": "6.6.99"
   },
   "package": {
-    "name": "hotpatch-2026-11-12-02.zip",
-    "size": 38660,
-    "sha256": "eebdb729487a874ce63a247a23e171d4db9e37bbd706eac2f126c8e1db7a19e0"
+    "name": "hotpatch-2026-11-12-03.zip",
+    "size": 80309,
+    "sha256": "cc7a8acc53aa4d22ba7dd9bcf671ddf82815172803b6eafeb458fd78cdf5eb62"
   },
   "files": [
     {
+      "path": "resources/app.asar.unpacked/engine/engine_aria.py",
+      "size": 11542,
+      "sha256": "ff4c8d9c9bb71c7183ebf89abc6d18a76851a6426961bcd373a8baddae01aab5"
+    },
+    {
+      "path": "resources/app.asar.unpacked/engine/engine_basic.py",
+      "size": 11989,
+      "sha256": "a19a982c35556405e118ecd16b98a0fdfa774bcf80974b06d407b0aa82608fcf"
+    },
+    {
+      "path": "resources/app.asar.unpacked/engine/engine_hft.py",
+      "size": 6549,
+      "sha256": "4438dd13f1bbca780986b16d619ffe3e617757a2586a40a7e1e906852d0e0801"
+    },
+    {
       "path": "resources/app.asar.unpacked/engine/engine_miros.py",
-      "size": 9312,
-      "sha256": "4afa57ff7da256f923c4a823ab9f0b3fe5d3c0928728f0f5b7bcb9a19f537608"
+      "size": 16529,
+      "sha256": "d42ccee2244fbccdbafbcf333427f19a930a7824546b5cfe5a1b059901c2f8ae"
+    },
+    {
+      "path": "resources/app.asar.unpacked/engine/engine_msst.py",
+      "size": 21997,
+      "sha256": "e54e5dbb90aad5164be139c38d58f19e0027f184d4f679d01dfc2da689f0852d"
+    },
+    {
+      "path": "resources/app.asar.unpacked/engine/engine_muscriptor.py",
+      "size": 26355,
+      "sha256": "d555ec67581b8beeeb61b5497d36fcb62828b9812c4f579b73a123d20674ae36"
+    },
+    {
+      "path": "resources/app.asar.unpacked/engine/engine_pt.py",
+      "size": 18882,
+      "sha256": "ff1db3073dbeed973679f7ca001dc293b0332424e5c5a3dfed0e83c80a9c5a56"
+    },
+    {
+      "path": "resources/app.asar.unpacked/engine/engine_transkun.py",
+      "size": 4569,
+      "sha256": "b59941580be9675f1d60ebf20bc090100c9e4106f91c64c9641748813c3e7e1c"
     },
     {
       "path": "resources/app.asar.unpacked/engine/engine_yourmt3.py",
-      "size": 8692,
-      "sha256": "8c10e5e4e48dc08f8ba93dbe2a6d401e3ecc61ed24c4b2182b75ce5b09ab3c41"
-    },
-    {
-      "path": "resources/app.asar.unpacked/engine/health.py",
-      "size": 20276,
-      "sha256": "c0acc46652873dc0456fb4a10e78a492e714b754f7a0d9f1e09a4d3e745ba9fb"
+      "size": 9586,
+      "sha256": "1f20c92d8976d283a13917a8e4196d2ddf91958f6a2aa2213016da2e2ebd47d6"
     },
     {
       "path": "resources/app.asar.unpacked/engine/music2midi.py",
-      "size": 39047,
-      "sha256": "304ca7fd738046d8d84566a43c48b6c7e3616066ca397ee2d4bbc32dd550516f"
+      "size": 39431,
+      "sha256": "853430259b24fb4866b3d2cceff9919a658404f2245f291ca9e60142655e6347"
     },
     {
       "path": "resources/app.asar.unpacked/engine/transcribe_runtime.py",
-      "size": 22004,
-      "sha256": "4e6361930f8935175bb2fabe0974992488f854e241c5cd9525bac4b3d6964424"
+      "size": 31372,
+      "sha256": "8d5290adf709432cd287fd644ec3450eb62697208441c32a0429416f2353a40c"
     }
   ],
-  "sig": "fK5xXQIssA60RW9C4/oVwSplG073YeJa7NW9LZVyjfqd7+OcVIcLQda1IrOFi8VTscaJ3HHhXtUSuomGeQd9BA=="
+  "sig": "X5mYCD+OwsQ2zKUepPxAqnxNxMkQiuY2cU0gVG64gNCAg/Rhno8M6QcQYIvyH6PjfCa/EU7NjFB2cJkxAs1/AQ=="
 }
