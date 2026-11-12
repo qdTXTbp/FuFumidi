@@ -6817,6 +6817,15 @@ export const I18N_MAP = {
   'Verovio 组件加载失败': 'Failed to load Verovio component',
   'Verovio 组件未加载（离线资源缺失）': 'Verovio component not loaded (offline resource missing)',
   'WAV（默认）': 'WAV (default)',
+  '日志': 'Log',
+  '暂无日志': 'No logs yet',
+  '复制日志': 'Copy log',
+  '复制全部': 'Copy all',
+  '已复制': 'Copied',
+  '已复制到剪贴板': 'Copied to clipboard',
+  '点击「复制全部」可一键复制日志': 'Click "Copy all" to copy the whole log',
+  '查看完整日志': 'View full log',
+  '回到底部': 'Jump to bottom',
 };
 
 /* 语言状态（响应式：切语言后 t() 返回值变化，Vue 模板自动重渲染） */

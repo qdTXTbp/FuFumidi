@@ -8,6 +8,7 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { useRouter } from 'vue-router';
 import Icon from '../components/Icon.vue';
+import LogPanel from '../components/LogPanel.vue';
 import { t } from '../core/i18n.js';
 import { useAppStore } from '../stores/app';
 
@@ -367,7 +368,7 @@ onBeforeUnmount(() => { if (off) { try { off(); } catch (e) {} off = null; } });
         </div>
         <div class="cv-bar"><i :style="{ transform: 'scaleX(' + ((Math.max(0, Math.min(100, percent))) / 100) + ')' }"></i></div>
         <div v-if="error" class="cv-err">{{ error }}</div>
-        <pre v-if="logs.length" class="cv-log">{{ logs.slice(-40).join('\n') }}</pre>
+        <LogPanel v-if="logs.length" :title="t('运行日志')" :lines="logs" @clear="logs = []" />
       </div>
 
       <div v-if="result && result.out" class="card">
@@ -402,5 +403,5 @@ onBeforeUnmount(() => { if (off) { try { off(); } catch (e) {} off = null; } });
 .cv-bar { height: 8px; border-radius: var(--r-sm); background: var(--surface-soft); overflow: hidden; margin-top: 10px; }
 .cv-bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--brand-blue, var(--t-info)), var(--t-info)); transition: transform var(--motion-base) var(--ease-out); }
 .cv-err { margin-top: 10px; font-size: var(--fs-sm); color: var(--error); white-space: pre-wrap; }
-.cv-log { margin-top: 10px; max-height: 220px; overflow: auto; font-size: var(--fs-sm); line-height: 1.6; background: var(--surface-soft); border-radius: var(--r-md); padding: 8px 10px; white-space: pre-wrap; }
+/* 运行日志改用通用 LogPanel 组件（自动滚底 / 完整弹窗 / 一键复制），不再本地渲染 */
 </style>

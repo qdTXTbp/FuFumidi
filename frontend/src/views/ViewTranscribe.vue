@@ -3,6 +3,7 @@ import { themeColor } from '../core/palette.js';
 // 转录视图：音频 → MIDI（本地 Python 引擎，桌面端通过 fuBridge 桥接）
 import { ref, reactive, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 import Icon from '../components/Icon.vue';
+import LogPanel from '../components/LogPanel.vue';
 import { useAppStore } from '../stores/app';
 import { usePlaylistStore } from '../stores/playlist';
 import { clamp, esc, fmtTime } from '../core/util.js';
@@ -89,7 +90,6 @@ const progress = ref(0);
 const stage = ref('');
 const jobId = ref(0);
 const logs = ref([]);
-const logExpanded = ref(false);
 const lastOut = ref('');
 const lastSource = ref('');
 let srcAudio = null;
@@ -2357,10 +2357,7 @@ onBeforeUnmount(() => {
         </Transition>
 
         <Transition name="fade">
-        <div v-if="sepLogs.length" class="tr-log">
-          <div class="tr-log-head"><span class="log-title">{{ t('分离日志') }}</span><span class="log-count">{{ sepLogs.length }}{{ t(' 行') }}</span><span style="flex:1"></span><button class="icon-btn" @click="sepLogs = []"><Icon name="trash" :size="13" /></button></div>
-          <div class="tr-log-scroll"><div v-for="(l, i) in sepLogs" :key="i" :class="{ err: l.isErr }">{{ l.txt }}</div></div>
-        </div>
+        <LogPanel v-if="sepLogs.length" :title="t('分离日志')" :lines="sepLogs" @clear="sepLogs = []" />
         </Transition>
       </div>
 
@@ -2547,17 +2544,7 @@ onBeforeUnmount(() => {
   
         <!-- 运行日志 -->
         <Transition name="fade">
-        <div v-if="logs.length" class="tr-log">
-          <div class="tr-log-head">
-            <span class="log-title">{{ t('运行日志') }}</span><span class="log-count">{{ logs.length }}{{ t(' 行') }}</span>
-            <span style="flex:1"></span>
-            <button class="icon-btn" :title="t('清空')" @click="clearLog"><Icon name="trash" :size="13" /></button>
-            <button class="icon-btn" :title="t('展开/收起')" @click="logExpanded = !logExpanded"><Icon name="chevron" :size="13" /></button>
-          </div>
-          <div class="tr-log-scroll" :class="{ collapsed: !logExpanded }">
-            <div v-for="(l, i) in logs" :key="i" :class="{ err: l.isErr }">{{ l.txt }}</div>
-          </div>
-        </div>
+        <LogPanel v-if="logs.length" :title="t('运行日志')" :lines="logs" @clear="clearLog" />
         </Transition>
     </aside>
 
@@ -2704,12 +2691,6 @@ onBeforeUnmount(() => {
 .tq-title { font-weight:600; color:var(--text); }
 .tq-ok { color:var(--t-ok); }
 .tq-warn, .bad { color:var(--t-err); }
-.tr-log { border: 1px solid var(--hairline); border-radius: var(--r-md); background: var(--surface); margin-top: 10px; overflow: hidden; }
-.tr-log-head { display: flex; align-items: center; gap: var(--sp-2); padding: 6px 10px; font-size: var(--fs-xs); color: var(--slate); border-bottom: 1px solid var(--hairline-soft); }
-.log-count { color: var(--stone); }
-.tr-log-scroll { max-height: 220px; overflow-y: auto; padding: 8px 12px; font-family: var(--mono); font-size: var(--fs-xs); color: var(--slate); line-height: 1.6; }
-.tr-log-scroll.collapsed { max-height: 60px; }
-.tr-log-scroll .err { color: var(--error); }
 .tr-rf-row { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
 .rf-path { max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }
 .preset-mgr-overlay { position: fixed; inset: 0; z-index: 120; background: rgba(0,0,0,0.35); -webkit-backdrop-filter: blur(8px) saturate(1.4); backdrop-filter: blur(8px) saturate(1.4); display: flex; align-items: center; justify-content: center; padding: 24px; }

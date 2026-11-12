@@ -152,6 +152,30 @@ async function clearFinished() {
 }
 function resultPath(it) { const r = it && it.result; if (!r) return ''; return String(r.out || r.path || r.target || r.manifestPath || ''); }
 function openResult(it) { const p = resultPath(it); if (p) { try { window.fuBridge.openOutput(p); } catch (e) {} } }
+function copyTaskLogs(it) {
+  const logs = (it && it.logs) || [];
+  const text = logs.map((l) => (typeof l === 'string' ? l : String(l && l.txt != null ? l.txt : l))).join('\n');
+  if (!text) return;
+  const done = () => toastCopy();
+  let ok = false;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(text).then(done, () => legacyCopy(text)); ok = true; }
+  } catch (e) { ok = false; }
+  if (!ok) legacyCopy(text);
+}
+function legacyCopy(text) {
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+  } catch (e) {}
+  toastCopy();
+}
+function toastCopy() { try { app.toast(t('已复制到剪贴板'), 'ok'); } catch (e) {} }
 function fmtProgress(p) { return Math.max(0, Math.min(100, Math.round((Number(p) || 0) * 100))) + '%'; }
 function fmtDur(ms) { const s = Math.max(0, Math.round((Number(ms) || 0) / 1000)); return s < 60 ? s + 's' : Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
 function elapsed(it) { return fmtDur((it.endedAt || now.value) - it.startedAt); }
@@ -221,6 +245,9 @@ function iconOf(k) { return KIND_ICON[k] || 'task'; }
               <div v-if="it.error" class="tc-error">{{ it.error }}</div>
               <div v-for="(l, i) in (it.logs || []).slice(-6)" :key="i" class="tc-log">{{ l }}</div>
               <div v-if="!it.error && !(it.logs && it.logs.length)" class="tc-log muted">{{ t('暂无更多详情') }}</div>
+              <div v-if="it.logs && it.logs.length" class="tc-log-actions">
+                <button class="btn sm ghost" @click="copyTaskLogs(it)"><Icon name="copy" :size="12" /> {{ t('复制日志') }}</button>
+              </div>
             </div>
           </div>
         </div>
@@ -277,4 +304,5 @@ function iconOf(k) { return KIND_ICON[k] || 'task'; }
 .tc-error { color: var(--t-err); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
 .tc-detail { border-top: 1px solid var(--hairline); padding-top: var(--sp-2); display: flex; flex-direction: column; gap: 3px; }
 .tc-log { color: var(--text3); font-size: var(--fs-xs); font-family: var(--font-num); line-height: 1.5; word-break: break-all; }
+.tc-log-actions { display: flex; justify-content: flex-end; margin-top: var(--sp-1); }
 </style>
