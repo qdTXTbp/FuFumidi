@@ -1,0 +1,42 @@
+{
+  "format": "fufumidi-hotpatch/v1",
+  "id": "2026-11-12-01",
+  "notes": "修可选引擎运行时 ABI 污染（cp312 的 MIROS site 会让后续转录误报 scipy 损坏）；诊断平台信息不再调外部命令",
+  "target": {
+    "min": "6.5.0",
+    "max": "6.5.99"
+  },
+  "package": {
+    "name": "hotpatch-2026-11-12-01.zip",
+    "size": 36670,
+    "sha256": "6c443862dbd4f097f13fb55092ac767742dd5dc082321df1d2ad5b3322d1a716"
+  },
+  "files": [
+    {
+      "path": "resources/app.asar.unpacked/engine/engine_miros.py",
+      "size": 7299,
+      "sha256": "f7cef482ae266194ed252489fe4c41662c6631b9e92f20d1acb070cd428405aa"
+    },
+    {
+      "path": "resources/app.asar.unpacked/engine/engine_yourmt3.py",
+      "size": 8692,
+      "sha256": "8c10e5e4e48dc08f8ba93dbe2a6d401e3ecc61ed24c4b2182b75ce5b09ab3c41"
+    },
+    {
+      "path": "resources/app.asar.unpacked/engine/health.py",
+      "size": 20276,
+      "sha256": "c0acc46652873dc0456fb4a10e78a492e714b754f7a0d9f1e09a4d3e745ba9fb"
+    },
+    {
+      "path": "resources/app.asar.unpacked/engine/music2midi.py",
+      "size": 38667,
+      "sha256": "ea7cd23da03323144a9aebf17604ff8e500be6193caf08f8abe8b2018194315d"
+    },
+    {
+      "path": "resources/app.asar.unpacked/engine/transcribe_runtime.py",
+      "size": 19231,
+      "sha256": "cd86cd7226cbf66f18dac1b4ee22fe75b751f477d73ba093bda97d3258ca8609"
+    }
+  ],
+  "sig": "04QprJjMiXzCpSceyVhIcOuItwZ/LncJOylLbAA7WwkJaZppbyZRatPffrInt25X+f9BcDOO5s9mpx1vmLl4Dg=="
+}
