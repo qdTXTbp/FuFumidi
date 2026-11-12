@@ -62,8 +62,24 @@ def make_redactor():
 
 
 # ---------------------------------------------------------------- 各分组
+def _os_fields():
+    """返回 (os, os_release)，**不执行任何外部命令**。
+
+    ★ 2026-11-12：Windows 上 `platform.platform()` / `platform.release()` 会走
+      `platform._syscmd_ver()` 去执行系统版本查询命令；在禁用或拦截该命令的机器
+      （企业策略 / 安全软件 / 受限沙箱）上，`subprocess.communicate()` 会**永久阻塞**，
+      整个诊断包与健康检查就卡死。`sys.getwindowsversion()` 是纯 API 调用。
+    """
+    if os.name == "nt":
+        v = sys.getwindowsversion()
+        rel = "%d.%d.%d" % (v.major, v.minor, v.build)
+        return "Windows-%s" % rel, rel
+    return platform.platform(), platform.release()
+
+
 def sys_info():
-    d = {"os": platform.platform(), "os_release": platform.release(),
+    _os, _rel = _os_fields()
+    d = {"os": _os, "os_release": _rel,
          "arch": platform.machine(), "python": sys.version.split()[0],
          "cpu": platform.processor() or "unknown",
          "cpu_count": os.cpu_count()}
