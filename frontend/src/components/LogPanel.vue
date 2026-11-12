@@ -153,7 +153,7 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKey); clearTimeo
 .lp-scroll { max-height: 220px; min-height: 40px; overflow-y: auto; padding: 8px 12px; font-family: var(--mono); font-size: var(--fs-xs); color: var(--slate); line-height: 1.6; user-select: text; }
 .lp-scroll .err { color: var(--error); }
 .lp-empty { color: var(--stone); font-style: italic; }
-.lp-jump { position: absolute; right: 10px; bottom: 8px; display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; font-size: var(--fs-xs); color: var(--ink); background: var(--surface); border: 1px solid var(--hairline); border-radius: 999px; box-shadow: var(--shadow-sm, 0 2px 8px rgba(0,0,0,0.12)); cursor: pointer; }
+.lp-jump { position: absolute; right: 10px; bottom: 8px; display: inline-flex; align-items: center; gap: var(--sp-1); padding: 4px 10px; font-size: var(--fs-xs); color: var(--ink); background: var(--surface); border: 1px solid var(--hairline); border-radius: var(--r-pill); box-shadow: var(--shadow-sm, 0 2px 8px rgba(0,0,0,0.12)); cursor: pointer; }
 .lp-jump:hover { color: var(--brand-blue); border-color: var(--brand-blue); }
 
 .lp-modal { position: fixed; inset: 0; z-index: 130; background: rgba(0,0,0,0.35); -webkit-backdrop-filter: blur(8px) saturate(1.4); backdrop-filter: blur(8px) saturate(1.4); display: flex; align-items: center; justify-content: center; padding: 24px; }
