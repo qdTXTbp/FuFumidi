@@ -1624,10 +1624,17 @@ async function runBatch() {
     const cur = runItems.find((i) => i.status === 'running');
     let curP = 0;
     if (cur) {
+      // ★ 真实进度优先；没有真实进度时用「已用时间 / 预估耗时」爬升。
+      //   这里**每轮重新按时间算**（并与上一轮取 max 保证单调）：原来把估算值
+      //   写回 cur.progress 后，下一轮 `else if (cur.progress > 0)` 就先命中这个
+      //   死值，估算只生效一次 —— 表现就是不支持进度透传的引擎（MIROS）
+      //   一直停在 3%，任务结束时直接跳 100。
       if (cur.realPct > 0) curP = Math.min(99, cur.realPct);
       else if (cur.progress >= 100) curP = 100;
-      else if (cur.progress > 0) curP = cur.progress;
-      else if (cur.startedAt && cur.estMs) curP = Math.min(95, Math.round((Date.now() - cur.startedAt) / cur.estMs * 100));
+      else if (cur.startedAt && cur.estMs) {
+        curP = Math.min(92, Math.round((Date.now() - cur.startedAt) / cur.estMs * 100));
+        if (cur.progress > 0) curP = Math.max(curP, Math.min(92, cur.progress));
+      } else if (cur.progress > 0) curP = cur.progress;
       if (curP > 0 && curP < 100) cur.progress = curP;
       const elS = (Date.now() - (cur.startedAt || Date.now())) / 1000;
       const estS = ((cur.estMs || estSec() * 1000 || 60000)) / 1000;
@@ -1957,18 +1964,27 @@ onMounted(() => {
           const d = JSON.parse(ln.slice(8));
           const qid = parseInt(String(p.id).replace(/^batch/, ''), 10);
           const it = queue.find((x) => x.id === qid);
-          if (it && d && d.total > 0) {
-            it.realPct = Math.min(99, Math.round(d.completed / d.total * 100));
-            const _now = Date.now();
-            const _comp = Number(d.completed) || 0;
-            if (it._etaLastAt && _comp > (it._etaLastCompleted || 0)) {
-              const _q = queues.find((x) => (x.items || []).some((y) => y.id === it.id)) || currentQueue();
-              trRecordEtaWindows((_q && _q.modelKey) || currModelKey(),
-                                 _comp - (it._etaLastCompleted || 0),
-                                 (_now - it._etaLastAt) / 1000);
-              it._etaMeasured = true;
+          if (it && d) {
+            // percent 优先：引擎给的是**总进度**（阶段权重已计入，如 MIROS 的
+            // 加载模型 3% / 推理 20→90 / 整理音符 90→98）。只给 completed/total
+            // 的老引擎（MuScriptor）走分块比例。两者都只前进不后退。
+            if (d.percent != null) {
+              const pp = Math.max(0, Math.min(99, Math.round(Number(d.percent) || 0)));
+              if (pp > (it.realPct || 0)) it.realPct = pp;
+            } else if (d.total > 0) {
+              const pp = Math.min(99, Math.round(d.completed / d.total * 100));
+              if (pp > (it.realPct || 0)) it.realPct = pp;
+              const _now = Date.now();
+              const _comp = Number(d.completed) || 0;
+              if (it._etaLastAt && _comp > (it._etaLastCompleted || 0)) {
+                const _q = queues.find((x) => (x.items || []).some((y) => y.id === it.id)) || currentQueue();
+                trRecordEtaWindows((_q && _q.modelKey) || currModelKey(),
+                                   _comp - (it._etaLastCompleted || 0),
+                                   (_now - it._etaLastAt) / 1000);
+                it._etaMeasured = true;
+              }
+              it._etaLastAt = _now; it._etaLastCompleted = _comp;
             }
-            it._etaLastAt = _now; it._etaLastCompleted = _comp;
           }
         } catch (e) {}
         return;

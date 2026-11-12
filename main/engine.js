@@ -161,8 +161,24 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
                   const _d = JSON.parse(_pm[1]);
                   const _total = Number(_d.total) || 0;
                   const _done = Number(_d.completed) || 0;
-                  if (_total > 0) ent.task.progress(Math.min(1, _done / _total), '推理中 ' + Math.round(_done / _total * 100) + '%');
-                } else if (/^\[(预处理|体检|模型|分段探测|推理|音频证据|节拍|收尾)/.test(String(_line).trim()) || String(_line).includes('使用 GPU')) {
+                  // 单调保护：任务中心的 progress 是直接赋值，引擎的阶段切换
+                  // （如 MIROS 先打 percent=14，再打 completed:0/total:N）会让它倒退。
+                  const _push = (v, txt) => {
+                    const _v = Math.max(0, Math.min(1, Number(v) || 0));
+                    const _prev = Number(ent._prog) || 0;
+                    ent._prog = Math.max(_prev, _v);
+                    ent.task.progress(ent._prog, txt);
+                  };
+                  // percent 优先：它是引擎算好的**总进度**（阶段权重已计入）。
+                  // 只有 completed/total 的老引擎（MuScriptor）走下面的分块比例。
+                  if (_d.percent != null) {
+                    const _p = Math.max(0, Math.min(100, Number(_d.percent) || 0));
+                    const _lab = _d.label ? String(_d.label) : '处理中';
+                    _push(_p / 100, _lab + ' ' + Math.round(_p) + '%');
+                  } else if (_total > 0) {
+                    _push(_done / _total, '推理中 ' + Math.round(_done / _total * 100) + '%');
+                  }
+                } else if (/^\[(预处理|体检|模型|分段探测|推理|音频证据|节拍|收尾|计时)/.test(String(_line).trim()) || String(_line).includes('使用 GPU')) {
                   ent.task.log(_line);
                 }
               } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }

@@ -19,12 +19,163 @@ MIROS = YourMT3+ 架构 + MusicFM 编码器。权重/运行时由资源中心下
 推理入口仍是上游 repo 里的 `transcribe.transcribe(audio, midi)` ——
 **不改上游逻辑**，只把外围（路径/线程/暂停/清理/校验）补齐。
 """
+import json
 import os
 import time
 
 import transcribe_runtime as TR
 
 _RUNTIME = "miros"
+
+
+class _UpstreamShapeError(RuntimeError):
+    """上游 transcribe.py 的符号/流程与预期不符 —— 回落到整调接口（无细粒度进度）。"""
+
+
+def _emit_prog(log_cb, completed=None, total=None, percent=None, label=None):
+    """打一条进度协议行。
+
+    主进程（main/engine.js）与前端（ViewTranscribe）都认两种形态：
+      · `###PROG {"completed":n,"total":m}` —— 分块引擎（MuScriptor / MIROS 推理阶段）
+      · `###PROG {"percent":p,"label":"…"}` —— 阶段百分比（加载模型 / 整理音符 等）
+    必须**单独一行**且以 ###PROG 开头（worker 的日志转发会加缩进，对端会 trim）。
+    """
+    if not log_cb:
+        return
+    payload = {}
+    if completed is not None and total is not None:
+        payload["completed"] = int(completed)
+        payload["total"] = int(total)
+    if percent is not None:
+        payload["percent"] = round(float(percent), 1)
+    if label:
+        payload["label"] = str(label)
+    if not payload:
+        return
+    try:
+        log_cb("###PROG " + json.dumps(payload, ensure_ascii=False))
+    except Exception:
+        pass
+
+
+def _pause_wait():
+    """过一个暂停闸门（没有装就不做事）。
+
+    ★ MIROS 上游的推理循环里没有任何 wait 点，所以此前「暂停」对它是无效的
+      —— 点了暂停照样跑完整首。拆开驱动后每批过闸门，暂停才真正生效。
+    """
+    try:
+        import pause_gate
+        g = pause_gate.current()
+        if g is not None and getattr(g, "active", False):
+            g.wait()
+    except Exception:
+        pass
+
+
+def _run_upstream_with_progress(mt, audio_path, output_midi, log_cb):
+    """按上游 transcribe() 的同一顺序自己驱动，在阶段边界与每个推理批次打进度。
+
+    为什么不再直接调 `mt.transcribe(audio_path, output_midi)`：
+    它是一次性黑盒（加载 → 解码 → 切段 → 整批推理 → detokenize → 写盘），
+    全程零回调 —— 任务中心的进度一直停在起始值（转录页 3%），结束时直接跳 100
+    （用户 2026-11-12 反馈）。这里复刻它的编排（固定版本的离线 repo，不存在版本漂移），
+    只额外做三件事：阶段进度、逐批进度、逐批暂停检查。任何一步与上游结构不符
+    都抛 `_UpstreamShapeError`，由调用方回落到原整调接口（功能不受影响）。
+
+    返回写出的 MIDI 路径。`mt` 是上游 transcribe 模块。
+    """
+    need = ("load_model_checkpoint", "slice_padded_array", "mix_notes",
+            "merge_zipped_note_events_and_ties_to_notes", "write_model_output_as_midi")
+    missing = [n for n in need if not hasattr(mt, n)]
+    if missing:
+        raise _UpstreamShapeError("缺少符号 " + ", ".join(missing))
+
+    import torch
+    import torchaudio
+
+    output_dir = os.path.dirname(output_midi)
+    output_base = os.path.splitext(os.path.basename(output_midi))[0]
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+    else:
+        output_dir = "."
+
+    # 上游 transcribe() 里写死的模型配置（musicfm_multidec）
+    args = ["le2bzt53@last.ckpt", "-p", "Multi_longer_seq_length_frozen_enc_silu",
+            "-if", "87381", "-el", "1024", "-enc", "musicfm", "-dpe", "rope",
+            "-sqr", "1", "-tk", "mc13_full_plus_1024", "-dec", "multi-dec",
+            "-st", "ddp", "-wb", "disabled", "-twe", "False", "-w", output_dir]
+
+    # —— ① 加载模型（权重 + MusicFM；这一步没有可细分的进度，但文案要明确）——
+    _emit_prog(log_cb, percent=3, label="加载模型")
+    if log_cb:
+        log_cb("[模型] 正在加载 MIROS checkpoint + MusicFM 编码器…")
+    model = mt.load_model_checkpoint(args)
+    _emit_prog(log_cb, percent=14, label="解码音频")
+
+    # —— ② 解码 + 切段 ——
+    audio, sr = torchaudio.load(uri=audio_path)
+    audio = torch.mean(audio, dim=0).unsqueeze(0)
+    audio = torchaudio.functional.resample(audio, sr, model.audio_cfg["sample_rate"])
+    frames = int(model.audio_cfg["input_frames"])
+    model_sr = int(model.audio_cfg["sample_rate"])
+    audio_segments = mt.slice_padded_array(audio, frames, frames)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    audio_segments = torch.from_numpy(audio_segments.astype("float32")).to(device).unsqueeze(1)
+    n_items = int(audio_segments.shape[0])
+    seg_sec = frames / float(model_sr)
+    if log_cb:
+        log_cb("[预处理] 音频切分：%d 段 × %.1fs（覆盖 %.1fs），设备 %s"
+               % (n_items, seg_sec, n_items * seg_sec, device.type))
+    _emit_prog(log_cb, completed=0, total=n_items, label="推理中")
+
+    # —— ③ 逐批推理（bsz=8 与上游一致）：每批打进度 + 过暂停闸门 ——
+    bsz = 8
+    pred_token_arr = []
+    t_infer = time.perf_counter()
+    with torch.cuda.amp.autocast(dtype=torch.bfloat16, enabled=torch.cuda.is_available()):
+        for i in range(0, n_items, bsz):
+            x = audio_segments[i:i + bsz]
+            preds = model.inference(x, None).detach().cpu().numpy()
+            pred_token_arr.append(preds)
+            done = min(i + bsz, n_items)
+            # 同时给 completed/total（分块语义）与 percent（**总进度**，20→90）：
+            # 消费端 percent 优先，多段/单段都能得到正确的总体百分比。
+            _emit_prog(log_cb, completed=done, total=n_items,
+                       percent=20 + 70.0 * done / max(1, n_items), label="推理中")
+            # 日志每 ~10% 一行，避免长歌曲把运行日志刷满
+            if log_cb and (done == n_items or done * 10 // n_items != (done - len(preds)) * 10 // n_items):
+                log_cb("[推理] 已转录 %d/%d 段" % (done, n_items))
+            _pause_wait()
+    if log_cb:
+        log_cb("[计时] 推理 %d 段耗时 %.1fs" % (n_items, time.perf_counter() - t_infer))
+    _emit_prog(log_cb, percent=90, label="整理音符")
+
+    # —— ④ detokenize / 合并（按解码通道推进 90→98%）——
+    num_channels = int(model.task_manager.num_decoding_channels)
+    start_secs_file = [frames * i / float(model_sr) for i in range(n_items)]
+    pred_notes_in_file = []
+    from collections import Counter
+    n_err_cnt = Counter()
+    for ch in range(num_channels):
+        pred_token_arr_ch = [arr[:, ch, :] for arr in pred_token_arr]
+        zipped, _list_events, ne_err_cnt = model.task_manager.detokenize_list_batches(
+            pred_token_arr_ch, start_secs_file, return_events=True)
+        pred_notes_ch, n_err_cnt_ch = mt.merge_zipped_note_events_and_ties_to_notes(zipped)
+        pred_notes_in_file.append(pred_notes_ch)
+        n_err_cnt += n_err_cnt_ch
+        _pause_wait()
+        _emit_prog(log_cb, percent=90 + 8.0 * (ch + 1) / max(1, num_channels), label="整理音符")
+    pred_notes = mt.mix_notes(pred_notes_in_file)
+
+    # —— ⑤ 写 MIDI ——
+    _emit_prog(log_cb, percent=99, label="写入 MIDI")
+    midi_file = mt.write_model_output_as_midi(
+        pred_notes, output_dir, output_base, model.midi_output_inverse_vocab)
+    _emit_prog(log_cb, percent=100, label="完成")
+    return midi_file
+
 
 
 def find_runtime():
@@ -140,7 +291,15 @@ def _transcribe_miros_inner(audio_path, output_midi, params=None, log_cb=None, n
     try:
         import transcribe as miros_transcribe
         try:
-            miros_transcribe.transcribe(audio_path, output_midi)
+            try:
+                # 拆开驱动：阶段进度 + 逐批进度 + 逐批暂停闸门（见 _run_upstream_with_progress）
+                _run_upstream_with_progress(miros_transcribe, audio_path, output_midi, log_cb)
+            except _UpstreamShapeError as e:
+                # 上游结构不符（版本差异）→ 回落整调：功能不受影响，只是没有细粒度进度
+                if log_cb:
+                    log_cb("[警告] 上游 transcribe 接口与预期不符（%s），回落到整调接口"
+                           "（本次没有细粒度进度）" % e)
+                miros_transcribe.transcribe(audio_path, output_midi)
         except RuntimeError as e:
             # ★ 整首歌的中间激活随歌长增长（pre_decoder 对全长序列做逐层变换），
             #   长歌曲 + 系统内存紧张（浏览器 / 游戏同时开着）时容易 OOM：
@@ -177,6 +336,3 @@ def transcribe_miros(audio_path, output_midi, params=None, log_cb=None, num_thre
                                        log_cb=log_cb, num_threads=num_threads)
     finally:
         TR.restore_paths()
-
-
-import time  # noqa: E402  （放在文件末尾只为让上面的 import 分组保持可读）

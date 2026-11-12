@@ -94,6 +94,24 @@ function registerTaskQueueIpc({ ipcMain, BrowserWindow, app, path, fs, spawnEngi
       try {
         const child = spawnEngine(args, {
           onLog: send,
+          // ★ 回落路径原先没有 onProgress：worker 崩了改用一次性 spawn 时，
+          //   任务中心与转录页的进度完全不更新（引擎明明在打 ###PROG）。
+          onProgress: (d) => {
+            if (!task || !d) return;
+            try {
+              const total = Number(d.total) || 0;
+              const done = Number(d.completed) || 0;
+              const prev = Number(cfg.__prog) || 0;   // 单调保护（阶段切换不回退）
+              const push = (v, txt) => { cfg.__prog = Math.max(prev, Math.max(0, Math.min(1, v))); task.progress(cfg.__prog, txt); };
+              if (d.percent != null) {
+                // percent 优先（引擎算好的总进度）；老引擎只有 completed/total
+                const p = Math.max(0, Math.min(100, Number(d.percent) || 0));
+                push(p / 100, (d.label ? String(d.label) : '处理中') + ' ' + Math.round(p) + '%');
+                return;
+              }
+              if (total > 0) push(done / total, '推理中 ' + Math.round(done / total * 100) + '%');
+            } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
+          },
           onDone: (code, r) => {
             convertChildren.delete(cfg.id);
             if (r.result) {
