@@ -269,7 +269,13 @@ def cmd_convert(args):
         #   随之 `engine/engine_separate.py`（demucs 版分离）成为纯死代码，已删除。
         stems = []
     except Exception as e:
+        # ★ traceback 走 stderr：主进程会把 stderr 尾部 ~400 字符带给界面/日志。
+        #   没有它，用户只能看到最后一行（比如 huggingface_hub 的
+        #   `expected string or bytes-like object`），我们永远定位不到真凶。
+        import sys as _sys
+        import traceback as _tb
         print(f"[错误] 转录失败: {e}")
+        _tb.print_exc(file=_sys.stderr)
         return 1
 
     print(f"[2/2] 完成！识别出 {note_count} 个音符")

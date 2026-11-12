@@ -114,6 +114,23 @@ def _transcribe_miros_inner(audio_path, output_midi, params=None, log_cb=None, n
     os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
     os.environ["WANDB_MODE"] = "disabled"
 
+    # ★ 2026-11-12：MIROS 的 MusicFM 编码器首次构建时要向 HuggingFace 拉
+    #   `facebook/wav2vec2-conformer-rope-large-960h-ft` 的 config.json（约 2KB，
+    #   运行时包不带它）。缓存命中时下面这句是纯本地操作；拉不到时
+    #   huggingface_hub 会抛出难以理解的错误（实测两种：`LocalEntryNotFoundError`
+    #   和 `expected string or bytes-like object, got 'NoneType'` —— 后者是它的
+    #   内部代码拿 None 去做正则）。这里先主动拉一次，把失败翻译成人话。
+    _MUSICFM_W2V_REPO = "facebook/wav2vec2-conformer-rope-large-960h-ft"
+    try:
+        from transformers import Wav2Vec2ConformerConfig as _W2VConf
+        _W2VConf.from_pretrained(_MUSICFM_W2V_REPO)
+    except Exception as e:  # noqa: BLE001
+        raise RuntimeError(
+            "MIROS 首次运行需要联网获取 MusicFM 编码器配置（%s/config.json，约 2KB，"
+            "已按 hf-mirror.com 镜像重试）。当前网络不可达：%s。"
+            "配置只需成功下载一次，之后可离线使用；也可以改用 MuScriptor / Basic Pitch 转录。"
+            % (_MUSICFM_W2V_REPO, str(e)[:200]))
+
     if log_cb:
         log_cb("MIROS：加载 MusicFM + MIROS checkpoint（首次较慢，%s）"
                % ("线程 %d" % threads if threads else "CPU"))
@@ -122,7 +139,18 @@ def _transcribe_miros_inner(audio_path, output_midi, params=None, log_cb=None, n
     os.chdir(repo)                      # 上游用相对路径读 config，必须切过去
     try:
         import transcribe as miros_transcribe
-        miros_transcribe.transcribe(audio_path, output_midi)
+        try:
+            miros_transcribe.transcribe(audio_path, output_midi)
+        except RuntimeError as e:
+            # ★ 整首歌的中间激活随歌长增长（pre_decoder 对全长序列做逐层变换），
+            #   长歌曲 + 系统内存紧张（浏览器 / 游戏同时开着）时容易 OOM：
+            #   `DefaultCPUAllocator: not enough memory`。把它翻译成人话。
+            if "not enough memory" in str(e) or "DefaultCPUAllocator" in str(e):
+                raise RuntimeError(
+                    "MIROS 内存不足：整首歌的中间激活随歌长增长，CPU 推理长歌曲很吃内存。"
+                    "请关闭占内存的程序（游戏 / 浏览器）后重试；整首歌建议改用 MuScriptor —— "
+                    "它更快、内存占用小得多。") from e
+            raise
     finally:
         os.chdir(cwd)                   # ★ 一定要还原：否则后续队列的临时文件全落错地方
         TR.release_gpu()
