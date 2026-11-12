@@ -217,7 +217,12 @@ function check(ctx) {
     }
     // publicKeyB64 仅用于测试注入临时密钥；生产不传 → 用 update_sign.js 内嵌公钥。
     const v = HM.verifyHotpatch(manifest, { currentVersion: appVersion, publicKeyB64: ctx.publicKeyB64 });
-    if (!v.ok) return finish({ ok: false, status: 'invalid', error: v.error });
+    if (!v.ok) {
+      // 清单还在但已不适用当前版本（例如 6.6.0 用户看到 6.5.x 的旧清单）：
+      // 属正常状态，不记错误，等发布方 push 新清单自然接管。
+      if (v.reason === 'version') return finish({ ok: true, status: 'skipped', id: manifest.id, notes: manifest.notes || '' });
+      return finish({ ok: false, status: 'invalid', error: v.error });
+    }
 
     const already = state.applied.some((a) => a.id === manifest.id);
     const match = targetsMatch(v.files, targetRoot);

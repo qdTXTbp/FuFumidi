@@ -117,8 +117,10 @@ function verifyHotpatch(manifest, opts) {
     if (String(m.notes || '').length > MAX_NOTES) return { ok: false, error: '说明文字过长' };
     const t = m.target || {};
     if (o.currentVersion) {
-      if (t.min && cmpVersion(o.currentVersion, t.min) < 0) return { ok: false, error: '当前版本低于补丁适用范围' };
-      if (t.max && cmpVersion(o.currentVersion, t.max) > 0) return { ok: false, error: '当前版本高于补丁适用范围' };
+      // reason: 'version' —— 调用方据此把「补丁不适用」当成正常状态（skipped），
+      // 而不是每次检查都记一条错误：6.6.0 用户看到 6.5.x 的旧清单属于常态。
+      if (t.min && cmpVersion(o.currentVersion, t.min) < 0) return { ok: false, reason: 'version', error: '当前版本低于补丁适用范围' };
+      if (t.max && cmpVersion(o.currentVersion, t.max) > 0) return { ok: false, reason: 'version', error: '当前版本高于补丁适用范围' };
     }
     const pk = m.package || {};
     if (!/^[A-Za-z0-9._-]+\.zip$/i.test(String(pk.name || ''))) return { ok: false, error: '补丁包名非法' };

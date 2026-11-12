@@ -2218,6 +2218,7 @@ export const I18N_MAP = {
   '热补丁已是最新': 'Hot patch is up to date',
   '热补丁已关闭': 'Hot patch is disabled',
   '暂无可用热补丁': 'No hot patch published',
+  '补丁不适用于当前版本，已跳过': 'Patch does not apply to this version, skipped',
   '热补丁检查完成': 'Hot patch check complete',
   '热补丁检查失败': 'Hot patch check failed',
   '正在回滚热补丁…': 'Rolling back hot patch…',

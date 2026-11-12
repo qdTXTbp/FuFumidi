@@ -296,7 +296,7 @@ async function hpCheck() {
   try {
     const r = await bridge.hotpatch.check();
     hp.status = r && r.ok
-      ? ({ applied: t('已应用热补丁'), replayed: t('已重新应用热补丁'), 'up-to-date': t('热补丁已是最新'), disabled: t('热补丁已关闭'), none: t('暂无可用热补丁') }[r.status] || t('热补丁检查完成'))
+      ? ({ applied: t('已应用热补丁'), replayed: t('已重新应用热补丁'), 'up-to-date': t('热补丁已是最新'), disabled: t('热补丁已关闭'), none: t('暂无可用热补丁'), skipped: t('补丁不适用于当前版本，已跳过') }[r.status] || t('热补丁检查完成'))
       : (r && r.error) || t('热补丁检查失败');
   } catch (e) { hp.status = t('热补丁检查失败'); }
   finally { hp.busy = false; await hpRefresh(); }

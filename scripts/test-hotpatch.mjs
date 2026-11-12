@@ -219,8 +219,10 @@ test('check：签名不对 / 源不可用 / 版本不匹配都安全跳过，不
   assert.equal(noNet.status, 'unreachable');
   assert.equal(fs.existsSync(p), false);
 
+  // 清单还在但版本不适用（例如 6.6.0 用户看到 6.5.x 旧清单）→ 良性 skipped，不记错误
   const wrongVer = await HP.check(ctxFor(f, root, { appVersion: '6.3.0' }));
-  assert.equal(wrongVer.status, 'invalid');
+  assert.equal(wrongVer.status, 'skipped');
+  assert.equal(wrongVer.ok, true);
   assert.equal(fs.existsSync(p), false);
 
   // 仓库还没发布任何补丁（所有源 404）是正常状态，不应记成失败
