@@ -1972,6 +1972,51 @@ async function exportMidi() {
   } catch (e) { toast(t('导出失败：') + (e.message || e), 'warn'); }
 }
 
+/**
+ * 按轨导出 MIDI（对应 NeuralNote 的「每个乐器一个 MIDI」）。
+ *
+ * 多乐器转录（MuScriptor / MIROS 输出多轨）之后，常要按乐器分别交给不同
+ * 宿主/音源 —— 整曲一个文件做不到这件事。每轨单独 encodeMidi（tempo/拍号/
+ * 调号照常写进每份），文件名「曲名 - 轨名.mid」，重名自动加序号。
+ */
+async function exportMidiPerTrack() {
+  const s = song.value;
+  if (!s) { toast(t('请先载入 MIDI'), 'warn'); return; }
+  const list = tracksForExport();
+  if (!list.length) { toast(t('当前没有可导出的轨道'), 'warn'); return; }
+  if (!(bridge && bridge.pickDirectory && bridge.writeBinary)) {
+    toast(t('桌面版才能按轨导出 MIDI'), 'warn');
+    return;
+  }
+  let dir = '';
+  try { dir = await bridge.pickDirectory(); } catch (e) { dir = ''; }
+  if (!dir) return;
+  const dirClean = String(dir).replace(/[\\/]+$/, '');
+  const base = String(s.name || 'song').replace(/[\\/:*?"<>|]/g, '_').trim() || 'song';
+  const used = new Set();
+  const fails = [];
+  let okN = 0;
+  for (const tr of list) {
+    const raw = String(tr.name || t('音轨')).replace(/[\\/:*?"<>|]/g, '_').trim() || t('音轨');
+    let fn = base + ' - ' + raw + '.mid';
+    let n = 2;
+    while (used.has(fn.toLowerCase())) { fn = base + ' - ' + raw + ' (' + n + ').mid'; n++; }
+    used.add(fn.toLowerCase());
+    try {
+      const bytes = encodeMidi([tr], {
+        division: s.tpb, tempoMap: s.tempoMap, sigMap: s.sigMap, keySig: s.keySig,
+        copyright: 'FuFumidi · ' + (s.name || ''),
+      });
+      const r = await bridge.writeBinary(dirClean + '/' + fn, Array.from(bytes));
+      if (r && r.ok) okN += 1;
+      else fails.push(raw + t('：') + ((r && r.error) || t('写入失败')));
+    } catch (e) { fails.push(raw + t('：') + ((e && e.message) || e)); }
+  }
+  if (okN && !fails.length) toast(t('已导出 ') + okN + t(' 个 MIDI 文件'), 'ok');
+  else if (okN) toast(t('已导出 ') + okN + t(' 个，失败 ') + fails.length + t(' 个：') + fails.slice(0, 2).join('；'), 'warn');
+  else toast(t('按轨导出失败：') + (fails[0] || t('未知错误')), 'warn');
+}
+
 /* ---------------- P0-2：自动保存 + 崩溃恢复（C3 DocumentSession） ----------------
    脏判定不靠给每个编辑入口埋点（会漏掉 tempo / CC / 轨名 / 演奏法这些改法），
    而是每 4s **序列化一次当前编辑结果为 MIDI 字节并取哈希**：字节变了就是脏。
@@ -2353,6 +2398,7 @@ onBeforeUnmount(() => {
                   :title="t(p.hint)" @click="applyPreset(p.id)">{{ t(p.label) }}</button>
         </div>
         <button class="st-btn" :title="t('快捷键一览（?）')" @click="shortcutsOpen = true"><Icon name="info" :size="12" />{{ t('快捷键') }}</button>
+        <button class="btn sm" :title="t('每轨一个 MIDI 文件（多乐器分轨交给不同宿主/音源时用）')" @click="exportMidiPerTrack"><Icon name="folder" :size="13" />{{ t('按轨导出') }}</button>
         <button class="btn sm primary" @click="exportMidi"><Icon name="save" :size="13" />{{ t('导出 MIDI') }}</button>
       </div>
 

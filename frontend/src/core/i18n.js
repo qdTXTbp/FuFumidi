@@ -6826,6 +6826,18 @@ export const I18N_MAP = {
   '点击「复制全部」可一键复制日志': 'Click "Copy all" to copy the whole log',
   '查看完整日志': 'View full log',
   '回到底部': 'Jump to bottom',
+  '按轨导出': 'Export per track',
+  '每轨一个 MIDI 文件（多乐器分轨交给不同宿主/音源时用）': 'One MIDI file per track (for handing each instrument to a different host or sound source)',
+  '当前没有可导出的轨道': 'No tracks to export',
+  '桌面版才能按轨导出 MIDI': 'Per-track MIDI export requires the desktop app',
+  '已导出 ': 'Exported ',
+  ' 个 MIDI 文件': ' MIDI files',
+  ' 个，失败 ': ' file(s), failed ',
+  ' 个：': ': ',
+  '写入失败': 'write failed',
+  '按轨导出失败：': 'Per-track export failed: ',
+  '未知错误': 'Unknown error',
+  '音轨': 'Track',
 };
 
 /* 语言状态（响应式：切语言后 t() 返回值变化，Vue 模板自动重渲染） */
