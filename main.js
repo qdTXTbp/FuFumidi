@@ -24,6 +24,7 @@ const GpuService = require('./main/gpu');
 const {
   gpuEnhanceDir,
   gpuEnhanceSite,
+  gpuEnhanceView,
   installedGpuKinds,
   inferGpuKind,
   writeGpuManifest,
@@ -420,8 +421,8 @@ function pythonForMinor(minor) {
 function currentPythonMinor() {
   try {
     const exe = resolvePython();
-    return pythonMinorOfDir(path.dirname(exe)) || '3.11';
-  } catch (_) { return '3.11'; }
+    return pythonMinorOfDir(path.dirname(exe)) || '3.12';
+  } catch (_) { return '3.12'; }
 }
 function resolvePython() {
   const s = readSettings();
@@ -620,13 +621,13 @@ function engineEnv(extra) {
     const st = readSettings();
     if (st && st.hf_token) env.HF_TOKEN = String(st.hf_token).trim();
   } catch (_) { try { require('./main/log').write('WARN', 'optional failure', String((_ && _.stack) || _)); } catch (_) { /* log failure ignored */ } }
-  // 只挂「与当前解释器 ABI 匹配」的增强包：三种包都按 CPython 次版本编译
-  // （cuda → cp311，rocm → cp312）。把不匹配的塞进 PYTHONPATH 会拖进
+  // 只挂「与当前解释器 ABI 匹配」的增强包：四种包都按 CPython 次版本编译
+  // （2026-11-12 起运行时统一为 3.12，即 cp312）。把不匹配的塞进 PYTHONPATH 会拖进
   // 一堆加载不了的 .pyd，比不挂更糟。装了但版本不匹配的，视为「已安装未启用」，
-  // 由设置页给出提示（rocm 需 Python 3.12 运行时）。
+  // 由设置页提示重新安装匹配当前运行时的版本。
   const minor = currentPythonMinor();
   const activeKinds = installedGpuKinds().filter((k) => fitsPython(k, minor));
-  const sites = activeKinds.map(gpuEnhanceSite);
+  const sites = activeKinds.map(gpuEnhanceView);
   if (sites.length) {
     // 只保留应用自己的 GPU 增强包路径，不再拼接宿主 PYTHONPATH
     env.PYTHONPATH = sites.join(path.delimiter);
@@ -648,11 +649,21 @@ const PluginService = createPluginService({ app, path, fs, shell, ipcMain, Brows
 const { pluginHost, PLUGINS_USER_DIR, registerPluginsIpc } = PluginService;
 
 function cpuFallbackWheels() {
+  // 不写死文件名：运行时升过 ABI（3.11 → 3.12），写死 cp311 会在换版后静默失效。
+  // 只挑与当前解释器 ABI 一致的轮子。
   const dir = path.join(process.resourcesPath, 'cpu-fallback');
-  const torch = path.join(dir, 'torch-2.9.1-cp311-cp311-win_amd64.whl');
-  const ort = path.join(dir, 'onnxruntime-1.28.0-cp311-cp311-win_amd64.whl');
-  if (fs.existsSync(torch) && fs.existsSync(ort)) return [torch, ort];
-  return [];
+  try {
+    if (!fs.existsSync(dir)) return [];
+    const minor = currentPythonMinor().replace('.', '');
+    const pick = (name) => {
+      const f = fs.readdirSync(dir).find((n) => n.toLowerCase().startsWith(name) &&
+        n.indexOf('cp' + minor) >= 0 && n.endsWith('.whl'));
+      return f ? path.join(dir, f) : '';
+    };
+    const torch = pick('torch-');
+    const ort = pick('onnxruntime-');
+    return torch && ort ? [torch, ort] : [];
+  } catch (_) { return []; }
 }
 async function resetBaseToCpu() {
   try {

@@ -1,5 +1,11 @@
 #!/usr/bin/env node
 // ============================================================
+// 【已过时 · 2026-11-12】内置运行时已统一到 Python 3.12，请用
+//   `node scripts/bundle-python312.js`
+// 装配（它会把依赖装到 resources/python312，再整体顶替 resources/python）。
+// 本脚本保留是因为它的依赖清单/坑位注释仍是 3.12 脚本的源头；
+// 在 3.11 运行时代跑它会把 resources/python 降级成 3.11，**不要再用**。
+//
 // 装配内置 Python 运行时：向 resources/python 安装转录引擎的全部依赖
 //
 // 背景：resources/ 在 .gitignore 里（运行时 1.2GB 不入库），因此这个步骤

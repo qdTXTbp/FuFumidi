@@ -16,8 +16,8 @@
 //               不塞进本体（体积大），用户按需在「加速包」页安装；角色权重仍是用户导入的。
 //
 // ★ Python 版本约束：增强包是按某个 CPython 次版本编译的（site-packages 里的
-//   *.pyd 带 ABI tag）。内置运行时是 3.11，而 ROCm 只有 cp312，
-//   所以「启用 ROCm = 把解释器切到 3.12」。见 KIND_PY / requiredPython()。
+//   *.pyd 带 ABI tag）。2026-11-12 起内置运行时统一为 3.12，四种增强包都按 cp312 构建；
+//   旧机器上按 3.11 装的包会被 packAbi() 判为不匹配并跳过（界面提示重装）。
 // ============================================================
 'use strict';
 const { app } = require('electron');
@@ -80,6 +80,60 @@ function gpuEnhanceDir(kind) {
 }
 function gpuEnhanceSite(kind) {
   return path.join(gpuEnhanceDir(kind), 'site-packages');
+}
+
+/** 只有这些包才从增强包取；其余（numpy / transformers / huggingface_hub …）一律用运行时的。
+ *
+ * ★ 为什么不能把整个 site-packages 塞进 PYTHONPATH（2026-11-12 实测）：
+ *   增强包里除了 torch 还顺手带了 numpy 2.4.6、transformers、huggingface_hub 0.36 等，
+ *   而 PYTHONPATH 的优先级高于运行时 site-packages —— 于是：
+ *     · MIROS 自带的 scipy 1.14.1 要求 numpy<2.3，被 2.4.6 顶掉后直接拒跑；
+ *     · muscriptor 依赖较新的 huggingface_hub，被 0.36 顶掉后行为不可预期。
+ *   这些包与「用 GPU 跑 torch」毫无关系，只暴露 torch 栈即可。 */
+const VIEW_PACKAGES = ['torch', 'torchaudio', 'torchvision', 'torchgen', 'functorch', 'onnxruntime'];
+
+function isViewPackage(name) {
+  const n = String(name).toLowerCase();
+  for (const p of VIEW_PACKAGES) {
+    if (n === p || n === p + '.libs') return true;
+    // dist-info：torch-2.9.1.dist-info / onnxruntime-1.28.0.dist-info …
+    if (n === p + '.dist-info' || n.indexOf(p + '-') === 0 && n.slice(-10) === '.dist-info') return true;
+  }
+  return false;
+}
+
+/** 给运行时用的「精简视图」：用目录联接（junction）只挂 torch 栈，不复制 GB 级文件。
+ *  视图建在增强包自己的目录里（<kind>/engine-view），重建时机由标记文件决定。 */
+function gpuEnhanceView(kind) {
+  const site = gpuEnhanceSite(kind);
+  if (!fs.existsSync(site)) return site;
+  const view = path.join(gpuEnhanceDir(kind), 'engine-view');
+  const stamp = path.join(view, '.fufumidi-view');
+  const want = 'v1|' + site;
+  try {
+    if (fs.existsSync(stamp) && fs.readFileSync(stamp, 'utf8').trim() === want) return view;
+  } catch (e) { /* 标记读不到就重建 */ }
+  try {
+    fs.rmSync(view, { recursive: true, force: true });
+    fs.mkdirSync(view, { recursive: true });
+    let linked = 0;
+    for (const name of fs.readdirSync(site)) {
+      if (!isViewPackage(name)) continue;
+      const src = path.join(site, name);
+      const dst = path.join(view, name);
+      let st;
+      try { st = fs.statSync(src); } catch (e) { continue; }
+      if (st.isDirectory()) fs.symlinkSync(src, dst, 'junction');
+      else fs.copyFileSync(src, dst);
+      linked++;
+    }
+    if (!linked) throw new Error('增强包里没有可用的 torch 栈');
+    fs.writeFileSync(stamp, want, 'utf8');
+    return view;
+  } catch (e) {
+    try { require('./log').write('WARN', 'gpu', '增强包精简视图构建失败，退回整目录（可能与运行时依赖冲突）：' + (e && e.message)); } catch (_) { /* 日志失败不影响返回 */ }
+    return site;
+  }
 }
 /** 读取增强包清单（安装时写入）。缺失或损坏返回 null。 */
 function readGpuManifest(kind) {
@@ -170,6 +224,7 @@ module.exports = {
   gpuEnhanceRoot,
   gpuEnhanceDir,
   gpuEnhanceSite,
+  gpuEnhanceView,
   readGpuManifest,
   installedGpuKinds,
   inferGpuKind,

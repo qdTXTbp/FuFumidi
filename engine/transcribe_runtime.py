@@ -347,6 +347,10 @@ def cpu_fallback_hint(runtime, info, pack_dirs=None, site=None):
         return None
     label = RUNTIME_LABELS.get(runtime, runtime or "运行时")
     packs = _pack_dirs() if pack_dirs is None else pack_dirs
+    # PYTHONPATH 也可能被子进程/测试塞进普通源码目录；只有真正的增强包目录
+    # （site-packages / engine-view）才算「已挂载」，否则会误报「包已挂载但 CUDA 不可用」。
+    packs = [p for p in packs
+             if os.path.basename(str(p).rstrip("\\/")).lower() in ("site-packages", "engine-view")]
     if not packs:
         return ("%s：未检测到 GPU 增强包，本次走 CPU（fp32）。"
                 "要提速请到「设置 → GPU 增强包」安装与当前 Python 版本匹配的 CUDA 包。" % label)
@@ -358,25 +362,84 @@ def cpu_fallback_hint(runtime, info, pack_dirs=None, site=None):
 
 
 def stub_wandb():
-    """给 wandb 打一个只含 Table 的轻量桩。
+    """给 wandb 打桩，并把 lightning 的 WandbLogger 换成不联网的 DummyLogger。
 
     YourMT3 系（含 MIROS）只在训练日志里用 wandb.Table，推理根本不需要它；
     但 import 链上会碰到，没有桩就真的去装 wandb（数百 MB）。
+
+    ★ 2026-11-12：只塞一个 ModuleType 不够 —— lightning 的 WandbLogger 会
+      `from wandb.sdk.lib import RunDisabled` / `from wandb.wandb_run import Run`，
+      而 ModuleType 不是包，报 `No module named 'wandb.sdk'; 'wandb' is not a package`，
+      MIROS 直接起不来。这里补齐子模块，并在导入上游之前把 WandbLogger 类整个
+      换成 DummyLogger 子类 —— 它的 experiment 是 _DummyExperiment，
+      `.config.update(...)` 之类调用全部安全地变成 no-op。
     """
-    if "wandb" in sys.modules:
-        return
-    import types
-    w = types.ModuleType("wandb")
+    if "wandb" not in sys.modules:
+        import types
+        w = types.ModuleType("wandb")
+        w.__path__ = []                     # 让它表现得像包，供 `import wandb.sdk` 使用
 
-    class _Table:
-        def __init__(self, *a, **k):
+        class _Table:
+            def __init__(self, *a, **k):
+                self.data = []
+
+            def add_data(self, *a, **k):
+                return None
+
+        class _Artifact:
+            def __init__(self, *a, **k):
+                pass
+
+        class _Run:
+            def __init__(self, *a, **k):
+                self.config = types.SimpleNamespace(update=lambda *a, **k: None)
+
+            def finish(self, *a, **k):
+                return None
+
+        w.Table = _Table
+        w.Artifact = _Artifact
+        w.Run = _Run
+        w.init = lambda *a, **k: _Run()
+        w.log = lambda *a, **k: None
+        w.finish = lambda *a, **k: None
+        w.run = None
+        sdk = types.ModuleType("wandb.sdk")
+        sdk.__path__ = []
+        lib = types.ModuleType("wandb.sdk.lib")
+        lib.__path__ = []
+        lib.RunDisabled = _Run
+        sdk.lib = lib
+        runmod = types.ModuleType("wandb.wandb_run")
+        runmod.Run = _Run
+        w.sdk = sdk
+        w.wandb_run = runmod
+        sys.modules["wandb"] = w
+        sys.modules["wandb.sdk"] = sdk
+        sys.modules["wandb.sdk.lib"] = lib
+        sys.modules["wandb.wandb_run"] = runmod
+
+    try:
+        import pytorch_lightning.loggers as _L
+        if getattr(_L, "_fufumidi_null_wandb", False):
+            return True
+        from pytorch_lightning.loggers import DummyLogger
+
+        class _NullWandbLogger(DummyLogger):
+            def __init__(self, *a, **k):
+                super().__init__()
+
+        _L.WandbLogger = _NullWandbLogger
+        _L._fufumidi_null_wandb = True
+        try:
+            import lightning.pytorch.loggers as _L2
+            _L2.WandbLogger = _NullWandbLogger
+            _L2._fufumidi_null_wandb = True
+        except Exception:  # noqa: BLE001  没有 lightning 包时只改 pytorch_lightning 就够了
             pass
-
-    w.Table = _Table
-    w.init = lambda *a, **k: None
-    w.log = lambda *a, **k: None
-    w.finish = lambda *a, **k: None
-    sys.modules["wandb"] = w
+        return True
+    except Exception:  # noqa: BLE001  没装 lightning（例如只用 MuScriptor）时不影响调用方
+        return False
 
 
 def patch_torchaudio_soundfile():

@@ -97,11 +97,18 @@ function pipAnywhere(args) {
 //   （它只 import，不校验身份）。现在改为：pip 装完从仓库内的补丁文件覆盖，
 //   并**用哈希双向校验**；上游一变就停下来报错，不盲目覆盖。
 const MUSCRIPTOR_UPSTREAM_SHA = '55f3c2239ebcfb68ab06158f46b97944501e922ddfe180073068ab3162be9171';
-const MUSCRIPTOR_PATCHED_SHA = '75df831bd2d0aa1e8c3af3e17751f31e89713ccacb56da91c8802079f79a2deb';
+// ★ 2026-11-12：这个哈希按「补丁文件的 LF 归一化内容」记录。
+//   原来记的是另一版补丁文件的哈希，且直接 copyFileSync 会把工作区的 CRLF 一起带进去，
+//   于是「刚打完就报哈希不符」，整个 3.12 运行时白装。现在写入前统一转 LF，
+//   结果与机器 core.autocrlf 无关。
+const MUSCRIPTOR_PATCHED_SHA = 'f3bbbc8555f5d9e5755435f913636f73f20464dfae1079b9a282d47cf14ee09d';
 const MUSCRIPTOR_PATCH_FILE = path.join(__dirname, '..', 'engine', 'patches', 'muscriptor-events-fufumidi.1.py');
 
 function sha256(p) {
-  return require('crypto').createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+  // 统一按 LF 计算：上游 sdist/工作区文件的行尾随 core.autocrlf 变化，
+  // 直接对原始字节取哈希会在不同机器上得到不同结果（实测踩到）。
+  const text = fs.readFileSync(p, 'utf8').replace(/\r\n/g, '\n');
+  return require('crypto').createHash('sha256').update(Buffer.from(text, 'utf8')).digest('hex');
 }
 
 function applyMuscriptorPatch() {
@@ -124,7 +131,10 @@ function applyMuscriptorPatch() {
     console.error('       → 上游可能已发新版。请人工确认补丁是否仍适用，不要盲目覆盖。');
     process.exit(1);
   }
-  fs.copyFileSync(MUSCRIPTOR_PATCH_FILE, target);
+  // 写入前统一成 LF：工作区受 core.autocrlf 影响是 CRLF，直接 copy 会让
+  // 「刚打完就报哈希不符」，且不同机器结果不一致。
+  const patchBuf = Buffer.from(fs.readFileSync(MUSCRIPTOR_PATCH_FILE, 'utf8').replace(/\r\n/g, '\n'), 'utf8');
+  fs.writeFileSync(target, patchBuf);
   const after = sha256(target);
   if (after !== MUSCRIPTOR_PATCHED_SHA) {
     console.error('[错误] 打完补丁哈希不符：' + after);
@@ -204,8 +214,13 @@ if (!checkOnly) {
   //   所以：主清单里剔掉 basic-pitch，再用 --no-deps 单独装它，
   //   它真正需要的运行时依赖由主清单与下面的补充项提供。
   const reqText = fs.readFileSync(reqFile, 'utf8');
+  // ★ transkun 也要单独处理（2026-11-12）：它依赖 ncls，而 ncls 在 Windows 上
+  //   **没有任何预编译轮子**，只能现编 —— 需要 MSVC Build Tools，干净构建机没有。
+  //   现有 3.11 运行时里同样没有 transkun（deps.py 的 transkun 组一直是 missing），
+  //   所以这里保持同一口径：主清单剔除，随后用 --no-deps 装 transkun 本体
+  //   （ncls 只被它的评估脚本用到，推理入口不 import）。
   const reqFiltered = reqText.split(/\r?\n/)
-    .filter(l => !/^\s*basic-pitch\b/i.test(l))
+    .filter(l => !/^\s*basic-pitch\b/i.test(l) && !/^\s*transkun\b/i.test(l))
     .join('\n');
   const reqTmp = path.join(require('os').tmpdir(), 'fufumidi-req312.txt');
   fs.writeFileSync(reqTmp, reqFiltered, 'utf8');
@@ -218,6 +233,8 @@ if (!checkOnly) {
     console.error('[错误] basic-pitch 安装失败');
     process.exit(1);
   }
+  console.log('    单独安装 transkun（--no-deps，绕开只有源码包的 ncls）');
+  pipAnywhere(['--no-deps', 'transkun==2.0.1']);
   // basic-pitch 真正需要的、主清单没覆盖的运行时依赖（--no-deps 装它就得自己补）
   // ★ resampy 是 basic-pitch 的依赖，--no-deps 装它就必须自己补上 ——
   //   漏了它，自检会报 `universal FAIL missing: resampy`，脚本据此拒绝写就绪标记，

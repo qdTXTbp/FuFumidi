@@ -109,12 +109,20 @@ def test_describe_torch_mentions_version_and_device():
     assert "torch 不可用" in err
 
 
-def test_cpu_fallback_hint_three_cases(monkeypatch):
+def test_cpu_fallback_hint_three_cases(monkeypatch, tmp_path):
     monkeypatch.delenv("PYTHONPATH", raising=False)
     no_pack = TR.cpu_fallback_hint("miros", {"torch": "2.14.1+cpu", "cuda_available": False})
     assert "未检测到 GPU 增强包" in no_pack and "GPU 增强包" in no_pack
 
+    # PYTHONPATH 里只有普通源码目录（测试/开发常见）时，不能误报「增强包已挂载」
     monkeypatch.setenv("PYTHONPATH", os.path.dirname(os.path.abspath(__file__)))
+    assert "未检测到 GPU 增强包" in TR.cpu_fallback_hint(
+        "miros", {"torch": "2.14.1+cpu", "cuda_available": False})
+
+    # 真正的增强包目录（site-packages）才算挂载
+    pack = tmp_path / "site-packages"
+    pack.mkdir()
+    monkeypatch.setenv("PYTHONPATH", str(pack))
     with_pack = TR.cpu_fallback_hint("miros", {"torch": "2.9.1+cu128", "cuda_available": False})
     assert "CUDA 不可用" in with_pack
 
