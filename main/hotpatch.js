@@ -194,7 +194,9 @@ function check(ctx) {
     state.lastCheck = new Date().toISOString();
     const finish = (result) => {
       state.lastError = result.ok === false ? (result.error || '') : '';
-      if (result.id && result.ok !== false) {
+      if (result.id && result.ok !== false && (result.status === 'applied' || result.status === 'replayed')) {
+        // 只有真正落盘的补丁才进 applied 列表 —— skipped（版本不符）不是已应用，
+        // 记进去会让设置页显示一条「没有备份、没有文件」的假条目。
         state.applied = state.applied.filter((a) => a.id !== result.id);
         state.applied.push({ id: result.id, at: new Date().toISOString(), files: (result.files || []).map((f) => f.path || f.rel) });
       }
