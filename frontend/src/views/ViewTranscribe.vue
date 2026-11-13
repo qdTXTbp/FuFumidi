@@ -33,6 +33,56 @@ const msSize = ref('medium');            // MuScriptor 规格：small | medium |
 // 6.4.8 回退时把这一项连同其它补丁一起删了，于是模型逐 5 秒块自由改判乐器，
 // 用户报「同一段旋律突然换音色、鼓点断断续续」——这里按 A/B 固化过的默认恢复。
 const msInstruments = ref('probe');
+/* ★ 2026-11-13 用户反馈「6.6.0 的限定乐器用不懂了」：旧界面要手打
+   drums,acoustic_piano 这类英文 ID，普通用户根本不知道有哪些合法组名；
+   而「清空（自动识别）」把值设成 'none' 会直接跳档、整个输入区收起来，
+   于是「清空重填」变成「只能用自动识别了」。改成中文点选 + 保留自由输入，
+   并把「清空」与「切回自动识别」拆成两个语义明确的按钮。 */
+// 中文标签复用 i18n 里已有的乐器名词表（三语齐全），不要另造一套。
+const MS_GROUPS = [
+  ['voice', '人声'],
+  ['drums', '鼓组'],
+  ['acoustic_piano', '钢琴'],
+  ['electric_piano', '电钢琴'],
+  ['chromatic_percussion', '色彩打击乐'],
+  ['organ', '风琴'],
+  ['acoustic_guitar', '原声吉他'],
+  ['clean_electric_guitar', '清音电吉他'],
+  ['distorted_electric_guitar', '失真电吉他'],
+  ['acoustic_bass', '原声贝斯'],
+  ['electric_bass', '电贝斯'],
+  ['violin', '小提琴'],
+  ['string_ensemble', '弦乐组'],
+  ['synth_lead', '合成主音'],
+  ['synth_pad', '合成铺底'],
+  ['flutes', '长笛'],
+  ['trumpet', '小号'],
+];
+// 官方 MT3_FULL_PLUS_GROUP_NAMES 全 35 组；无效名由引擎 _valid_instruments 过滤并写日志。
+const MS_GROUPS_ALL = [
+  'acoustic_piano', 'electric_piano', 'chromatic_percussion', 'organ',
+  'acoustic_guitar', 'clean_electric_guitar', 'distorted_electric_guitar',
+  'acoustic_bass', 'electric_bass', 'violin', 'viola', 'cello', 'contrabass',
+  'orchestral_harp', 'timpani', 'string_ensemble', 'synth_strings', 'voice',
+  'orchestra_hit', 'trumpet', 'trombone', 'tuba', 'french_horn', 'brass_section',
+  'soprano_and_alto_sax', 'tenor_sax', 'baritone_sax', 'oboe', 'english_horn',
+  'bassoon', 'clarinet', 'flutes', 'synth_lead', 'synth_pad', 'drums',
+];
+const msMoreGroups = ref(false);
+const msManual = computed(() => msInstruments.value !== 'probe' && msInstruments.value !== 'none');
+const msSelected = computed(() => msManual.value
+  ? String(msInstruments.value || '').split(',').map(s => s.trim()).filter(Boolean)
+  : []);
+function toggleMsGroup(id) {
+  const cur = msSelected.value.slice();
+  const i = cur.indexOf(id);
+  if (i >= 0) cur.splice(i, 1); else cur.push(id);
+  msInstruments.value = cur.join(',');
+}
+function msGroupLabel(id) {
+  const hit = MS_GROUPS.find(g => g[0] === id);
+  return hit ? t(hit[1]) : id;
+}
 // 官方解码方式：'greedy' = 官方 Quickstart 默认（贪心，结果可复现，保持不变）；
 // 'sample' = 官方 use_sampling=True + temperature=0.9。2026-11-10 A/B（NightTheater
 // 前 30s，medium/CPU）：采样档把「逐块漏鼓」的空块 2→0、镲占比 75%→70%，耗时相当；
@@ -1274,7 +1324,8 @@ function collectPresetParams() {
     if (umodel.value === 'muscriptor') {
       p.model_size = msSize.value;
       p.muscriptor_decode = msDecode.value;
-      if (msInstruments.value.trim()) p.muscriptor_instruments = msInstruments.value.trim();
+      // 必须始终显式写：漏了这个键，引擎与队列会把 None 当默认 'probe'（自动锁定）。
+      p.muscriptor_instruments = String(msInstruments.value || '').trim() || 'none';
     }
   } else if (mode.value === 'piano') {
     Object.assign(p, {
@@ -1526,7 +1577,10 @@ function collectParams() {
       // ★ 2026-11-10：加官方解码档位（默认 greedy，不改现有行为）。
       cfg.model_size = msSize.value;
       cfg.muscriptor_decode = msDecode.value;
-      if (msInstruments.value.trim()) cfg.muscriptor_instruments = msInstruments.value.trim();
+      // ★ 2026-11-13：始终显式传值。留空时若不传这个键，引擎会把 None 解释成
+      //   默认 'probe'（自动锁定），与界面「留空 = 官方自动识别」恰好相反 ——
+      //   用户点「手动限定」却什么都不填，跑出来仍是会挡掉人声的自动锁定。
+      cfg.muscriptor_instruments = String(msInstruments.value || '').trim() || 'none';
     }
   }
   // ④ 批 A：上面三个 if 之外，还有一批「引擎早就有、界面没入口」的选项。
@@ -2189,16 +2243,33 @@ onBeforeUnmount(() => {
           <div class="fu-ctl tr-pills">
             <button class="fu-ctl tr-pill" :class="{ active: msInstruments === 'probe' }" @click="msInstruments = 'probe'">{{ t('自动锁定（音色稳定 · 默认）') }}</button>
             <button class="fu-ctl tr-pill" :class="{ active: msInstruments === 'none' }" @click="msInstruments = 'none'">{{ t('不限定（官方自动识别）') }}</button>
-            <button class="fu-ctl tr-pill" :class="{ active: msInstruments !== 'probe' && msInstruments !== 'none' }" @click="msInstruments = ''">{{ t('手动限定') }}</button>
+            <button class="fu-ctl tr-pill" :class="{ active: msManual }" @click="msInstruments = ''; msMoreGroups = false">{{ t('手动限定（点选乐器）') }}</button>
           </div>
-          <input v-if="msInstruments !== 'probe' && msInstruments !== 'none'" class="text-input" v-model="msInstruments"
-                 :placeholder="t('限定乐器组（留空 = 官方自动识别），例：drums,acoustic_piano,electric_bass')">
-          <div v-if="msInstruments !== 'probe' && msInstruments !== 'none'" class="fu-ctl tr-pills">
-            <button class="fu-ctl tr-pill" @click="msInstruments = 'drums,acoustic_piano,acoustic_guitar,clean_electric_guitar,electric_bass,voice'">{{ t('常用编制 + 鼓') }}</button>
-            <button class="fu-ctl tr-pill" @click="msInstruments = 'drums,acoustic_piano'">{{ t('钢琴 + 鼓') }}</button>
-            <button class="fu-ctl tr-pill" @click="msInstruments = 'none'">{{ t('清空（自动识别）') }}</button>
-          </div>
-          <div class="tr-perf-hint">{{ t('官方硬约束：整曲锁定乐器组后不再逐 5 秒块改判，可压住跨块换音色、鼓点断续；A/B 实测音色切换 5→0、F1 0.49→0.77。代价是多跑约 1 分钟预分析（CPU 更久），且探测没听到的长尾乐器会被挡住，这类曲子可切「不限定」。') }}</div>
+          <template v-if="msManual">
+            <div class="fu-ctl tr-pills">
+              <button v-for="g in MS_GROUPS" :key="g[0]" class="fu-ctl tr-pill" :class="{ active: msSelected.includes(g[0]) }" :title="g[0]" @click="toggleMsGroup(g[0])">{{ t(g[1]) }}</button>
+            </div>
+            <div class="fu-ctl tr-pills">
+              <button class="fu-ctl tr-pill" @click="msMoreGroups = !msMoreGroups">{{ msMoreGroups ? t('收起更多乐器') : t('更多乐器（官方 35 组）') }}</button>
+              <button class="fu-ctl tr-pill" @click="msInstruments = ''">{{ t('清空所选') }}</button>
+              <button class="fu-ctl tr-pill" @click="msInstruments = 'none'">{{ t('切回自动识别') }}</button>
+            </div>
+            <div v-if="msMoreGroups" class="fu-ctl tr-pills">
+              <button v-for="id in MS_GROUPS_ALL" :key="id" class="fu-ctl tr-pill" :class="{ active: msSelected.includes(id) }" @click="toggleMsGroup(id)">{{ id }}</button>
+            </div>
+            <input class="text-input" v-model="msInstruments"
+                   :placeholder="t('限定乐器组（留空 = 官方自动识别），例：drums,acoustic_piano,electric_bass')">
+            <div v-if="msSelected.length" class="tr-perf-hint">{{ t('已选：') }}{{ msSelected.map(msGroupLabel).join('、') }}</div>
+            <div v-else class="tr-perf-hint tr-warn">{{ t('还没选乐器组：现在等同「不限定（官方自动识别）」。点上面的中文标签即可添加，带人声的歌请务必勾「人声」。') }}</div>
+            <div class="fu-ctl tr-pills">
+              <button class="fu-ctl tr-pill" @click="msInstruments = 'voice,drums,acoustic_piano,acoustic_guitar,clean_electric_guitar,electric_bass'">{{ t('人声 + 伴奏（带唱的歌）') }}</button>
+              <button class="fu-ctl tr-pill" @click="msInstruments = 'drums,acoustic_piano,acoustic_guitar,clean_electric_guitar,electric_bass,voice'">{{ t('常用编制 + 鼓') }}</button>
+              <button class="fu-ctl tr-pill" @click="msInstruments = 'drums,acoustic_piano'">{{ t('钢琴 + 鼓') }}</button>
+            </div>
+            <div class="tr-perf-hint">{{ t('官方硬约束：填了之后整首只允许这些乐器组，可压住跨块换音色、鼓组时有时无；名字用官方 ID（drums / acoustic_piano / voice / electric_bass …）。留空仍是官方自动识别，条件生成可能降质，请只选曲中确实有的乐器。') }}</div>
+          </template>
+          <div v-else-if="msInstruments === 'probe'" class="tr-perf-hint">{{ t('官方硬约束：整曲锁定乐器组后不再逐 5 秒块改判，可压住跨块换音色、鼓点断续；A/B 实测音色切换 5→0、F1 0.49→0.77。代价是多跑约 1 分钟预分析（CPU 更久），且探测没听到的长尾乐器会被挡住，这类曲子可切「不限定」。') }} {{ t('带人声的歌如果人声断断续续，多半是人声没被探测到：请切「不限定」，或用「手动限定」勾上「人声」。') }}</div>
+          <div v-else class="tr-perf-hint">{{ t('官方自动识别：模型逐 5 秒块自由判定乐器，人声与长尾乐器不会被挡住，但同一段旋律可能突然换音色。') }}</div>
         </div>
         <div v-if="umodel === 'muscriptor'" class="tr-ms-instruments">
           <div class="fu-ctl tr-pills">

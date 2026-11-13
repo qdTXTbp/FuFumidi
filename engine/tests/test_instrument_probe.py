@@ -124,6 +124,34 @@ def test_select_groups_empty():
     assert ip.select_groups([{}]) == ([], {})
 
 
+# ---------------------------------------------------------------- 人声回归（2026-11-13）
+# 用户实录：「自动识别倒是正常，就是人声识别不出来、断断续续的，背景音乐都是正常的」。
+# 根因是整曲硬约束把 voice 当长尾剪掉：探测窗偏向能量最高的伴奏段，
+# 人声音符数又远少于伴奏，一旦没进允许组，整首主旋律就被掩掉。
+
+def test_select_groups_always_keeps_voice_even_when_tiny():
+    keep, _t = ip.select_groups([{"acoustic_piano": 400, "voice": 2}], min_share=0.5)
+    assert "voice" in keep, keep
+    assert keep[0] == "acoustic_piano", keep      # 补齐必留组不能打乱原有排序
+
+
+def test_select_groups_must_groups_survive_cap():
+    win = {"voice": 1, "drums": 1}
+    win.update({("g%d" % i): 100 - i for i in range(10)})
+    keep, _t = ip.select_groups([win], min_share=0.0, min_notes=1, max_groups=3)
+    assert "voice" in keep and "drums" in keep, keep
+    assert len(keep) == 3, keep
+
+
+def test_probe_keeps_faint_voice(tmp_path):
+    wav = write_wav(tmp_path, seconds=90.0)
+    stub = StubModel([notes("acoustic_piano", 30) + notes("voice", 1),
+                      notes("acoustic_piano", 30),
+                      notes("acoustic_piano", 30)])
+    res = ip.probe(stub, wav, count=3, win=20.0)
+    assert "voice" in res["groups"], res
+
+
 # ---------------------------------------------------------------- 预分析（桩模型）
 
 def test_probe_uses_several_windows_and_returns_groups(tmp_path):

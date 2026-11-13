@@ -281,7 +281,8 @@ def _transcribe_kwargs(model, wav, params, log_cb):
         第三方包装 CLI 的 --instrument 就是它。2026-10-18 A/B（medium，30s 双音色）
         实测「整曲锁定」把音色切换 5 → 0、F1 0.4914 → 0.7692，峰值显存不变，
         代价约 +1s 预分析（GPU）。因此 **默认 probe**：先用同一模型在 3 段
-        20 秒代表窗上短推理，取并集锁定（drums 探测到就必留，见 instrument_probe）。
+        20 秒代表窗上短推理，取并集锁定（drums / voice 探测到就必留，
+        见 instrument_probe）。人声没被锁定的典型症状是「人声断续、伴奏正常」。
       · muscriptor_decode='sample' —— 官方 use_sampling=True + temperature=0.9。
         2026-11-10 A/B（NightTheater 前 30s，medium/CPU）：采样把「逐块整段漏鼓」
         的空块 2 → 0、镲占比 75% → 70%，耗时相当；代价是结果略有随机性。
@@ -335,6 +336,15 @@ def _transcribe_kwargs(model, wav, params, log_cb):
                 _log(log_cb, "[预分析] 扫描整曲代表片段，锁定乐器组（音色稳定）…")
                 r = _ip.probe(model, wav, log=lambda s: _log(log_cb, s))
                 groups = list(r.get("groups") or [])
+                # 双保险：只要预分析在任一段听到过人声/鼓，就必须进允许组。
+                # 老版 select_groups 会因音符数少或 max_groups 截断把它们筛掉，
+                # 而硬约束是整曲的 —— 漏掉 voice 等于用户整首主旋律消失。
+                heard = r.get("notes") or {}
+                for must in ("voice", "drums"):
+                    if heard.get(must) and must not in groups:
+                        groups.append(must)
+                        _log(log_cb, "[预分析] 补回必留乐器组：%s（探测听到过，"
+                             "避免整曲被掩掉）" % must)
                 if groups:
                     _log(log_cb, "[预分析] 整曲锁定：%s" % ", ".join(groups))
                 else:

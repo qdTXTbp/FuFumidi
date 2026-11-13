@@ -8,16 +8,20 @@
 
     python instrument_probe.py 歌曲.flac --json
 
-用途是**排查与调参**：转录结果里出现了奇怪乐器时，先用它看看模型到底听到了什么；
-也用来对照「限定乐器组」该勾哪几组。
+两个用途：
+  · 独立排查：转录结果里出现奇怪乐器时，先看看模型到底听到了什么；
+    也用来对照「限定乐器组」该勾哪几组。
+  · 转录默认档「自动锁定」：探测结果作为官方 `transcribe(instruments=...)` 的整曲硬约束
+    （见 engine_muscriptor.py `_transcribe_kwargs`）。6.4.8 曾整体回退时删掉，
+    6.4.9 按 A/B 结果恢复，并一直作为界面默认档。
 
-## 它不做什么（重要）
+## 边界（重要）
 
-它**不再**参与转录流水线。曾经有一档「自动识别」= 转录前跑这个探测、把结果作为整曲硬约束；
-实测收益只有"剪掉长尾杂音"（长笛/圆号/萨克斯那种为几个音冒出来的轨），
-而"同一段旋律隔几秒换一次音色"的真正原因是分块边界的 prelude_forcing
-（批量推理会关掉它，详见 engine_muscriptor.py 的说明）—— 预分析救不了那个问题，
-所以那一档已从界面移除，本模块改成独立工具保留。
+硬约束是**整曲**的：探测漏掉的乐器，整首都不会出现。人声（voice）的音符数常远少于
+伴奏，而选窗又偏向能量最高的片段（副歌 / 伴奏最响处），很容易被阈值筛掉 —— 一旦没进
+允许组，用户听到的就是「人声识别不出来、断断续续，背景音乐都正常」。因此 `ALWAYS_KEEP`
+把 voice 与 drums 一起列为"只要模型在任何一段听到就必留"，宁可多留一组，也不要把主旋律
+挡在门外。真的遇到人声断续时，转录页还可切「不限定」或在「手动限定」里勾上「人声」。
 """
 
 import json
@@ -27,7 +31,9 @@ PROBE_WINDOW = 20.0        # 每段探测时长（秒）
 PROBE_COUNT = 3            # 探测段数（前 / 中 / 后各一段）
 MIN_SHARE = 0.05           # 组时长占比低于此值 → 视为长尾丢掉
 MAX_GROUPS = 8             # 最多锁定几组
-ALWAYS_KEEP = ("drums",)   # 探测到就保留：鼓是节奏骨架，丢了整首歌会散
+# 出现即必留：鼓是节奏骨架；人声音符数常远少于伴奏，漏掉就是整首主旋律消失
+# （用户实录「人声识别不出来、断断续续，背景音乐都是正常的」）。
+ALWAYS_KEEP = ("drums", "voice")
 
 
 def _frame_rms(y, sr, win=1.0, hop=0.5):
@@ -148,8 +154,8 @@ def select_groups(per_window, min_notes=4, min_share=0.03, max_groups=MAX_GROUPS
 
     规则（偏保守：宁可多留一组，也不要把这首歌真的有的乐器挡在门外）：
       · 跨段累计音符数 >= max(min_notes, min_share × 总音符数) → 留下；
-      · 鼓只要出现过就留下（节奏骨架）；
-      · 最多 max_groups 组，按累计音符数排序。
+      · 鼓 / 人声只要出现过就留下，且**先占位**不被 max_groups 截断；
+      · 余下名额按累计音符数排序取前几个。
     """
     total = {}
     for win in per_window:
@@ -159,11 +165,19 @@ def select_groups(per_window, min_notes=4, min_share=0.03, max_groups=MAX_GROUPS
     if not all_notes:
         return [], {}
     thr = max(min_notes, min_share * all_notes)
-    keep = [k for k, v in sorted(total.items(), key=lambda x: -x[1]) if v >= thr]
+    keep = [k for k in sorted(total, key=lambda x: -total[x]) if total[k] >= thr]
+    # ★ 必留组往往音符数最少，若和普通组一起按音符数排序再 [:max_groups]，
+    #   它们反而最先被挤掉（老实现就是如此）。这里先补齐、再在截断时给它们留位，
+    #   同时保持"按音符数从多到少"的输出顺序（下游日志/测试依赖这个顺序）。
     for k in ALWAYS_KEEP:
         if k in total and k not in keep:
             keep.append(k)
-    keep = sorted(keep, key=lambda k: -total[k])[:max_groups]
+    if len(keep) > max_groups:
+        must = {k for k in ALWAYS_KEEP if k in keep}
+        fixed = [k for k in keep if k in must]
+        rest = [k for k in keep if k not in must][:max(0, max_groups - len(fixed))]
+        chosen = set(fixed + rest)
+        keep = [k for k in keep if k in chosen]
     return keep, {k: total[k] for k in sorted(total, key=lambda x: -total[x])}
 
 def probe(model, wav_path, log=None, count=PROBE_COUNT, win=PROBE_WINDOW,
@@ -212,6 +226,11 @@ def probe(model, wav_path, log=None, count=PROBE_COUNT, win=PROBE_WINDOW,
         say("[预分析] 3 段合计 %d 音：" % all_notes
             + " / ".join("%s %d音(%.0f%%)" % (k, total[k], total[k] / all_notes * 100) for k in keep))
         say("[预分析] 锁定乐器组：" + " / ".join(keep))
+        dropped = [k for k in sorted(total, key=lambda x: -total[x]) if k not in keep]
+        if dropped:
+            # 把「为什么这首歌的人声/长尾乐器不见了」直接写进日志，别让用户只能猜。
+            say("[预分析] 未锁定（探测音符太少或名额已满）：" + " / ".join(dropped)
+                + "；曲中确实有这些乐器时请切「不限定」，或在「手动限定」里勾上")
         return out
     except Exception as e:
         return {"groups": [], "reason": str(e)[:200]}
