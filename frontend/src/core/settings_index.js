@@ -19,7 +19,8 @@ export const SETTINGS_INDEX = [
 
   { id: 'engine_mode', tab: 'feature', label: '默认引擎模式', hint: '转录新音频时默认使用的识别引擎', aliases: ['识别引擎', 'basic_pitch', 'piano', 'demucs', '模型'] },
   { id: 'perf_mode', tab: 'feature', label: '默认性能模式', hint: '最高质量 / 均衡 / 低配省资源', aliases: ['性能', 'CPU', '省资源', 'perf'] },
-  { id: 'output_dir', tab: 'feature', label: '默认输出目录', hint: '转录结果的保存位置', aliases: ['保存目录', '导出目录', 'output', '路径'] },
+  { id: 'output_dir', tab: 'feature', label: '默认输出目录', hint: '转录 / 分离结果的保存位置', aliases: ['保存目录', '转录目录', 'output', '路径'] },
+  { id: 'export_dir', tab: 'feature', label: '导出默认目录', hint: 'MusicXML / MIDI / 图片 / 音频 / 视频保存框默认打开的文件夹', aliases: ['导出目录', 'XML', 'MusicXML', '批量导出', '下载文件夹', '保存目录', 'export'] },
   { id: 'expert_mode', tab: 'feature', label: '专家模式', hint: '显示 OMR / 翻唱 / GPU 等高级入口', aliases: ['高级', 'advanced', 'OMR', '翻唱', 'GPU'] },
   { id: 'ai_mode', tab: 'feature', label: 'AI 生成（可选）', hint: '本地生成命令；产物带 AI 标注（默认关）', aliases: ['ai', '生成', '人工智能', 'ace-step', '本地模型'] },
   { id: 'vst3_mode', tab: 'feature', label: 'VST3 离线渲染（可选）', hint: '自备 pedalboard 宿主与 .vst3 插件；不随包分发', aliases: ['vst', 'vst3', '插件', 'pedalboard', '插件宿主'] },

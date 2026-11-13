@@ -2,6 +2,7 @@
 // 主进程文件/对话框服务：原生选择器、目录扫描与二进制读写
 // ============================================================
 'use strict';
+const { saveDefaultPath } = require('./export-dir');
 
 function registerDialogsIpc({ ipcMain, dialog, path, fs, app, spawnEngine }) {
   // 原生对话框
@@ -57,8 +58,13 @@ function registerDialogsIpc({ ipcMain, dialog, path, fs, app, spawnEngine }) {
     });
     return r.canceled ? null : r.filePaths[0];
   });
-  ipcMain.handle('dialog:pickDirectory', async () => {
-    const r = await dialog.showOpenDialog({ properties: ['openDirectory'] });
+  // 选目录：调用方可给 defaultPath（已有目录），省得每次从「此电脑」重新点进去。
+  ipcMain.handle('dialog:pickDirectory', async (_e, opts) => {
+    const dp = (opts && opts.defaultPath) ? String(opts.defaultPath) : '';
+    const r = await dialog.showOpenDialog({
+      properties: ['openDirectory'],
+      ...(dp ? { defaultPath: dp } : {}),
+    });
     return r.canceled ? null : r.filePaths[0];
   });
   // 模型本地压缩包导入（.zip / .7z / .tar）
@@ -191,7 +197,9 @@ function registerDialogsIpc({ ipcMain, dialog, path, fs, app, spawnEngine }) {
           : [{ name: '文件', extensions: ['*'] }];
       const r = await dialog.showSaveDialog({
         title: '保存文件',
-        defaultPath: path.join(app.getPath('downloads'), name),
+        // ★ 不再是写死的 downloads：走「设置 → 功能 → 导出默认目录」。
+        //   MusicXML / MIDI / WAV 的保存框都经过这里，改一处全生效。
+        defaultPath: saveDefaultPath(app, path, name),
         filters,
       });
       if (r.canceled || !r.filePath) return { ok: false, canceled: true };

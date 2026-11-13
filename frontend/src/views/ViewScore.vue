@@ -17,6 +17,7 @@ import { parseMusicXMLToSong } from '../core/musicxml.js';
 import { songToAbc, jianpuData, tabData, detectSf, ABC_KEY_NAMES } from '../core/score.js';
 import { splitNoteAtBarlines } from '../core/musicxml_out.js';
 import { songToMusicXMLTrack, songToMusicXML, buildFullScore } from '../core/musicxml_out.js';
+import { openXmlBatch } from '../core/xml_batch_state.js';
 
 const mode = ref('staff');       // staff | score(总谱) | jianpu | guitar | bass
 const modeLabel = computed(() => ({ staff: t('五线谱'), score: t('总谱'), jianpu: t('简谱'), guitar: t('吉他六线谱'), bass: t('贝斯四线谱') }[mode.value] || ''));
@@ -898,6 +899,7 @@ onBeforeUnmount(() => {
         <span class="score-sep"></span>
         <button class="btn sm" @click="importMusicXML" :disabled="midiBusy" :title="t('导入 MusicXML 文件')"><Icon name="import" :size="14" />{{ t('导入') }}</button>
         <button class="btn sm" @click="exportMusicXML" :disabled="!song" :title="t('导出 MusicXML（整份总谱，每个声部一条 part）')"><Icon name="save" :size="14" />{{ t('XML') }}</button>
+        <button class="btn sm" @click="openXmlBatch([state.currentId])" :disabled="!state.songs.length" :title="t('批量导出 MusicXML（从曲库多选）')"><Icon name="save" :size="14" />{{ t('批量 XML') }}</button>
         <button class="btn sm" @click="exportPartMusicXML" :disabled="!song" :title="t('导出当前声部的 MusicXML 分谱')"><Icon name="save" :size="14" />{{ t('分谱') }}</button>
         <button class="btn sm" @click="exportStaffPng" :disabled="!isStaffLike || exporting" :title="mode === 'score' ? t('导出总谱 PNG') : ''"><Icon name="save" :size="14" />{{ t('PNG') }}</button>
         <button class="btn sm" @click="openScoreSplit" :disabled="!isStaffLike || !song" :title="t('分屏查看乐谱并点击定位')"><Icon name="viz" :size="14" />{{ t('分屏') }}</button>

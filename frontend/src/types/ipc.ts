@@ -278,6 +278,8 @@ export interface Settings {
   engine_path?: string;
   engine_mode?: EngineMode;
   output_dir?: string;
+  /** 导出文件保存对话框的默认目录；空 = 系统下载目录（与 output_dir 的转录产物无关） */
+  'export.default_dir'?: string;
   guide_done?: boolean;
   advanced_mode?: boolean;
   custom_wallpaper?: string;
@@ -1106,7 +1108,8 @@ export interface FuBridge {
        于是 app.ts 里两处调用报 TS2339 —— 类型漏一个成员 = 调用方永远"看不见"这个能力。 */
   pickCover(): Promise<{ ok?: boolean; canceled?: boolean; dataUrl?: string; error?: string }>;
   pickFile(opts: any): Promise<string | null>;
-  pickDirectory(): Promise<string | null>;
+  /** 选目录；defaultPath 可指定对话框初始位置（省略则从系统默认位置开始） */
+  pickDirectory(opts?: { defaultPath?: string }): Promise<string | null>;
   readSoundFont(p: string): Promise<Uint8Array | null>;
   soundfonts: { list(): Promise<SoundFontItem[]> };
   pickMusicXML(): Promise<string | null>;
@@ -1140,6 +1143,8 @@ export interface FuBridge {
   listMidiFiles(dir: string): Promise<string[]>;
   readBinary(p: string): Promise<Uint8Array | null>;
   saveBinary(opts: { name: string; data: any }): Promise<GeneralResult>;
+  /** 直接写入指定绝对路径，不弹保存框（批量导出用） */
+  writeBinary(p: string, data: any): Promise<GeneralResult>;
   openOutput(p: string): Promise<GeneralResult>;
   utauExportVoicebank(opts: { dir: string; files: { name: string; data: string }[] }): Promise<GeneralResult>;
   utauExportVoicebankZip(opts: { files: { name: string; data: string }[] }): Promise<GeneralResult & { canceled?: boolean; path?: string; count?: number }>;

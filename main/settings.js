@@ -17,7 +17,12 @@ const DEFAULT_SETTINGS = {
   perf_mode: 'quality',
   engine_path: '',
   engine_mode: 'universal',
-  output_dir: '',
+  output_dir: '',           // 转录 / 分离结果的保存位置（与导出对话框无关）
+  /* 导出文件（MusicXML / MIDI / PNG / PDF / 音频 / 视频）保存对话框的默认目录。
+     留空 = 系统下载目录（旧行为）。只影响「默认打开哪个文件夹」，用户仍可在框里改。
+     与 output_dir 分开：转录产物通常是批量、无人值守落盘；导出是每次都要确认的手工操作，
+     两者用户常想放不同地方（B 站 2026-11-09 反馈）。 */
+  'export.default_dir': '',
   guide_done: false,
   advanced_mode: false,
   /* P2-6 AI 生成（可选、默认关）：本地生成命令由用户自备；

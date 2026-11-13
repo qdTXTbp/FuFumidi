@@ -11,6 +11,7 @@ import { cleanTags, addTag, removeTagAt, tagSummary } from '../core/tags.js';
 import { getAppVersion } from '../core/version.js';
 import { fmtTime } from '../core/util.js';
 import { fitMenu } from '../core/menu.js';
+import { openXmlBatch } from '../core/xml_batch_state.js';
 
 const app = useAppStore();
 const state = app;
@@ -949,6 +950,8 @@ const showAuth = ref(false);
           <option v-for="pl in playlist.playlists" :key="pl.id" :value="pl.id">{{ pl.name }}</option>
         </select>
         <button class="btn sm" @click="batchFavorite" :disabled="!playlist.batchSelection.length">{{ allSelectedFav ? t('取消收藏') : t('收藏') }}</button>
+        <!-- 批量导出 MusicXML：把勾选的曲目一次写成多个 .musicxml -->
+        <button class="btn sm" @click="openXmlBatch(playlist.batchSelection)" :disabled="!playlist.batchSelection.length" :title="t('批量导出 MusicXML（从曲库多选）')">{{ t('导出 XML') }}</button>
         <!-- 移除：仅解除与当前歌单的归入关系（智能筛选视图下不适用） -->
         <button v-if="!isVirtualView" class="btn sm" @click="batchRemove" :disabled="!playlist.batchSelection.length">{{ t('移除') }}</button>
         <!-- 删除：从全部曲目与所有歌单移除，并删除本地 MIDI 文件 -->

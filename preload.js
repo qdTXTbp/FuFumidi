@@ -94,7 +94,7 @@ contextBridge.exposeInMainWorld('fuBridge', {
   listAudioFiles: (dir) => ipcRenderer.invoke('dir:listAudioFiles', dir),
   pickImage: () => ipcRenderer.invoke('dialog:pickImage'),
   pickFile: (opts) => ipcRenderer.invoke('dialog:pickFile', opts),
-  pickDirectory: () => ipcRenderer.invoke('dialog:pickDirectory'),
+  pickDirectory: (opts) => ipcRenderer.invoke('dialog:pickDirectory', opts),
   pickSoundFont: null,   // 已移除外部 SF2/SF3 加载：使用内置音源列表 soundfonts.list()
   readSoundFont: (p) => ipcRenderer.invoke('file:readSoundFont', p),
   soundfonts: { list: () => ipcRenderer.invoke('soundfont:list') },

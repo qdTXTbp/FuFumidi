@@ -136,7 +136,7 @@ const form = reactive({
   theme: 'fufu', accent: '', mode: 'light',
   font_size: 'standard', density: 'comfortable', ui_scale: 1, lang: 'zh',
   engine_path: '', engine_mode: 'universal', perf_mode: 'quality', batch_concurrency: 'auto',
-  output_dir: '', name_rule: '', watch_dir: '', watch_enabled: false, file_assoc: true,
+  output_dir: '', export_dir: '', name_rule: '', watch_dir: '', watch_enabled: false, file_assoc: true,
   advanced_mode: false,   // P1-12 专家模式（默认关 = 普通模式，隐藏 OMR/翻唱/GPU 入口）
   ai_enabled: false,      // P2-6 AI 生成（可选、默认关；仅专家模式可见）
   ai_provider_cmd: '',    // 用户自备的本地生成命令（不内置模型/不联网）
@@ -224,6 +224,7 @@ async function load() {
   form.perf_mode = s.perf_mode || 'quality';
   form.batch_concurrency = s.batch_concurrency || 'auto';
   form.output_dir = s.output_dir || '';
+  form.export_dir = s['export.default_dir'] || '';
   form.name_rule = s.name_rule || '{name}_{engine}_{date}';
   form.watch_dir = s.watch_dir || '';
   form.watch_enabled = !!s.watch_enabled;
@@ -1061,7 +1062,7 @@ watch(tab, (v) => { if (v === 'gpu') gpuLoadPackages(); }, { immediate: true });
 async function pickDir(key) {
   if (!bridge || !bridge.pickDirectory) return;
   try {
-    const p = await bridge.pickDirectory();
+    const p = await bridge.pickDirectory(form[key] ? { defaultPath: form[key] } : undefined);
     if (p) form[key] = p;
   } catch (e) {}
 }
@@ -1249,7 +1250,7 @@ async function apply() {
     engine_path: form.engine_path, engine_mode: form.engine_mode,
     perf_mode: form.perf_mode, batch_concurrency: form.batch_concurrency,
     batch_concurrency_manual: form.batch_concurrency !== 'auto',
-    output_dir: form.output_dir, name_rule: form.name_rule,
+    output_dir: form.output_dir, 'export.default_dir': form.export_dir, name_rule: form.name_rule,
     watch_dir: form.watch_dir, watch_enabled: form.watch_enabled,
     file_assoc: form.file_assoc, advanced_mode: form.advanced_mode,
     'ai.enabled': form.ai_enabled, 'ai.provider_cmd': form.ai_provider_cmd,
@@ -1559,14 +1560,27 @@ onBeforeUnmount(() => { try { offWatch && offWatch(); } catch (e) {}
               <input v-model="form.ai_provider_cmd" class="ov-input mono" style="width:240px" :placeholder="t('本地命令（可选）')" :aria-label="t('本地命令（可选）')" data-guide="ai-generate-cmd" />
             </div>
           </div>
-          <div class="field-row">
+          <div class="field-row" data-setting="output_dir">
             <div>
               <div class="fr-label">{{ t('默认输出目录') }}</div>
-              <div class="fr-hint">{{ t('转录结果的保存位置') }}</div>
+              <div class="fr-hint">{{ t('转录结果的保存位置（不影响导出对话框）') }}</div>
             </div>
             <div class="fr-ctl">
               <input v-model="form.output_dir" class="ov-input mono" style="width:240px" :placeholder="t('留空 = 与输入文件同目录')" :aria-label="t('默认输出目录')" />
               <button class="btn sm" @click="pickDir('output_dir')">{{ t('浏览') }}</button>
+            </div>
+          </div>
+          <!-- 导出对话框默认目录：以前所有保存框都写死 app.getPath('downloads')，
+               用户批量导出 XML 时每次都要重新选文件夹（B 站 2026-11-09 反馈）。 -->
+          <div class="field-row" data-setting="export_dir">
+            <div>
+              <div class="fr-label">{{ t('导出默认目录') }}</div>
+              <div class="fr-hint">{{ t('导出 MusicXML / MIDI / 图片、音频时，保存对话框默认打开的文件夹；留空 = 系统下载目录') }}</div>
+            </div>
+            <div class="fr-ctl">
+              <input v-model="form.export_dir" class="ov-input mono" style="width:240px" :placeholder="t('留空 = 系统下载目录')" :aria-label="t('导出默认目录')" />
+              <button class="btn sm" @click="pickDir('export_dir')">{{ t('浏览') }}</button>
+              <button class="btn sm ghost" @click="form.export_dir = ''">{{ t('清空') }}</button>
             </div>
           </div>
           <div class="field-row">

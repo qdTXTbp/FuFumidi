@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const Paths = require('./paths');
 const { safeExtractAllTo } = require('./zip-safe');
 const createFastDownload = require('./fast-download');
+const { exportDefaultDir } = require('./export-dir');
 // 直接 require 而不是走 `registerUtauIpc` 的入参：本模块的注册参数里没有 readSettings，
 // 而引擎选择要读设置。Node 模块缓存保证拿到的是同一个 settings 单例。
 const { readSettings } = require('./settings');
@@ -226,7 +227,7 @@ function registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, ne
     try {
       const { files } = opts || {};
       if (!Array.isArray(files) || !files.length) return { ok: false, error: '参数错误' };
-      const defaultDir = app.getPath('downloads') || os.homedir();
+      const defaultDir = exportDefaultDir(app) || os.homedir();
       const r = await dialog.showSaveDialog({
         title: '导出声库压缩包',
         defaultPath: path.join(defaultDir, 'voicebank.zip'),

@@ -3,6 +3,7 @@
 // ============================================================
 'use strict';
 const Paths = require('./paths');
+const { exportDefaultDir } = require('./export-dir');
 
 /** 变谱的按页缓存目录会随每次整批跑增长（每页一份解析 JSON）—— 只留最近 8 个，其余删掉。
  *  正在被引用的目录不会被删（重试发生在同一次会话里，8 个足够覆盖）。 */
@@ -25,7 +26,7 @@ function registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEn
       const win = BrowserWindow.fromWebContents(evt.sender);
       const save = await dialog.showSaveDialog({
         title: '导出乐谱 PNG 分页包',
-        defaultPath: path.join(app.getPath('downloads'), (opts.name || 'score') + '.zip'),
+        defaultPath: path.join(exportDefaultDir(app), (opts.name || 'score') + '.zip'),
         filters: [{ name: 'ZIP', extensions: ['zip'] }],
       });
       if (save.canceled || !save.filePath) return { ok: false, canceled: true };
@@ -53,7 +54,7 @@ function registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEn
       const win = BrowserWindow.fromWebContents(evt.sender);
       const r = await dialog.showSaveDialog({
         title: '导出乐谱 PDF',
-        defaultPath: path.join(app.getPath('downloads'), 'score.pdf'),
+        defaultPath: path.join(exportDefaultDir(app), 'score.pdf'),
         filters: [{ name: 'PDF', extensions: ['pdf'] }],
       });
       if (r.canceled || !r.filePath) return { ok: false, canceled: true };
@@ -119,7 +120,7 @@ function registerScoreIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEn
       if (!pages.length) return { ok: false, error: '没有可导出的乐谱页' };
       const r = await dialog.showSaveDialog({
         title: '导出乐谱 PDF',
-        defaultPath: path.join(app.getPath('downloads'), (opts.name || 'score') + '.pdf'),
+        defaultPath: path.join(exportDefaultDir(app), (opts.name || 'score') + '.pdf'),
         filters: [{ name: 'PDF', extensions: ['pdf'] }],
       });
       if (r.canceled || !r.filePath) return { ok: false, canceled: true };

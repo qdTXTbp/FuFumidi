@@ -11,6 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const AdmZip = require('adm-zip');
+const { exportDefaultDir } = require('./export-dir');
 
 const MAX_BYTES = 2 * 1024 * 1024 * 1024;   // 2GB 上限（3 小时 24bit 立体声也够）
 
@@ -98,7 +99,7 @@ function registerExportIpc({ ipcMain, dialog, app, path: nodePath, center } = {}
       const ext = String(p.ext || (p.format === 'float32' ? 'wav' : 'wav')).replace(/^\./, '');
       let target = p.targetPath ? String(p.targetPath) : '';
       if (!target) {
-        const downloads = app ? app.getPath('downloads') : process.cwd();
+        const downloads = (app && exportDefaultDir(app)) || process.cwd();
         const def = nodePath ? nodePath.join(downloads, sanitizeName(p.name, ext)) : sanitizeName(p.name, ext);
         const r = await dialog.showSaveDialog({
           title: '导出音频',
@@ -159,7 +160,7 @@ function registerExportIpc({ ipcMain, dialog, app, path: nodePath, center } = {}
       const suggested = sanitizeName(p.suggestedName || 'stems', 'zip');
       let target = process.env.FUFUMIDI_E2E === '1' && p.targetPath ? String(p.targetPath) : '';
       if (!target) {
-        const downloads = app ? app.getPath('downloads') : process.cwd();
+        const downloads = (app && exportDefaultDir(app)) || process.cwd();
         const def = nodePath ? nodePath.join(downloads, suggested) : suggested;
         const r = await dialog.showSaveDialog({
           title: '分轨打包导出',

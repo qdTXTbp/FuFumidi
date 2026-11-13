@@ -11,6 +11,7 @@
 // ============================================================
 'use strict';
 const Paths = require('./paths');
+const { exportDefaultDir } = require('./export-dir');
 
 function registerVideoIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEngineInline, parsePyJson }) {
   /** 导出视频的默认文件名 —— **用歌曲名**（渲染进程把曲名一起传过来）。
@@ -106,7 +107,7 @@ function registerVideoIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEn
         const save = await dialog.showSaveDialog(win || undefined, {
           title: '导出视频 MP4',
           // ★ 默认文件名 = 歌曲名（opts.name 由渲染进程带上），例如「饿狼传说-张学友.mp4」
-          defaultPath: path.join(app.getPath('downloads'), safeVideoBase(opts.name) + '.mp4'),
+          defaultPath: path.join(exportDefaultDir(app), safeVideoBase(opts.name) + '.mp4'),
           filters: [{ name: 'MP4 视频', extensions: ['mp4'] }],
         });
         if (save.canceled || !save.filePath) { cleanup(); return { ok: false, canceled: true }; }
@@ -172,7 +173,7 @@ function registerVideoIpc({ ipcMain, dialog, BrowserWindow, app, path, fs, runEn
       const win = BrowserWindow.fromWebContents(evt.sender);
       const save = await dialog.showSaveDialog(win || undefined, {
         title: '导出视频 MP4',
-        defaultPath: path.join(app.getPath('downloads'), safeVideoBase(opts.name) + '.mp4'),
+        defaultPath: path.join(exportDefaultDir(app), safeVideoBase(opts.name) + '.mp4'),
         filters: [{ name: 'MP4 视频', extensions: ['mp4'] }],
       });
       if (save.canceled || !save.filePath) return { ok: false, canceled: true };
