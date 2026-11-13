@@ -10,9 +10,9 @@ using System.Threading;
 class Updater {
   const string Api = "https://api.github.com/repos/qdTXTbp/FuFumidi/releases?per_page=30";
   const string CnbBase = "https://cnb.cool/FuFuCloud-mirror/FuFuMIDI/-/releases/download/";
-  const string FallbackTag = "v6.5.0-alpha.3";
-  const string FallbackName = "FuFumidi_6.5.0-alpha.3_x64-setup.exe";
-  const long FallbackSize = 251905251;
+  const string FallbackTag = "v6.5.0-alpha.4";
+  const string FallbackName = "FuFumidi_6.5.0-alpha.4_x64-setup.exe";
+  const long FallbackSize = 251906659;
   static bool dryRun = false;
 
   class Rel { public string Tag; public string Name; public long Size; public string Url; }
@@ -167,8 +167,13 @@ class Updater {
   }
 
   static void StartApp(string dir) {
-    try { Process.Start(Path.Combine(dir, "FuFumidi.exe")); }
-    catch (Exception e) { Log("start failed: " + e.Message); }
+    try {
+      // Tauri 点击更新时主进程会先 app.exit(0)；等旧进程完全退出再拉起，否则单实例插件会把新进程吞掉。
+      foreach (Process old in Process.GetProcessesByName("FuFumidi")) {
+        try { if (!old.WaitForExit(15000)) { try { old.Kill(); } catch {} } } catch {}
+      }
+      Process.Start(Path.Combine(dir, "FuFumidi.exe"));
+    } catch (Exception e) { Log("start failed: " + e.Message); }
   }
 
   static int Main(string[] args) {
@@ -177,7 +182,11 @@ class Updater {
       dryRun = Has(args, "--dry-run");
       string dir = Arg(args, "-D");
       if (String.IsNullOrEmpty(dir)) dir = AppDomain.CurrentDomain.BaseDirectory;
-      bool noStart = Has(args, "--no-start") || Has(args, "-O");
+      // Tauri 的 launch_updater 传入 -I -O：旧参数 -O 表示「不启动」，但 Tauri 侧没有可靠的守护进程，
+      // 若这里也不启动，用户点更新后应用就直接消失。识别 -I+-O 为「Tauri 宿主模式」，由更新器负责重启。
+      bool tauriHost = Has(args, "-I") && Has(args, "-O");
+      bool noStart = (Has(args, "--no-start") || Has(args, "-O")) && !tauriHost;
+      if (tauriHost) Log("tauri host mode: updater will restart app");
       string cur = VersionOf(dir);
       Log("current=" + cur + " dir=" + dir + " dry=" + dryRun);
 

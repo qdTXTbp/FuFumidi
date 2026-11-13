@@ -1962,12 +1962,10 @@ fn launch_updater(app: AppHandle, channel: Option<String>) -> serde_json::Value 
         #[cfg(target_os = "windows")]
         {
             let source = if channel.as_deref() == Some("beta") { "cnb-beta" } else { "cnb" };
-            let spawn = Command::new(&updater).args(["-I", "-O", "-D", &dir.display().to_string(), "--source", source]).creation_flags(0x00000008 | 0x08000000).spawn();
+            // 不再传 -O：由更新器在检查/安装完成后等旧进程退出并自行重启应用。
+            // 旧实现靠一个 PowerShell 守护重启，实测点击更新后主进程退出、守护没有拉起应用，表现为“崩溃退出”。
+            let spawn = Command::new(&updater).args(["-I", "-D", &dir.display().to_string(), "--source", source]).creation_flags(0x00000008 | 0x08000000).spawn();
             if let Err(e) = spawn { return serde_json::json!({ "ok": false, "error": e.to_string() }); }
-            // 更新器替换的是正在运行的 exe：先起一个独立守护，等更新器退出后重启应用，再退出当前进程。
-            let main_exe = dir.join("FuFumidi.exe");
-            let script = format!("Wait-Process -Name FuFumidi.update -Timeout 600 -ErrorAction SilentlyContinue; Start-Sleep -Seconds 3; Start-Process -FilePath '{}' -WorkingDirectory '{}'", main_exe.display(), dir.display());
-            let _ = Command::new("powershell").args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script]).creation_flags(0x00000008 | 0x08000000).spawn();
             tauri_log("updater-launched; exiting for replacement");
             app.exit(0);
             return serde_json::json!({ "ok": true, "manual": false, "updater": updater.display().to_string() });

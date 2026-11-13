@@ -4,6 +4,10 @@
 import { cmpVersion } from './version.js';
 
 const CHANGELOG = {
+  '6.5.0-alpha.4': [
+    '修复点击自动更新后应用直接退出：更新器识别 Tauri 宿主模式，检查/安装完成后自行等待旧进程退出并重启应用。',
+    '热更新通道规则写入仓库约定。'
+  ],
   // 6.5.0-alpha.3：S6 收尾 —— 插件 JS 宿主、DiffSinger 声库/组件、资源下载实测。
   '6.5.0-alpha.3': [
     '插件 · Tauri 端补齐 JavaScript 插件宿主：CommonJS 入口、命令注册、事件、设置、引擎调用与界面脚本注入，插件中心安装后即可启用。',
