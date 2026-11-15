@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 // 把 release/publish-6.4.4/ 的资产发布到 CNB release tag v6.4.4（make_latest）。
-// 复用 cnb-mirror-releases.js 的 API 口径（token 在该文件与 git remote 里）。
+// 用法：CNB_TOKEN=<token> node scripts/publish-6.4.4-cnb.js [文件名...]；凭据只从环境变量读取，禁止写死。
 'use strict';
 const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
-const TOKEN = '1k116d2fIemvN8dfht2OAJlHJcL';
+const TOKEN = process.env.CNB_TOKEN;
+if (!TOKEN) { console.error("缺少 CNB_TOKEN 环境变量"); process.exit(1); }
 const CNB_REPO = 'FuFuCloud-mirror/FuFuMIDI';
 const CNB_API = 'https://api.cnb.cool';
 const TAG = 'v6.4.4';
