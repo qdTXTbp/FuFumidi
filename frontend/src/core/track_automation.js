@@ -239,18 +239,26 @@ export function secToBeat(sec, tempoMap, fallbackBpm) {
  * @param {number} startSec 窗口起点（**工程时间**，秒）
  * @param {number} endSec   窗口终点
  * @param {{beat:number,bpm:number}[]} [tempoMap]  多点变速（给了就沿段换算 sec→beat）
+ * @param {(beat:number)=>number|null} [override]
+ *   可选的逐拍覆盖（automation clip 用）：返回有限数值时优先于曲线采样，
+ *   返回 null 时回落到 `points`。保留在这里是为了让 dB→线性、tempoMap 换算
+ *   仍然只有一份实现，不在 clip 侧再抄一遍。
  */
-export function envelopeFrom(points, bpm, startSec, endSec, steps, abbr, tempoMap) {
+export function envelopeFrom(points, bpm, startSec, endSec, steps, abbr, tempoMap, override) {
   const n = Math.max(2, Math.floor(num(steps, 256)));
   const arr = new Float32Array(n);
   const bpm2 = num(bpm, 120) > 0 ? num(bpm, 120) : 120;
   const a = Math.max(0, num(startSec, 0));
   const b = Math.max(a + 0.01, num(endSec, 0));
   const def = defaultFor(abbr);
+  const hasOverride = typeof override === 'function';
   for (let i = 0; i < n; i++) {
     const sec = a + (i / (n - 1)) * (b - a);
     const beat = secToBeat(sec, tempoMap, bpm2);
-    const v = sampleAt(points, beat, def);
+    let v = hasOverride ? override(beat) : null;
+    if (v === null || v === undefined || !Number.isFinite(Number(v))) {
+      v = sampleAt(points, beat, def);
+    }
     arr[i] = abbr === 'VOL' ? Math.pow(10, clamp(v, -60, 6) / 20) : v;
   }
   return arr;

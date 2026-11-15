@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>FuFumidi</title>
+<style>
+  /* ============================================================
+     启动加载页（Electron splash）
+     · 纯色：不使用任何渐变
+     · 连续曲率圆角：corner-shape: squircle
+     · 进度 / 阶段由主进程通过 preload-splash.js 推送
+     · 加载完成的节奏由主进程控制：100% 后停顿，再由这里做弹簧扩展、主进程淡出窗口
+     ============================================================ */
+  :root {
+    --bg: #0a0f18;
+    --line: #1b2536;
+    --grid: #141c2a;
+    --ink: #e9ebef;
+    --muted: #7d8a9f;
+    --accent: #5b9cf8;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    /* 不透明深色底：避免透明窗口在部分显卡/远程桌面上闪烁或崩溃 */
+    background-color: #070b12;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='64' height='64'%3E%3Cpath d='M64 0H0v64' fill='none' stroke='%23101927' stroke-width='1'/%3E%3C/svg%3E");
+    overflow: hidden;
+    font: 14px/1.6 "Inter", "HarmonyOS Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+  }
+
+  .card {
+    position: fixed; left: 50%; top: 50%;
+    width: 520px; height: 286px; margin: 0;
+    transform: translate(-50%, -50%);
+    background-color: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 30px;
+    corner-shape: squircle;
+    overflow: hidden;
+    will-change: width, height, border-radius, opacity;
+    transition: opacity .18s ease-out;
+  }
+  .card::before {
+    content: "";
+    position: absolute; inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='52' height='52'%3E%3Cpath d='M52 0H0v52' fill='none' stroke='%23141c2a' stroke-width='1'/%3E%3C/svg%3E");
+    opacity: 1;
+    transition: opacity .3s ease-out;
+  }
+
+  .inner {
+    position: absolute; left: 50%; top: 50%;
+    width: 520px; height: 286px; margin: -143px 0 0 -260px;
+    padding: 40px 38px;
+    display: flex; align-items: center; gap: 26px;
+    transition: opacity .18s ease-out;
+  }
+
+  .logo-box {
+    flex: none; width: 112px; height: 112px;
+    display: grid; place-items: center;
+    border-radius: 28px; corner-shape: squircle;
+    background: #101725;
+    border: 1px solid #1f2b3e;
+    box-shadow: 0 12px 30px rgba(0, 0, 0, .35);
+  }
+  .logo-box img {
+    width: 96px; height: 96px; display: block;
+    border-radius: 24px; corner-shape: squircle;
+    animation: logoFloat 3.6s ease-in-out infinite alternate;
+  }
+  @keyframes logoFloat { from { transform: translateY(0); } to { transform: translateY(-4px); } }
+
+  .copy { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  h1 { margin: 0; font-size: 31px; font-weight: 760; letter-spacing: -.02em; line-height: 1.1; color: var(--ink); }
+  .eyebrow {
+    margin-top: 7px;
+    font: 600 9.5px/1.6 "JetBrains Mono", Consolas, monospace;
+    letter-spacing: .24em;
+    color: var(--muted);
+  }
+  .status-line {
+    display: flex; align-items: center; gap: 9px;
+    margin-top: 26px; min-width: 0;
+    font-size: 12px; color: var(--ink);
+    white-space: nowrap; overflow: hidden;
+  }
+  #statusText { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .dots { display: inline-flex; gap: 4px; flex: none; }
+  .dots i {
+    width: 5px; height: 5px; border-radius: 50%; background: #2a3648;
+    transition: background .28s ease-out, transform .28s cubic-bezier(.22, 1.16, .34, 1);
+  }
+  .dots i.on { background: var(--accent); }
+  .dots i.active { animation: dotPulse 1.1s ease-in-out infinite; }
+  @keyframes dotPulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(.72); opacity: .55; } }
+
+  .track {
+    position: relative; height: 2px; margin-top: 13px;
+    background: #1a2434; border-radius: 2px; overflow: hidden;
+  }
+  .track i {
+    position: absolute; left: 0; top: 0; bottom: 0; width: 0%;
+    background: var(--accent); border-radius: 2px;
+    transition: width .55s cubic-bezier(.22, 1, .36, 1);
+  }
+  .foot {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-top: 13px;
+    font: 500 9.5px/1.5 "JetBrains Mono", Consolas, monospace;
+    letter-spacing: .1em; color: #5b6a80;
+  }
+  .foot b { color: var(--muted); font-weight: 600; }
+
+  /* 展开：内容先淡出，卡片由 JS 弹簧拉到满屏；主进程收到完成信号后再发 fade */
+  .card.expanding { border-color: transparent; }
+  .card.expanding .inner { opacity: 0; }
+  .card.expanding::before { opacity: 0; }
+  .card.fading { opacity: 0; }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+  }
+</style>
+</head>
+<body>
+  <div class="card" id="card">
+    <div class="inner">
+      <div class="logo-box"><img src="splash-logo.png" alt="FuFumidi" /></div>
+      <div class="copy">
+        <h1>FuFumidi</h1>
+        <div class="eyebrow">OFFLINE MIDI WORKSTATION</div>
+        <div class="status-line">
+          <span class="dots" id="dots"><i class="on active"></i><i></i><i></i></span>
+          <span id="statusText"></span>
+        </div>
+        <div class="track"><i id="bar"></i></div>
+        <div class="foot"><span id="footText">LOCAL-FIRST</span><b id="pct">0%</b></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  const card = document.getElementById('card');
+  const bar = document.getElementById('bar');
+  const pct = document.getElementById('pct');
+  const text = document.getElementById('statusText');
+  const footText = document.getElementById('footText');
+  const dots = [...document.querySelectorAll('#dots i')];
+
+  /* 启动页很短，按系统语言给三语文案（与主程序 i18n 规则一致） */
+  const MESSAGES = {
+    zh: {
+      engine: '正在恢复曲库与本地引擎…',
+      models: '正在加载模型与声库索引…',
+      workspace: '正在准备工作区…',
+      ready: '准备就绪 · 即将进入工作台',
+      local: 'LOCAL-FIRST · 数据不离开本机',
+    },
+    en: {
+      engine: 'Restoring library and local engine…',
+      models: 'Loading models and voicebank index…',
+      workspace: 'Preparing workspace…',
+      ready: 'Ready · Entering workspace',
+      local: 'LOCAL-FIRST · Your data stays on this device',
+    },
+    ja: {
+      engine: 'ライブラリとローカルエンジンを復元中…',
+      models: 'モデルと声庫インデックスを読み込み中…',
+      workspace: 'ワークスペースを準備中…',
+      ready: '準備完了 · ワークスペースへ',
+      local: 'LOCAL-FIRST · データはこの端末から出ません',
+    },
+  };
+  const lang = (() => {
+    const n = String((navigator && navigator.language) || 'zh').toLowerCase();
+    if (n.startsWith('ja')) return 'ja';
+    if (n.startsWith('zh')) return 'zh';
+    return 'en';
+  })();
+  const msg = (key) => (MESSAGES[lang] && MESSAGES[lang][key]) || MESSAGES.zh[key] || key;
+  text.textContent = msg('engine');
+  footText.textContent = msg('local');
+
+  function setStage(stage, label, value) {
+    if (label) text.textContent = label;
+    if (Number.isFinite(value)) {
+      const v = Math.max(0, Math.min(100, Math.round(value)));
+      bar.style.width = v + '%';
+      pct.textContent = v + '%';
+    }
+    dots.forEach((d, i) => {
+      d.classList.toggle('on', i <= stage);
+      d.classList.toggle('active', i === stage);
+    });
+  }
+
+  function fading() {
+    card.classList.add('fading');
+  }
+
+  /* 展开：与设计稿同一套弹簧积分 a = (-k·(x-target) - c·v) / m
+     ★ 阻尼偏软（ζ≈0.82）：扩张的尾段慢下来，正好让主窗口在背后把首帧画完，
+       比硬邦邦地"啪"一下铺满更不容易露馅。 */
+  const SPRING = { stiffness: 150, damping: 20, mass: 1 };
+  const BASE = { w: 520, h: 286, r: 30 };
+  function spring(x, target) { return { x, v: 0, target }; }
+  function stepSpring(s, dt) {
+    const a = (-SPRING.stiffness * (s.x - s.target) - SPRING.damping * s.v) / SPRING.mass;
+    s.v += a * dt;
+    s.x += s.v * dt;
+    if (Math.abs(s.x - s.target) < 0.5 && Math.abs(s.v) < 2) { s.x = s.target; s.v = 0; return true; }
+    return false;
+  }
+
+  let expandingStarted = false;
+  function expanding() {
+    if (expandingStarted) return;
+    expandingStarted = true;
+    card.classList.add('expanding');
+
+    const W = window.innerWidth;
+    const H = window.innerHeight;
+    const finish = () => {
+      card.style.width = W + 'px';
+      card.style.height = H + 'px';
+      card.style.borderRadius = '0px';
+      try {
+        const b = window.splashBridge;
+        if (b && typeof b.expanded === 'function') b.expanded();
+      } catch (e) {}
+    };
+
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) { finish(); return; }
+
+    const w = spring(BASE.w, W);
+    const h = spring(BASE.h, H);
+    const r = spring(BASE.r, 0);
+    let last = performance.now();
+    const started = last;
+
+    const tick = (now) => {
+      const dt = Math.min(0.034, Math.max(0.001, (now - last) / 1000));
+      last = now;
+      const doneW = stepSpring(w, dt);
+      const doneH = stepSpring(h, dt);
+      const doneR = stepSpring(r, dt);
+      card.style.width = Math.max(2, w.x) + 'px';
+      card.style.height = Math.max(2, h.x) + 'px';
+      card.style.borderRadius = Math.max(0, r.x) + 'px';
+      if ((doneW && doneH && doneR) || now - started > 1600) finish();
+      else requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }
+
+  const bridge = window.splashBridge;
+  if (bridge && typeof bridge.onStatus === 'function') {
+    bridge.onStatus((s) => {
+      const data = s || {};
+      setStage(Number(data.stage) || 0, data.key ? msg(data.key) : data.text, Number(data.pct));
+    });
+    bridge.onExpand(expanding);
+    bridge.onFade(fading);
+    try { bridge.ready(); } catch (e) {}
+  } else {
+    /* 直接用浏览器打开时的兜底演示（不参与 Electron 流程） */
+    setStage(0, msg('engine'), 34);
+    setTimeout(() => setStage(1, msg('models'), 72), 950);
+    setTimeout(() => setStage(2, msg('workspace'), 100), 1900);
+    setTimeout(expanding, 2800);   // 与 Electron 一致：100% 后停顿再扩展
+    setTimeout(fading, 4600);
+  }
+</script>
+</body>
+</html>

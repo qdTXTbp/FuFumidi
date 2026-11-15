@@ -8,7 +8,7 @@
   <div class="arr" ref="rootEl">
     <canvas ref="cv" @pointerdown="onDown" @pointermove="onMove"
             @pointerup="onUp" @pointercancel="onUp" @dblclick="onDbl"
-            @wheel="onWheel" />
+            @contextmenu.prevent="onCtx" @wheel="onWheel" />
   </div>
 </template>
 
@@ -16,6 +16,9 @@
 import { themeColor } from '../../core/palette.js';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { partClusters, PART_GAP_BEATS } from '../../core/arrange.js';
+import { paramById } from '../../core/param_registry.js';
+import { trimClip } from '../../core/automation_clip.js';
+import { squirclePath } from '../../core/canvas_shape.js';
 
 const props = defineProps({
   /** [{id,name,kind,color,notes,partStarts,hidden,muted}]（kind==='audio' 的轨画音频条） */
@@ -29,13 +32,20 @@ const props = defineProps({
   /** ★ 卷帘当前可视区间（拍）——对齐 PartControl.cs:243-257：在活动轨的块上
    *  画白色视口框，时间线上能看出"卷帘正在看哪一段" */
   rollViewport: { type: Object, default: null },   // { fromBeat, toBeat }
+  /** Playlist 一级自动化片段（FLAD-04）：{id,trackId,parameterId,points,startBeat,endBeat,loop,gain} */
+  clips: { type: Array, default: () => [] },
+  selectedClipId: { type: String, default: '' },
 });
-const emit = defineEmits(['pick-track', 'open-part', 'move-part']);
+const emit = defineEmits(['pick-track', 'open-part', 'move-part',
+  'select-clip', 'clip-drag-start', 'move-clip', 'resize-clip', 'clip-drag-end', 'clip-menu']);
 
-const ROW_H = 56;          // 每轨行高
+const ROW_H = 72;          // 每轨行高（含底部自动化条带）
+const AUTOM_H = 16;        // 自动化条带高度
 const RULER_H = 22;        // 顶部标尺
 const HEAD_W = 110;        // 左侧轨头固定宽
 const PAD_TOP = 6;
+/** 自动化条带顶边（相对行顶） */
+const BAND_TOP = ROW_H - AUTOM_H - 4;
 
 const rootEl = ref(null);
 const cv = ref(null);
@@ -166,6 +176,8 @@ function draw() {
     if (t.kind === 'audio' && !cl?.parts.length && t.audioBeats > 0) {
       drawPart(t, xOfBeat(0), xOfBeat(t.audioBeats), y, css, null);
     }
+    // ---- 自动化条带（一级 clip）
+    drawAutomationBand(t, y);
   });
 
   // ---- 播放头（贯穿）
@@ -190,7 +202,7 @@ function draw() {
 
 function drawPart(t, x0, x1, y, css, drag, viewport = null) {
   if (x1 <= HEAD_W || x0 >= ctx.canvas.clientWidth) return;
-  const h = ROW_H - 12;
+  const h = ROW_H - AUTOM_H - 12;
   const yy = y + 4;
   const w = Math.max(6, x1 - x0);
   const color = t.color || '#5a8cff';
@@ -252,15 +264,98 @@ function drawPart(t, x0, x1, y, css, drag, viewport = null) {
   ctx.restore();
 }
 
+/** 轨道行底部的自动化条带：clip 矩形 + 迷你折线 + 循环标记 */
+function drawAutomationBand(t, y) {
+  const W = ctx.canvas.clientWidth;
+  const bandY = y + BAND_TOP;
+  ctx.fillStyle = 'rgba(255,255,255,.035)';
+  ctx.fillRect(HEAD_W, bandY, Math.max(0, W - HEAD_W), AUTOM_H);
+  const list = (props.clips || []).filter((c) => c && c.trackId === t.id);
+  for (const c of list) {
+    const x0 = xOfBeat(c.startBeat), x1 = xOfBeat(c.endBeat);
+    if (x1 <= HEAD_W || x0 >= W) continue;
+    const left = Math.max(HEAD_W, x0), right = Math.min(W, x1);
+    if (right - left < 2) continue;
+    const sel = c.id === props.selectedClipId;
+    const param = paramById(c.parameterId);
+    const color = themeColor('--accent-sapphire', '#5b8def');
+    ctx.save();
+    roundRect(left, bandY + 1, Math.max(3, right - left), AUTOM_H - 2, 3);
+    ctx.fillStyle = hexA(color, sel ? 0.42 : 0.26);
+    ctx.fill();
+    ctx.strokeStyle = sel ? themeColor('--t-text', '#ffffff') : hexA(color, 0.8);
+    ctx.lineWidth = sel ? 1.5 : 1;
+    ctx.stroke();
+    const pts = Array.isArray(c.points) ? c.points : [];
+    if (pts.length && right - left > 8) {
+      const lo = param ? param.min : 0, hi = param ? param.max : 1;
+      const span = Math.max(1e-6, hi - lo);
+      const len = Math.max(1e-6, c.endBeat - c.startBeat);
+      const yOf = (v) => bandY + AUTOM_H - 3 - ((Number(v) - lo) / span) * (AUTOM_H - 6);
+      ctx.beginPath();
+      let started = false;
+      for (const p of pts) {
+        const local = Math.max(0, Math.min(len, Number(p && p.beat) || 0));
+        const px = xOfBeat(c.startBeat + local);
+        if (px < left - 1 || px > right + 1) continue;
+        if (!started) { ctx.moveTo(px, yOf(p.value)); started = true; }
+        else ctx.lineTo(px, yOf(p.value));
+      }
+      if (started) {
+        ctx.strokeStyle = sel ? themeColor('--t-text', '#ffffff') : hexA(color, 0.95);
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+    }
+    // 淡化：从条带底边斜拉到顶端，直观看出过渡长度
+    const finPx = Math.max(0, (Number(c.fadeIn) || 0) * props.pxPerBeat);
+    const foutPx = Math.max(0, (Number(c.fadeOut) || 0) * props.pxPerBeat);
+    if (finPx > 0.5 || foutPx > 0.5) {
+      ctx.save();
+      ctx.strokeStyle = hexA(color, 0.95);
+      ctx.lineWidth = 1;
+      if (finPx > 0.5) {
+        const fx = Math.min(right, left + finPx);
+        ctx.beginPath(); ctx.moveTo(left + 0.5, bandY + AUTOM_H - 2);
+        ctx.lineTo(fx, bandY + 1.5); ctx.stroke();
+      }
+      if (foutPx > 0.5) {
+        const fx = Math.max(left, right - foutPx);
+        ctx.beginPath(); ctx.moveTo(fx, bandY + 1.5);
+        ctx.lineTo(right - 0.5, bandY + AUTOM_H - 2); ctx.stroke();
+      }
+      ctx.restore();
+    }
+    if (right - left > 26) {
+      ctx.fillStyle = themeColor('--t-text', '#ffffff');
+      ctx.font = '8px system-ui, sans-serif';
+      const label = c.name || (param ? param.label : c.parameterId);
+      ctx.fillText(String(label).slice(0, 10), left + 3, bandY + AUTOM_H - 5);
+    }
+    if (c.loop && right - left > 14) {
+      // 循环边界虚线：看得出内容在放置区间里重复了几次
+      const lenPx = Math.max(2, (c.endBeat - c.startBeat) * props.pxPerBeat);
+      ctx.save();
+      ctx.setLineDash([2, 2]);
+      ctx.strokeStyle = hexA(color, 0.6);
+      ctx.lineWidth = 1;
+      for (let px = xOfBeat(c.startBeat) + lenPx; px < right - 0.5; px += lenPx) {
+        if (px <= left + 1) continue;
+        ctx.beginPath(); ctx.moveTo(Math.round(px) + 0.5, bandY + 2);
+        ctx.lineTo(Math.round(px) + 0.5, bandY + AUTOM_H - 2); ctx.stroke();
+      }
+      ctx.restore();
+      ctx.fillStyle = themeColor('--t-text', '#ffffff');
+      ctx.font = '9px system-ui, sans-serif';
+      ctx.fillText('↻', right - 9, bandY + 9);
+    }
+    ctx.restore();
+  }
+}
+
 function roundRect(x, y, w, h, r) {
-  const rr = Math.min(r, w / 2, h / 2);
-  ctx.beginPath();
-  ctx.moveTo(x + rr, y);
-  ctx.arcTo(x + w, y, x + w, y + h, rr);
-  ctx.arcTo(x + w, y + h, x, y + h, rr);
-  ctx.arcTo(x, y + h, x, y, rr);
-  ctx.arcTo(x, y, x + w, y, rr);
-  ctx.closePath();
+  // 连续曲率：与 DOM 的 corner-shape: squircle 同一套观感
+  squirclePath(ctx, x, y, w, h, r);
 }
 
 function hexA(hex, a) {
@@ -272,6 +367,27 @@ function hexA(hex, a) {
 
 /* ---------------------------------------------------------------- 命中/交互 */
 
+/** 自动化条带命中（先于 part：条带在行底部，不会与 part 争夺） */
+function hitAutomation(x, y) {
+  const ti = rowOfY(y);
+  if (ti < 0) return null;
+  const yInRow = y - (PAD_TOP + RULER_H + ti * ROW_H);
+  if (yInRow < BAND_TOP || yInRow > BAND_TOP + AUTOM_H) return null;
+  const t = props.tracks[ti];
+  const beat = beatOfX(x);
+  const list = (props.clips || []).filter((c) => c && c.trackId === t.id);
+  for (let i = list.length - 1; i >= 0; i--) {
+    const c = list[i];
+    if (beat >= c.startBeat && beat <= c.endBeat) {
+      // 左右 6px 视为裁剪热区
+      const edge = Math.abs(x - xOfBeat(c.startBeat)) <= 6 ? 'start'
+        : (Math.abs(x - xOfBeat(c.endBeat)) <= 6 ? 'end' : '');
+      return { kind: 'clip', clip: c, trackIdx: ti, edge };
+    }
+  }
+  return null;
+}
+
 function hitTest(x, y) {
   const ti = rowOfY(y);
   if (ti < 0) return null;
@@ -279,17 +395,32 @@ function hitTest(x, y) {
   const beat = beatOfX(x);
   const parts = clustersByTrack.value[ti].parts;
   for (const p of parts) {
-    if (beat >= p.from && beat <= p.to) return { trackId: t.id, trackIdx: ti, part: p };
+    if (beat >= p.from && beat <= p.to) return { kind: 'part', trackId: t.id, trackIdx: ti, part: p };
   }
   return null;
 }
 
 let dragState = null;   // { trackId, trackIdx, from, to, dBeat, dTrack, x0, y0 }
 let moved = false;
+let clipDrag = null;    // { id, origClip, mode, edge, origStart, origEnd, x0, moved, started }
 
 function onDown(e) {
   const rect = cv.value.getBoundingClientRect();
   const x = e.clientX - rect.left, y = e.clientY - rect.top;
+  const auto = hitAutomation(x, y);
+  if (auto) {
+    emit('pick-track', auto.clip.trackId);
+    emit('select-clip', auto.clip.id);
+    clipDrag = {
+      id: auto.clip.id, origClip: auto.clip,
+      mode: auto.edge ? 'trim' : 'move', edge: auto.edge || '',
+      origStart: auto.clip.startBeat, origEnd: auto.clip.endBeat,
+      x0: x, moved: false, started: false,
+    };
+    cv.value.setPointerCapture(e.pointerId);
+    draw();
+    return;
+  }
   const hit = hitTest(x, y);
   emit('pick-track', hit ? hit.trackId : (props.tracks[rowOfY(y)]?.id || ''));
   if (!hit) return;
@@ -301,9 +432,34 @@ function onDown(e) {
 }
 
 function onMove(e) {
-  if (!dragState) return;
   const rect = cv.value.getBoundingClientRect();
   const x = e.clientX - rect.left, y = e.clientY - rect.top;
+  if (clipDrag) {
+    const dx = x - clipDrag.x0;
+    if (!clipDrag.moved && Math.abs(dx) < 3) return;
+    clipDrag.moved = true;
+    if (!clipDrag.started) { clipDrag.started = true; emit('clip-drag-start', clipDrag.id); }
+    // 吸附到 1/4 拍
+    const d = Math.round((dx / props.pxPerBeat) * 4) / 4;
+    if (clipDrag.mode === 'trim') {
+      const beat = Math.max(0, (clipDrag.edge === 'start' ? clipDrag.origStart : clipDrag.origEnd) + d);
+      const next = trimClip(clipDrag.origClip, clipDrag.edge, beat);
+      if (next) emit('resize-clip', next);
+      return;
+    }
+    const startBeat = Math.max(0, clipDrag.origStart + d);
+    emit('move-clip', {
+      id: clipDrag.id, startBeat,
+      endBeat: startBeat + Math.max(0.25, clipDrag.origEnd - clipDrag.origStart),
+    });
+    return;
+  }
+  if (!dragState) {
+    // 悬停光标：裁剪热区 col-resize，clip 主体 grab
+    const hov = hitAutomation(x, y);
+    if (cv.value) cv.value.style.cursor = hov ? (hov.edge ? 'col-resize' : 'grab') : 'default';
+    return;
+  }
   if (!moved && Math.abs(x - dragState.x0) < 4 && Math.abs(y - dragState.y0) < 4) return;
   // 不允许拖出左边界
   dragState.dBeat = Math.max(-dragState.from, Math.round((x - dragState.x0) / props.pxPerBeat));
@@ -320,6 +476,12 @@ function onMove(e) {
 }
 
 function onUp() {
+  if (clipDrag) {
+    if (clipDrag.started) emit('clip-drag-end', clipDrag.id);
+    clipDrag = null;
+    draw();
+    return;
+  }
   if (dragState && moved) {
     const targetIdx = dragState.trackIdx + dragState.dTrack;
     emit('move-part', {
@@ -336,8 +498,19 @@ function onUp() {
 
 function onDbl(e) {
   const rect = cv.value.getBoundingClientRect();
+  if (hitAutomation(e.clientX - rect.left, e.clientY - rect.top)) return;
   const hit = hitTest(e.clientX - rect.left, e.clientY - rect.top);
   if (hit) emit('open-part', hit);
+}
+
+/** 自动化 clip 右键：交给父层开菜单（复制/循环/删除） */
+function onCtx(e) {
+  const rect = cv.value.getBoundingClientRect();
+  const hit = hitAutomation(e.clientX - rect.left, e.clientY - rect.top);
+  if (!hit) return;
+  emit('pick-track', hit.clip.trackId);
+  emit('select-clip', hit.clip.id);
+  emit('clip-menu', { id: hit.clip.id, x: e.clientX, y: e.clientY });
 }
 
 /** 滚轮 = 横向滚动（触控板原生横向也走这里） */
@@ -365,6 +538,8 @@ function resize() {
 watch([() => props.tracks, () => props.playheadBeat, () => props.activeTrackId,
        () => props.pxPerBeat, clustersByTrack], () => resize(), { deep: false });
 watch(() => props.playheadBeat, draw);
+// clip 拖动是逐帧更新：只重绘，不重算画布尺寸
+watch([() => props.clips, () => props.selectedClipId], () => draw());
 
 onMounted(() => {
   resize();

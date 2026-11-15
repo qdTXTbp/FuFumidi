@@ -1,0 +1,1653 @@
+{
+  "transpose": {
+    "params": {
+      "semitones": 3
+    },
+    "changed": 8,
+    "notes": [
+      {
+        "start": 0,
+        "end": 240,
+        "midi": 63,
+        "vel": 80,
+        "muted": false
+      },
+      {
+        "start": 240,
+        "end": 480,
+        "midi": 67,
+        "vel": 90,
+        "muted": false
+      },
+      {
+        "start": 480,
+        "end": 720,
+        "midi": 70,
+        "vel": 100,
+        "muted": false
+      },
+      {
+        "start": 735,
+        "end": 960,
+        "midi": 74,
+        "vel": 70,
+        "muted": false
+      },
+      {
+        "start": 960,
+        "end": 1200,
+        "midi": 66,
+        "vel": 60,
+        "muted": false
+      },
+      {
+        "start": 1200,
+        "end": 1440,
+        "midi": 62,
+        "vel": 110,
+        "muted": true
+      },
+      {
+        "start": 1500,
+        "end": 1680,
+        "midi": 55,
+        "vel": 40,
+        "muted": false
+      },
+      {
+        "start": 1800,
+        "end": 1801,
+        "midi": 79,
+        "vel": 127,
+        "muted": false
+      }
+    ]
+  },
+  "scaleSnap": {
+    "params": {
+      "dir": "up"
+    },
+    "changed": 1,
+    "notes": [
+      {
+        "start": 0,
+        "end": 240,
+        "midi": 60,
+        "vel": 80,
+        "muted": false
+      },
+      {
+        "start": 240,
+        "end": 480,
+        "midi": 64,
+        "vel": 90,
+        "muted": false
+      },
+      {
+        "start": 480,
+        "end": 720,
+        "midi": 67,
+        "vel": 100,
+        "muted": false
+      },
+      {
+        "start": 735,
+        "end": 960,
+        "midi": 71,
+        "vel": 70,
+        "muted": false
+      },
+      {
+        "start": 960,
+        "end": 1200,
+        "midi": 64,
+        "vel": 60,
+        "muted": false
+      },
+      {
+        "start": 1200,
+        "end": 1440,
+        "midi": 59,
+        "vel": 110,
+        "muted": true
+      },
+      {
+        "start": 1500,
+        "end": 1680,
+        "midi": 52,
+        "vel": 40,
+        "muted": false
+      },
+      {
+        "start": 1800,
+        "end": 1801,
+        "midi": 76,
+        "vel": 127,
+        "muted": false
+      }
+    ]
+  },
+  "mirror": {
+    "params": {
+      "axis": 60
+    },
+    "changed": 7,
+    "notes": [
+      {
+        "start": 0,
+        "end": 240,
+        "midi": 60,
+        "vel": 80,
+        "muted": false
+      },
+      {
+        "start": 240,
+        "end": 480,
+        "midi": 56,
+        "vel": 90,
+        "muted": false
+      },
+      {
+        "start": 480,
+        "end": 720,
+        "midi": 53,
+        "vel": 100,
+        "muted": false
+      },
+      {
+        "start": 735,
+        "end": 960,
+        "midi": 49,
+        "vel": 70,
+        "muted": false
+      },
+      {
+        "start": 960,
+        "end": 1200,
+        "midi": 57,
+        "vel": 60,
+        "muted": false
+      },
+      {
+        "start": 1200,
+        "end": 1440,
+        "midi": 61,
+        "vel": 110,
+        "muted": true
+      },
+      {
+        "start": 1500,
+        "end": 1680,
+        "midi": 68,
+        "vel": 40,
+        "muted": false
+      },
+      {
+        "start": 1800,
+        "end": 1801,
+        "midi": 44,
+        "vel": 127,
+        "muted": false
+      }
+    ]
+  },
+  "flip": {
+    "params": {
+      "mode": "time",
+      "axis": 60
+    },
+    "changed": 8,
+    "notes": [
+      {
+        "start": 1561,
+        "end": 1801,
+        "midi": 60,
+        "vel": 80,
+        "muted": false
+      },
+      {
+        "start": 1321,
+        "end": 1561,
+        "midi": 64,
+        "vel": 90,
+        "muted": false
+      },
+      {
+        "start": 1081,
+        "end": 1321,
+        "midi": 67,
+        "vel": 100,
+        "muted": false
+      },
+      {
+        "start": 841,
+        "end": 1066,
+        "midi": 71,
+        "vel": 70,
+        "muted": false
+      },
+      {
+        "start": 601,
+        "end": 841,
+        "midi": 63,
+        "vel": 60,
+        "muted": false
+      },
+      {
+        "start": 361,
+        "end": 601,
+        "midi": 59,
+        "vel": 110,
+        "muted": true
+      },
+      {
+        "start": 121,
+        "end": 301,
+        "midi": 52,
+        "vel": 40,
+        "muted": false
+      },
+      {
+        "start": 0,
+        "end": 1,
+        "midi": 76,
+        "vel": 127,
+        "muted": false
+      }
+    ]
+  },
+  "keyLimit": {
+    "params": {
+      "low": 55,
+      "high": 72,
+      "mode": "clip"
+    },
+    "changed": 2,
+    "notes": [
+      {
+        "start": 0,
+        "end": 240,
+        "midi": 60,
+        "vel": 80,
+        "muted": false
+      },
+      {
+        "start": 240,
+        "end": 480,
+        "midi": 64,
+        "vel": 90,
+        "muted": false
+      },
+      {
+        "start": 480,
+        "end": 720,
+        "midi": 67,
+        "vel": 100,
+        "muted": false
+      },
+      {
+        "start": 735,
+        "end": 960,
+        "midi": 71,
+        "vel": 70,
+        "muted": false
+      },
+      {
+        "start": 960,
+        "end": 1200,
+        "midi": 63,
+        "vel": 60,
+        "muted": false
+      },
+      {
+        "start": 1200,
+        "end": 1440,
+        "midi": 59,
+        "vel": 110,
+        "muted": true
+      },
+      {
+        "start": 1500,
+        "end": 1680,
+        "midi": 55,
+        "vel": 40,
+        "muted": false
+      },
+      {
+        "start": 1800,
+        "end": 1801,
+        "midi": 72,
+        "vel": 127,
+        "muted": false
+      }
+    ]
+  },
+  "randomWalk": {
+    "params": {
+      "range": 3,
+      "seed": 7,
+      "scaleOnly": true
+    },
+    "changed": 6,
+    "notes": [
+      {
+        "start": 0,
+        "end": 240,
+        "midi": 57,
+        "vel": 80,
+        "muted": false
+      },
+      {
+        "start": 240,
+        "end": 480,
+        "midi": 62,
+        "vel": 90,
+        "muted": false
+      },
+      {
+        "start": 480,
+        "end": 720,
+        "midi": 71,
+        "vel": 100,
+        "muted": false
+      },
+      {
+        "start": 735,
+        "end": 960,
+        "midi": 72,
+        "vel": 70,
+        "muted": false
+      },
+      {
+        "start": 960,
+        "end": 1200,
+        "midi": 64,
+        "vel": 60,
+        "muted": false
+      },
+      {
+        "start": 1200,
+        "end": 1440,
+        "midi": 59,
+        "vel": 110,
+        "muted": true
+      },
+      {
+        "start": 1500,
+        "end": 1680,
+        "midi": 52,
+        "vel": 40,
+        "muted": false
+      },
+      {
+        "start": 1800,
+        "end": 1801,
+        "midi": 74,
+        "vel": 127,
+        "muted": false
+      }
+    ]
+  },
+  "velOffset": {
+    "params": {
+      "amount": -10
+    },
+    "changed": 8,
+    "notes": [
+      {
+        "start": 0,
+        "end": 240,
+        "midi": 60,
+        "vel": 70,
+        "muted": false
+      },
+      {
+        "start": 240,
+        "end": 480,
+        "midi": 64,
+        "vel": 80,
+        "muted": false
+      },
+      {
+        "start": 480,
+        "end": 720,
+        "midi": 67,
+        "vel": 90,
+        "muted": false
+      },
+      {
+        "start": 735,
+        "end": 960,
+        "midi": 71,
+        "vel": 60,
+        "muted": false
+      },
+      {
+        "start": 960,
+        "end": 1200,
+        "midi": 63,
+        "vel": 50,
+        "muted": false
+      },
+      {
+        "start": 1200,
+        "end": 1440,
+        "midi": 59,
+        "vel": 100,
+        "muted": true
+      },
+      {
+        "start": 1500,
+        "end": 1680,
+        "midi": 52,
+        "vel": 30,
+        "muted": false
+      },
+      {
+        "start": 1800,
+        "end": 1801,
+        "midi": 76,
+        "vel": 117,
+        "muted": false
+      }
+    ]
+  },
+  "velScale": {
+    "params": {
+      "factor": 0.8
+    },
+    "changed": 8,
+    "notes": [
+      {
+        "start": 0,
+        "end": 240,
+        "midi": 60,
+        "vel": 64,
+        "muted": false
+      },
+      {
+        "start": 240,
+        "end": 480,
+        "midi": 64,
+        "vel": 72,
+        "muted": false
+      },
+      {
+        "start": 480,
+        "end": 720,
+        "midi": 67,
+        "vel": 80,
+        "muted": false
+      },
+      {
+        "start": 735,
+        "end": 960,
+        "midi": 71,
+        "vel": 56,
+        "muted": false
+      },
+      {
+        "start": 960,
+        "end": 1200,
+        "midi": 63,
+        "vel": 48,
+        "muted": false
+      },
+      {
+        "start": 1200,
+        "end": 1440,
+        "midi": 59,
+        "vel": 88,
+        "muted": true
+      },
+      {
+        "start": 1500,
+        "end": 1680,
+        "midi": 52,
+        "vel": 32,
+        "muted": false
+      },
+      {
+        "start": 1800,
+        "end": 1801,
+        "midi": 76,
+        "vel": 102,
+        "muted": false
+      }
+    ]
+  },
+  "velFixed": {
+    "params": {
+      "value": 90
+    },
+    "changed": 7,
+    "notes": [
+      {
+        "start": 0,
+        "end": 240,
+        "midi": 60,
+        "vel": 90,
+        "muted": false
+      },
+      {
+        "start": 240,
+        "end": 480,
+        "midi": 64,
+        "vel": 90,
+        "muted": false
+      },
+      {
+        "start": 480,
+        "end": 720,
+        "midi": 67,
+        "vel": 90,
+        "muted": false
+      },
+      {
+        "start": 735,
+        "end": 960,
+        "midi": 71,
+        "vel": 90,
+        "muted": false
+      },
+      {
+        "start": 960,
+        "end": 1200,
+        "midi": 63,
+        "vel": 90,
+        "muted": false
+      },
+      {
+        "start": 1200,
+        "end": 1440,
+        "midi": 59,
+        "vel": 90,
+        "muted": true
+      },
+      {
+        "start": 1500,
+        "end": 1680,
+        "midi": 52,
+        "vel": 90,
+        "muted": false
+      },
+      {
+        "start": 1800,
+        "end": 1801,
+        "midi": 76,
+        "vel": 90,
+        "muted": false
+      }
+    ]
+  },
+  "velCompress": {
+    "params": {
+      "center": 80,
+      "strength": 50
+    },
+    "changed": 7,
+    "notes": [
+      {
+        "start": 0,
+        "end": 240,
+        "midi": 60,
+        "vel": 80,
+        "muted": false
+      },
+      {
+        "start": 240,
+        "end": 480,
+        "midi": 64,
+        "vel": 85,
+        "muted": false
+      },
+      {
+        "start": 480,
+        "end": 720,
+        "midi": 67,
+        "vel": 90,
+        "muted": false
+      },
+      {
+        "start": 735,
+        "end": 960,
+        "midi": 71,
+        "vel": 75,
+        "muted": false
+      },
+      {
+        "start": 960,
+        "end": 1200,
+        "midi": 63,
+        "vel": 70,
+        "muted": false
+      },
+      {
+        "start": 1200,
+        "end": 1440,
+        "midi": 59,
+        "vel": 95,
+        "muted": true
+      },
+      {
+        "start": 1500,
+        "end": 1680,
+        "midi": 52,
+        "vel": 60,
+        "muted": false
+      },
+      {
+        "start": 1800,
+        "end": 1801,
+        "midi": 76,
+        "vel": 104,
+        "muted": false
+      }
+    ]
+  },
+  "velHumanize": {
+    "params": {
+      "amount": 8,
+      "seed": 11
+    },
+    "changed": 5,
+    "notes": [
+      {
+        "start": 0,
+        "end": 240,
+        "midi": 60,
+        "vel": 80,
+        "muted": false
+      },
+      {
+        "start": 240,
+        "end": 480,
+        "midi": 64,
+        "vel": 90,
+        "muted": false
+      },
+      {
+        "start": 480,
+        "end": 720,
+        "midi": 67,
+        "vel": 102,
+        "muted": false
+      },
+      {
+        "start": 735,
+        "end": 960,
+        "midi": 71,
+        "vel": 71,
+        "muted": false
+      },
+      {
+        "start": 960,
+        "end": 1200,
+        "midi": 63,
+        "vel": 66,
+        "muted": false
+      },
+      {
+        "start": 1200,
+        "end": 1440,
+        "midi": 59,
+        "vel": 111,
+        "muted": true
+      },
+      {
+        "start": 1500,
+        "end": 1680,
+        "midi": 52,
+        "vel": 33,
+        "muted": false
+      },
+      {
+        "start": 1800,
+        "end": 1801,
+        "midi": 76,
+        "vel": 127,
+        "muted": false
+      }
+    ]
+  },
+  "lenScale": {
+    "params": {
+      "factor": 1.5
+    },
+    "changed": 8,
+    "notes": [
+      {
+        "start": 0,
+        "end": 360,
+        "midi": 60,
+        "vel": 80,
+        "muted": false
+      },
+      {
+        "start": 240,
+        "end": 600,
+        "midi": 64,
+        "vel": 90,
+        "muted": false
+      },
+      {
+        "start": 480,
+        "end": 840,
+        "midi": 67,
+        "vel": 100,
+        "muted": false
+      },
+      {
+        "start": 735,
+        "end": 1073,
+        "midi": 71,
+        "vel": 70,
+        "muted": false
+      },
+      {
+        "start": 960,
+        "end": 1320,
+        "midi": 63,
+        "vel": 60,
+        "muted": false
+      },
+      {
+        "start": 1200,
+        "end": 1560,
+        "midi": 59,
+        "vel": 110,
+        "muted": true
+      },
+      {
+        "start": 1500,
+        "end": 1770,
+        "midi": 52,
+        "vel": 40,
+        "muted": false
+      },
+      {
+        "start": 1800,
+        "end": 1802,
+        "midi": 76,
+        "vel": 127,
+        "muted": false
+      }
+    ]
+  },
+  "lenOffset": {
+    "params": {
+      "beats": 0.25
+    },
+    "changed": 8,
+    "notes": [
+      {
+        "start": 0,
+        "end": 360,
+        "midi": 60,
+        "vel": 80,
+        "muted": false
+      },
+      {
+        "start": 240,
+        "end": 600,
+        "midi": 64,
+        "vel": 90,
+        "muted": false
+      },
+      {
+        "start": 480,
+        "end": 840,
+        "midi": 67,
+        "vel": 100,
+        "muted": false
+      },
+      {
+        "start": 735,
+        "end": 1080,
+        "midi": 71,
+        "vel": 70,
+        "muted": false
+      },
+      {
+        "start": 960,
+        "end": 1320,
+        "midi": 63,
+        "vel": 60,
+        "muted": false
+      },
+      {
+        "start": 1200,
+        "end": 1560,
+        "midi": 59,
+        "vel": 110,
+        "muted": true
+      },
+      {
+        "start": 1500,
+        "end": 1800,
+        "midi": 52,
+        "vel": 40,
+        "muted": false
+      },
+      {
+        "start": 1800,
+        "end": 1921,
+        "midi": 76,
+        "vel": 127,
+        "muted": false
+      }
+    ]
+  },
+  "legato": {
+    "params": {
+      "amount": 100
+    },
+    "changed": 4,
+    "notes": [
+      {
+        "start": 0,
+        "end": 240,
+        "midi": 60,
+        "vel": 80,
+        "muted": false
+      },
+      {
+        "start": 240,
+        "end": 480,
+        "midi": 64,
+        "vel": 90,
+        "muted": false
+      },
+      {
+        "start": 480,
+        "end": 735,
+        "midi": 67,
+        "vel": 100,
+        "muted": false
+      },
+      {
+        "start": 735,
+        "end": 960,
+        "midi": 71,
+        "vel": 70,
+        "muted": false
+      },
+      {
+        "start": 960,
+        "end": 1200,
+        "midi": 63,
+        "vel": 60,
+        "muted": false
+      },
+      {
+        "start": 1200,
+        "end": 1500,
+        "midi": 59,
+        "vel": 110,
+        "muted": true
+      },
+      {
+        "start": 1500,
+        "end": 1800,
+        "midi": 52,
+        "vel": 40,
+        "muted": false
+      },
+      {
+        "start": 1800,
+        "end": 1920,
+        "midi": 76,
+        "vel": 127,
+        "muted": false
+      }
+    ]
+  },
+  "staccato": {
+    "params": {
+      "ratio": 50
+    },
+    "changed": 7,
+    "notes": [
+      {
+        "start": 0,
+        "end": 120,
+        "midi": 60,
+        "vel": 80,
+        "muted": false
+      },
+      {
+        "start": 240,
+        "end": 360,
+        "midi": 64,
+        "vel": 90,
+        "muted": false
+      },
+      {
+        "start": 480,
+        "end": 600,
+        "midi": 67,
+        "vel": 100,
+        "muted": false
+      },
+      {
+        "start": 735,
+        "end": 848,
+        "midi": 71,
+        "vel": 70,
+        "muted": false
+      },
+      {
+        "start": 960,
+        "end": 1080,
+        "midi": 63,
+        "vel": 60,
+        "muted": false
+      },
+      {
+        "start": 1200,
+        "end": 1320,
+        "midi": 59,
+        "vel": 110,
+        "muted": true
+      },
+      {
+        "start": 1500,
+        "end": 1590,
+        "midi": 52,
+        "vel": 40,
+        "muted": false
+      },
+      {
+        "start": 1800,
+        "end": 1801,
+        "midi": 76,
+        "vel": 127,
+        "muted": false
+      }
+    ]
+  },
+  "quantize": {
+    "params": {
+      "grid": "1/16",
+      "strength": 100
+    },
+    "changed": 2,
+    "notes": [
+      {
+        "start": 0,
+        "end": 240,
+        "midi": 60,
+        "vel": 80,
+        "muted": false
+      },
+      {
+        "start": 240,
+        "end": 480,
+        "midi": 64,
+        "vel": 90,
+        "muted": false
+      },
+      {
+        "start": 480,
+        "end": 720,
+        "midi": 67,
+        "vel": 100,
+        "muted": false
+      },
+      {
+        "start": 720,
+        "end": 945,
+        "midi": 71,
+        "vel": 70,
+        "muted": false
+      },
+      {
+        "start": 960,
+        "end": 1200,
+        "midi": 63,
+        "vel": 60,
+        "muted": false
+      },
+      {
+        "start": 1200,
+        "end": 1440,
+        "midi": 59,
+        "vel": 110,
+        "muted": true
+      },
+      {
+        "start": 1560,
+        "end": 1740,
+        "midi": 52,
+        "vel": 40,
+        "muted": false
+      },
+      {
+        "start": 1800,
+        "end": 1801,
+        "midi": 76,
+        "vel": 127,
+        "muted": false
+      }
+    ]
+  },
+  "triplet": {
+    "params": {
+      "grid": "1/16T",
+      "strength": 100
+    },
+    "changed": 3,
+    "notes": [
+      {
+        "start": 0,
+        "end": 240,
+        "midi": 60,
+        "vel": 80,
+        "muted": false
+      },
+      {
+        "start": 240,
+        "end": 480,
+        "midi": 64,
+        "vel": 90,
+        "muted": false
+      },
+      {
+        "start": 480,
+        "end": 720,
+        "midi": 67,
+        "vel": 100,
+        "muted": false
+      },
+      {
+        "start": 720,
+        "end": 945,
+        "midi": 71,
+        "vel": 70,
+        "muted": false
+      },
+      {
+        "start": 960,
+        "end": 1200,
+        "midi": 63,
+        "vel": 60,
+        "muted": false
+      },
+      {
+        "start": 1200,
+        "end": 1440,
+        "midi": 59,
+        "vel": 110,
+        "muted": true
+      },
+      {
+        "start": 1520,
+        "end": 1700,
+        "midi": 52,
+        "vel": 40,
+        "muted": false
+      },
+      {
+        "start": 1840,
+        "end": 1841,
+        "midi": 76,
+        "vel": 127,
+        "muted": false
+      }
+    ]
+  },
+  "slice": {
+    "params": {
+      "mode": "grid",
+      "grid": "1/16"
+    },
+    "changed": 14,
+    "notes": [
+      {
+        "start": 0,
+        "end": 120,
+        "midi": 60,
+        "vel": 80,
+        "muted": false
+      },
+      {
+        "start": 240,
+        "end": 360,
+        "midi": 64,
+        "vel": 90,
+        "muted": false
+      },
+      {
+        "start": 480,
+        "end": 600,
+        "midi": 67,
+        "vel": 100,
+        "muted": false
+      },
+      {
+        "start": 735,
+        "end": 840,
+        "midi": 71,
+        "vel": 70,
+        "muted": false
+      },
+      {
+        "start": 960,
+        "end": 1080,
+        "midi": 63,
+        "vel": 60,
+        "muted": false
+      },
+      {
+        "start": 1200,
+        "end": 1320,
+        "midi": 59,
+        "vel": 110,
+        "muted": true
+      },
+      {
+        "start": 1500,
+        "end": 1560,
+        "midi": 52,
+        "vel": 40,
+        "muted": false
+      },
+      {
+        "start": 1800,
+        "end": 1801,
+        "midi": 76,
+        "vel": 127,
+        "muted": false
+      },
+      {
+        "start": 120,
+        "end": 240,
+        "midi": 60,
+        "vel": 80,
+        "muted": false
+      },
+      {
+        "start": 360,
+        "end": 480,
+        "midi": 64,
+        "vel": 90,
+        "muted": false
+      },
+      {
+        "start": 600,
+        "end": 720,
+        "midi": 67,
+        "vel": 100,
+        "muted": false
+      },
+      {
+        "start": 840,
+        "end": 960,
+        "midi": 71,
+        "vel": 70,
+        "muted": false
+      },
+      {
+        "start": 1080,
+        "end": 1200,
+        "midi": 63,
+        "vel": 60,
+        "muted": false
+      },
+      {
+        "start": 1320,
+        "end": 1440,
+        "midi": 59,
+        "vel": 110,
+        "muted": true
+      },
+      {
+        "start": 1560,
+        "end": 1680,
+        "midi": 52,
+        "vel": 40,
+        "muted": false
+      }
+    ]
+  },
+  "swing": {
+    "params": {
+      "grid": "1/8",
+      "amount": 33
+    },
+    "changed": 2,
+    "notes": [
+      {
+        "start": 0,
+        "end": 240,
+        "midi": 60,
+        "vel": 80,
+        "muted": false
+      },
+      {
+        "start": 240,
+        "end": 480,
+        "midi": 64,
+        "vel": 90,
+        "muted": false
+      },
+      {
+        "start": 480,
+        "end": 720,
+        "midi": 67,
+        "vel": 100,
+        "muted": false
+      },
+      {
+        "start": 735,
+        "end": 960,
+        "midi": 71,
+        "vel": 70,
+        "muted": false
+      },
+      {
+        "start": 960,
+        "end": 1200,
+        "midi": 63,
+        "vel": 60,
+        "muted": false
+      },
+      {
+        "start": 1200,
+        "end": 1440,
+        "midi": 59,
+        "vel": 110,
+        "muted": true
+      },
+      {
+        "start": 1520,
+        "end": 1700,
+        "midi": 52,
+        "vel": 40,
+        "muted": false
+      },
+      {
+        "start": 1820,
+        "end": 1821,
+        "midi": 76,
+        "vel": 127,
+        "muted": false
+      }
+    ]
+  },
+  "strum": {
+    "params": {
+      "step": 20,
+      "fromTop": false
+    },
+    "changed": 7,
+    "notes": [
+      {
+        "start": 0,
+        "end": 240,
+        "midi": 60,
+        "vel": 80,
+        "muted": false
+      },
+      {
+        "start": 260,
+        "end": 500,
+        "midi": 64,
+        "vel": 90,
+        "muted": false
+      },
+      {
+        "start": 520,
+        "end": 760,
+        "midi": 67,
+        "vel": 100,
+        "muted": false
+      },
+      {
+        "start": 795,
+        "end": 1020,
+        "midi": 71,
+        "vel": 70,
+        "muted": false
+      },
+      {
+        "start": 1040,
+        "end": 1280,
+        "midi": 63,
+        "vel": 60,
+        "muted": false
+      },
+      {
+        "start": 1300,
+        "end": 1540,
+        "midi": 59,
+        "vel": 110,
+        "muted": true
+      },
+      {
+        "start": 1620,
+        "end": 1800,
+        "midi": 52,
+        "vel": 40,
+        "muted": false
+      },
+      {
+        "start": 1940,
+        "end": 1941,
+        "midi": 76,
+        "vel": 127,
+        "muted": false
+      }
+    ]
+  },
+  "arp": {
+    "params": {
+      "rate": "1/16",
+      "dir": "up"
+    },
+    "changed": 0,
+    "notes": [
+      {
+        "start": 0,
+        "end": 120,
+        "midi": 60,
+        "vel": 80,
+        "muted": false
+      },
+      {
+        "start": 240,
+        "end": 360,
+        "midi": 64,
+        "vel": 90,
+        "muted": false
+      },
+      {
+        "start": 480,
+        "end": 600,
+        "midi": 67,
+        "vel": 100,
+        "muted": false
+      },
+      {
+        "start": 735,
+        "end": 855,
+        "midi": 71,
+        "vel": 70,
+        "muted": false
+      },
+      {
+        "start": 960,
+        "end": 1080,
+        "midi": 63,
+        "vel": 60,
+        "muted": false
+      },
+      {
+        "start": 1200,
+        "end": 1320,
+        "midi": 59,
+        "vel": 110,
+        "muted": true
+      },
+      {
+        "start": 1500,
+        "end": 1620,
+        "midi": 52,
+        "vel": 40,
+        "muted": false
+      },
+      {
+        "start": 1800,
+        "end": 1920,
+        "midi": 76,
+        "vel": 127,
+        "muted": false
+      }
+    ]
+  },
+  "flam": {
+    "params": {
+      "count": 2,
+      "spacing": 20,
+      "decay": 40,
+      "jitter": 0,
+      "seed": 5
+    },
+    "changed": 16,
+    "notes": [
+      {
+        "start": 0,
+        "end": 240,
+        "midi": 60,
+        "vel": 80,
+        "muted": false
+      },
+      {
+        "start": 240,
+        "end": 480,
+        "midi": 64,
+        "vel": 90,
+        "muted": false
+      },
+      {
+        "start": 480,
+        "end": 720,
+        "midi": 67,
+        "vel": 100,
+        "muted": false
+      },
+      {
+        "start": 735,
+        "end": 960,
+        "midi": 71,
+        "vel": 70,
+        "muted": false
+      },
+      {
+        "start": 960,
+        "end": 1200,
+        "midi": 63,
+        "vel": 60,
+        "muted": false
+      },
+      {
+        "start": 1200,
+        "end": 1440,
+        "midi": 59,
+        "vel": 110,
+        "muted": true
+      },
+      {
+        "start": 1500,
+        "end": 1680,
+        "midi": 52,
+        "vel": 40,
+        "muted": false
+      },
+      {
+        "start": 1800,
+        "end": 1801,
+        "midi": 76,
+        "vel": 127,
+        "muted": false
+      },
+      {
+        "start": 20,
+        "end": 260,
+        "midi": 60,
+        "vel": 48,
+        "muted": false
+      },
+      {
+        "start": 40,
+        "end": 280,
+        "midi": 60,
+        "vel": 29,
+        "muted": false
+      },
+      {
+        "start": 260,
+        "end": 500,
+        "midi": 64,
+        "vel": 54,
+        "muted": false
+      },
+      {
+        "start": 280,
+        "end": 520,
+        "midi": 64,
+        "vel": 32,
+        "muted": false
+      },
+      {
+        "start": 500,
+        "end": 740,
+        "midi": 67,
+        "vel": 60,
+        "muted": false
+      },
+      {
+        "start": 520,
+        "end": 760,
+        "midi": 67,
+        "vel": 36,
+        "muted": false
+      },
+      {
+        "start": 755,
+        "end": 980,
+        "midi": 71,
+        "vel": 42,
+        "muted": false
+      },
+      {
+        "start": 775,
+        "end": 1000,
+        "midi": 71,
+        "vel": 25,
+        "muted": false
+      },
+      {
+        "start": 980,
+        "end": 1220,
+        "midi": 63,
+        "vel": 36,
+        "muted": false
+      },
+      {
+        "start": 1000,
+        "end": 1240,
+        "midi": 63,
+        "vel": 22,
+        "muted": false
+      },
+      {
+        "start": 1220,
+        "end": 1460,
+        "midi": 59,
+        "vel": 66,
+        "muted": true
+      },
+      {
+        "start": 1240,
+        "end": 1480,
+        "midi": 59,
+        "vel": 40,
+        "muted": true
+      },
+      {
+        "start": 1520,
+        "end": 1700,
+        "midi": 52,
+        "vel": 24,
+        "muted": false
+      },
+      {
+        "start": 1540,
+        "end": 1720,
+        "midi": 52,
+        "vel": 14,
+        "muted": false
+      },
+      {
+        "start": 1820,
+        "end": 1821,
+        "midi": 76,
+        "vel": 76,
+        "muted": false
+      },
+      {
+        "start": 1840,
+        "end": 1841,
+        "midi": 76,
+        "vel": 46,
+        "muted": false
+      }
+    ]
+  },
+  "thin": {
+    "params": {
+      "keep": 50,
+      "seed": 3
+    },
+    "changed": 2,
+    "notes": [
+      {
+        "start": 0,
+        "end": 240,
+        "midi": 60,
+        "vel": 80,
+        "muted": true
+      },
+      {
+        "start": 240,
+        "end": 480,
+        "midi": 64,
+        "vel": 90,
+        "muted": false
+      },
+      {
+        "start": 480,
+        "end": 720,
+        "midi": 67,
+        "vel": 100,
+        "muted": false
+      },
+      {
+        "start": 735,
+        "end": 960,
+        "midi": 71,
+        "vel": 70,
+        "muted": false
+      },
+      {
+        "start": 960,
+        "end": 1200,
+        "midi": 63,
+        "vel": 60,
+        "muted": true
+      },
+      {
+        "start": 1200,
+        "end": 1440,
+        "midi": 59,
+        "vel": 110,
+        "muted": true
+      },
+      {
+        "start": 1500,
+        "end": 1680,
+        "midi": 52,
+        "vel": 40,
+        "muted": false
+      },
+      {
+        "start": 1800,
+        "end": 1801,
+        "midi": 76,
+        "vel": 127,
+        "muted": false
+      }
+    ]
+  }
+}

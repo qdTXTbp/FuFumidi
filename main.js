@@ -2,7 +2,7 @@
 // FuFumidi —— Electron 主进程
 // 纯离线本地应用：加载内置 renderer 界面 + 本地 Python 转录引擎子进程
 // ============================================================
-const { app, BrowserWindow, session, dialog, shell, Menu, ipcMain, net, Tray } = require('electron');
+const { app, BrowserWindow, session, dialog, shell, Menu, ipcMain, net, Tray, screen } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -74,6 +74,7 @@ const { createHotkeys, HOTKEY_ACTIONS } = require('./main/hotkeys');
 const { registerSoundfontWorkshopIpc } = require('./main/soundfonts');
 const { registerUserMetaIpc } = require('./main/usermeta');
 const { createWindow, configureSession, openFileFromArgv, openPath, takePendingOpen } = require('./main/window');
+const Splash = require('./main/splash');
 const { pyLit, parsePyJson } = require('./main/py-util');
 const DownloadRegistry = require('./main/download-registry');
 
@@ -218,7 +219,7 @@ if (!gotLock) {
       { id: 'midi', dir: Paths.midiDir() },
     ],
   });
-  registerExportIpc({ ipcMain, dialog, app, path, center: taskCenter });
+  registerExportIpc({ ipcMain, dialog, app, path, center: taskCenter, runEngineInline, parsePyJson });
     registerWallpaperIpc({ ipcMain, app, fs, net, runEngineInline, parsePyJson });
     registerWallpaperEngineIpc({ ipcMain, shell, app });
     registerUtauIpc({ ipcMain, BrowserWindow, path, fs, os, app, dialog, net, spawnEngine, createEngineSession: EngineService.createEngineSession });
@@ -249,7 +250,90 @@ if (!gotLock) {
       engineDir, engineEnv, resolvePython,
       runEngineInline, parsePyJson,
     });
-    const mainWin = createWindow({ BrowserWindow, shell, pluginHost, rootDir: __dirname });
+    /* ---------- 启动页（splash）→ 主窗口 ----------
+       · 正常启动：先显示 520×286 启动页，主窗口隐藏加载；
+         渲染层**等曲库恢复落定**后发 app:ui-ready，启动页在 100% 停顿一下，
+         再从卡片弹簧扩展到 workArea，主窗口全程在背后完成首帧绘制，最后淡出交接。
+       · E2E：跳过启动页，避免测试脚本拿到错误的窗口目标。 */
+    const noSplash = process.env.FUFUMIDI_E2E === '1';
+    const splash = noSplash ? null : Splash.create({ BrowserWindow, screen, rootDir: __dirname });
+    /* 启动页节奏（毫秒）。
+       ★ 渲染层现在要等「曲库恢复完成」才发 app:ui-ready，但"数据好了"不等于
+         "动画看够了"：快机器上启动页可能只闪一下。所以这里再加两道：
+         · SPLASH_MIN_MS：启动页最短露脸时间（从窗口创建算起）；
+         · SPLASH_HOLD_MS：100% 之后停顿一下，让"准备就绪"可读，也更像一次收尾。 */
+    const SPLASH_MIN_MS = 1800;
+    const SPLASH_HOLD_MS = 550;
+    const splashCreatedAt = Date.now();
+    let splashReady = false;
+    let splashLatest = { stage: 0, pct: 18, key: 'engine' };
+    let splashDone = false;
+    let splashRevealed = false;
+    let splashFallback = null;
+
+    const pushSplash = (stage, pct, key) => {
+      splashLatest = { stage, pct, key };
+      if (splash && splashReady) Splash.sendStatus(splash, stage, pct, key);
+    };
+    ipcMain.on('splash:ui-ready', () => {
+      splashReady = true;
+      if (splash) Splash.sendStatus(splash, splashLatest.stage, splashLatest.pct, splashLatest.key);
+    });
+
+    function finishSplash() {
+      if (splashDone) return;
+      splashDone = true;
+      if (splashFallback) { clearTimeout(splashFallback); splashFallback = null; }
+      if (!splash) return;
+      Splash.sendStatus(splash, 2, 100, 'ready');
+      const wait = Math.max(0, SPLASH_MIN_MS - (Date.now() - splashCreatedAt)) + SPLASH_HOLD_MS;
+      setTimeout(() => {
+        if (!splash || splash.isDestroyed()) { revealMain(); return; }
+        // ★ 先在启动页背后把主窗口显示出来：Chromium 这段时间完成首帧绘制，
+        //   扩展 + 淡出结束时用户看到的就是成品首页，而不是刚 show 出来的空窗口。
+        primeMain();
+        Splash.sendExpand(splash);
+        // 正常情况下渲染层弹簧结束会回 splash:expanded；这里再加一道超时兜底
+        setTimeout(revealMain, 1800);
+      }, wait);
+    }
+
+    /** 在启动页背后准备主窗口（启动页置顶且不透明，用户看不到这一下） */
+    function primeMain() {
+      if (splashRevealed) return;
+      try {
+        if (mainWin && !mainWin.isDestroyed()) {
+          if (!mainWin.isVisible()) mainWin.showInactive();   // 不抢焦点
+          mainWin.maximize();
+        }
+      } catch (e) { /* 忽略：窗口可能已关闭 */ }
+    }
+
+    /** 扩展结束：确保主窗口可见并最大化，再淡出启动页 */
+    function revealMain() {
+      if (splashRevealed) return;
+      splashRevealed = true;
+      try {
+        if (mainWin && !mainWin.isDestroyed()) {
+          if (!mainWin.isVisible()) mainWin.show();
+          mainWin.maximize();
+          mainWin.focus();
+        }
+      } catch (e) { /* 忽略：窗口可能已关闭 */ }
+      // 淡出比原来长一点：扩展结束时主窗口已经画好，慢一点更不容易看出接缝
+      if (splash) Splash.fadeOut(splash, 320);
+    }
+
+    const mainWin = createWindow({ BrowserWindow, shell, pluginHost, rootDir: __dirname, show: noSplash });
+    if (!noSplash) {
+      ipcMain.on('app:ui-ready', () => finishSplash());
+      ipcMain.on('splash:expanded', () => revealMain());
+      splashFallback = setTimeout(() => finishSplash(), 15000);
+      mainWin.webContents.on('did-finish-load', () => pushSplash(1, 66, 'models'));
+      // 启动页自身加载失败 / 主界面加载失败：都不要把用户卡在深色启动页上
+      if (splash) splash.webContents.on('did-fail-load', () => setTimeout(() => finishSplash(), 600));
+      mainWin.webContents.on('did-fail-load', () => finishSplash());
+    }
     setupTray({ win: mainWin, app, readSettings, rootDir: __dirname });
 
     /* ---------- 操作系统级全局热键 ----------

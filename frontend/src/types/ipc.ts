@@ -1074,6 +1074,8 @@ export interface FuBridge {
   /** P0-4 音频导出：字节落盘 + manifest（主进程 main/export.js） */
   exportAudio(payload: AudioExportRequest): Promise<AudioExportResult>;
   onOpenFile(cb: (bytes: Uint8Array, name: string) => void): () => void;
+  /** 首屏可交互：启动页据此收尾，把 splash 展开成主窗口 */
+  uiReady(): void;
   /** 沉浸模式：窗口真全屏（收掉原生标题栏）；返回实际状态 */
   setFullScreen(on: boolean): Promise<{ ok: boolean; fullScreen?: boolean; error?: string }>;
 

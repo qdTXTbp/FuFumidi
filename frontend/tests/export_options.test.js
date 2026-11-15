@@ -22,6 +22,7 @@ test('P2-1 导出选项：插件节点规范化（非法节点过滤、参数夹
 test('P0-4b 格式表：16/24/float32 与位深/扩展名', () => {
   assert.deepEqual(EXPORT_FORMATS.map((f) => [f.id, f.bitDepth, f.ext]), [
     ['wav16', 16, 'wav'], ['wav24', 24, 'wav'], ['float32', 32, 'wav'],
+    ['flac', 24, 'flac'], ['mp3', 24, 'mp3'], ['ogg', 24, 'ogg'],
   ]);
   assert.equal(formatInfo('wav16').bitDepth, 16);
   assert.equal(formatInfo('不存在').id, 'wav24', '未知格式回落到 wav24');
@@ -33,7 +34,7 @@ test('P0-4b 格式表：16/24/float32 与位深/扩展名', () => {
 test('P0-4b normalizeExportOptions：默认值 / 未知值回落 / 数值夹取', () => {
   const d = normalizeExportOptions({});
   assert.deepEqual([d.format, d.bitDepth, d.dither, d.loudness, d.limiter, d.stems], ['wav24', 24, true, 'off', true, false]);
-  const u = normalizeExportOptions({ format: 'flac', loudness: 'abc', gainPct: 999 });
+  const u = normalizeExportOptions({ format: 'aac', loudness: 'abc', gainPct: 999 });
   assert.equal(u.format, 'wav24');
   assert.equal(u.loudness, 'off');
   assert.equal(u.gainPct, 150);

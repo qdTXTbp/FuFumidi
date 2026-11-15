@@ -56,11 +56,17 @@
   --sh-2: 0 12px 32px rgba(0, 0, 0, .42);
   --sh-3: 0 24px 64px rgba(0, 0, 0, .55);
 
-  /* ---------- 动效：只服务因果，不做装饰性循环 ---------- */
+  /* ---------- 动效：只服务因果，不做装饰性循环 ----------
+     全局时长/缓动由 core/motion.js 的阻尼弹簧参数（stiffness/damping/mass）
+     在启动时写成内联变量：--spring-ease-*、--spring-dur-*，并回填
+     --motion-* / --ease-*。这里的字面值只是 JS 未执行时的兜底。 */
   --dur-1: var(--motion-fast, .12s);
   --dur-2: var(--motion-base, .18s);
   --dur-3: var(--motion-slow, .28s);
   --ease: var(--ease-out, cubic-bezier(.22, .61, .36, 1));
+
+  /* ---------- 连续曲率：全局圆角用 squircle（Chromium 139+） ---------- */
+  --corner-shape: squircle;
 
   /* ---------- 语义色（深色基准值；浅色档在文件的 light 段覆盖）---------- */
   --t-stage: #0a0d16;        /* 舞台底 */
@@ -106,6 +112,30 @@
 /* 全局字体与数字：正文走 --font-ui，数字一律等宽（时间码/BPM/百分比不跳字） */
 html { font-family: var(--font-ui); }
 .fu-num, .hud-time, .vc-zoom, .muted.small strong { font-family: var(--font-num); font-variant-numeric: tabular-nums; }
+
+/* ============================================================
+   连续曲率（squircle）
+   ============================================================
+   所有带 border-radius 的盒子统一改成超椭圆角，不再是两段圆弧硬接。
+   Chromium 139+ 原生支持（Electron 38 = Chromium 140）；不支持的宿主
+   会忽略这条声明，自动退回普通圆弧。
+
+   例外：头像、状态点、开关滑块、播放键等"必须正圆"的元素显式 round。
+   ============================================================ */
+@supports (corner-shape: squircle) {
+  *, *::before, *::after { corner-shape: var(--corner-shape, squircle); }
+
+  .cloud-avatar, .cloud-avatar svg, .ap-switch i, .guide-done-ico,
+  .vb-dot, .ss-switch i::after, .switch-row span::after,
+  .pr-hint-btn, .roll-strip .rs-dot, .vb-src-ic, .vb-clr,
+  .sm-lic-ic, .ds-src-ic, .ds-clr, .pc-switch span::after, .pc-log-dot,
+  .card-title .dot, .thm-badge, .cat-src-ic, .cat-clr,
+  .arr-head-dot, .home-status-inline i, .home-status-row .dot,
+  .trk-dot, .tb-status .pulse, .lg-item .dot, .score-live .pulse,
+  .score-legend .dot, .vm-dep-ic, .vm-tab .tb-ic, .tp-btn,
+  .wp-card-del, .wp-card-dl, .spinner,
+  input[type="range"]::-webkit-slider-thumb { corner-shape: round; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }

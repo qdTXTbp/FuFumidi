@@ -82,6 +82,12 @@ def serve_loop(module):
     单个请求失败**不退出**（把错误作为该请求的 RESULT 返回）——
     常驻进程死于单个坏请求就失去意义了。只有 stdin 关闭 / exit 命令才结束。
     """
+    # 就绪握手：主进程据此确认 stdin 循环已起来（旧版本没有这一行，超时后按可用继续）。
+    try:
+        sys.stdout.write('###READY\n')
+        sys.stdout.flush()
+    except Exception:
+        pass
     for raw in sys.stdin:
         raw = raw.strip()
         if not raw:

@@ -8,12 +8,14 @@ const os = require('os');
 const fs = require('fs');
 const { spawn } = require('child_process');
 const Paths = require('./paths');
+const { createSupervisor } = require('./engine_supervisor');
 
 function createEngineService({ resolvePython, engineDir, engineEnv }) {
   const activeChildren = new Set();
   // worker 池：slot 0 为常驻主 worker；slot>0 为并行转录临时 worker（空闲自动回收）
   const _workers = new Map();      // slot -> child
   const _workerIdle = new Map();   // slot -> 回收定时器
+  const _workerSupervisors = new Map();  // slot -> 守护（readiness / 退避 / 熔断）
   let _engineWorkerSeq = 0;
   const _engineWorkerPending = new Map();  // 请求 id -> { resolve, reject, win, logId, child }
   const _sessions = new Set();             // 常驻引擎会话（cancelJob 需要逐个问）
@@ -26,7 +28,13 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
       _workerIdle.set(slot, setTimeout(() => {
         _workerIdle.delete(slot);
         const child = _workers.get(slot);
-        if (child && !workerBusy(child)) { _workers.delete(slot); try { child.kill(); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } }
+        if (child && !workerBusy(child)) {
+          // ★ 空闲回收是主动行为，不算崩溃：先告诉守护，别把这笔记进熔断
+          const sup = _workerSupervisors.get(slot);
+          if (sup) sup.stop();
+          _workerSupervisors.delete(slot);
+          _workers.delete(slot);
+        }
       }, WORKER_IDLE_MS));
     }
   }
@@ -115,6 +123,9 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
 
   function stopEngineWorker() {
     const olds = [..._workers.values()];
+    // ★ 主动停不算崩溃：先停守护（同时清掉崩溃/退避计数），再统一清池
+    for (const sup of _workerSupervisors.values()) { try { sup.stop(); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } }
+    _workerSupervisors.clear();
     _workers.clear();
     for (const t of _workerIdle.values()) { try { clearTimeout(t); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } }
     _workerIdle.clear();
@@ -131,95 +142,120 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
     });
   }
 
-  function ensureEngineWorker(slot = 0) {
-    const cur = _workers.get(slot);
-    if (cur && !cur.killed && cur.exitCode === null) return cur;
-    const py = resolvePython();
-    const eng = engineDir();
-    const child = spawn(py, [path.join(eng, 'music2midi.py'), 'worker'], {
-      cwd: eng,
-      windowsHide: true,
-      env: engineEnv(),
-    });
-    activeChildren.add(child);
-    let buf = '';
-    child.stdout.on('data', d => {
-      buf += d.toString('utf8');
-      const lines = buf.split(/\r?\n/); buf = lines.pop();
-      for (const l of lines) {
-        const t = l.trim(); if (!t) continue;
-        if (t.startsWith('###LOG ')) {
+  /** worker 单行协议。★ `###READY` 已由守护消费，这里只处理 LOG / RESULT。 */
+  function handleWorkerLine(t) {
+    if (t.startsWith('###LOG ')) {
+      try {
+        const lg = JSON.parse(t.slice(6));
+        const logId = lg && lg._id;
+        const ent = logId ? _engineWorkerPending.get(logId) : null;
+        const _line = lg.line || '';
+        if (ent && ent.task) {
           try {
-            const lg = JSON.parse(t.slice(6));
-            const logId = lg && lg._id;
-            const ent = logId ? _engineWorkerPending.get(logId) : null;
-            const _line = lg.line || '';
-            if (ent && ent.task) {
-              try {
-                const _pm = /^###PROG\s+(\{.*\})/.exec(String(_line).trim());
-                if (_pm) {
-                  const _d = JSON.parse(_pm[1]);
-                  const _total = Number(_d.total) || 0;
-                  const _done = Number(_d.completed) || 0;
-                  // 单调保护：任务中心的 progress 是直接赋值，引擎的阶段切换
-                  // （如 MIROS 先打 percent=14，再打 completed:0/total:N）会让它倒退。
-                  const _push = (v, txt) => {
-                    const _v = Math.max(0, Math.min(1, Number(v) || 0));
-                    const _prev = Number(ent._prog) || 0;
-                    ent._prog = Math.max(_prev, _v);
-                    ent.task.progress(ent._prog, txt);
-                  };
-                  // percent 优先：它是引擎算好的**总进度**（阶段权重已计入）。
-                  // 只有 completed/total 的老引擎（MuScriptor）走下面的分块比例。
-                  if (_d.percent != null) {
-                    const _p = Math.max(0, Math.min(100, Number(_d.percent) || 0));
-                    const _lab = _d.label ? String(_d.label) : '处理中';
-                    _push(_p / 100, _lab + ' ' + Math.round(_p) + '%');
-                  } else if (_total > 0) {
-                    _push(_done / _total, '推理中 ' + Math.round(_done / _total * 100) + '%');
-                  }
-                } else if (/^\[(预处理|体检|模型|分段探测|推理|音频证据|节拍|收尾|计时|内存)/.test(String(_line).trim()) || String(_line).includes('使用 GPU')) {
-                  ent.task.log(_line);
-                }
-              } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
-            }
-            if (ent && ent.win && !ent.win.isDestroyed() && ent.logId) {
-              ent.win.webContents.send('engine:log', { id: ent.logId, line: _line });
-            }
-          } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
-          continue;
-        }
-        if (t.startsWith('###RESULT ')) {
-          try {
-            const r = JSON.parse(t.slice(10));
-            const id = r && r._id;
-            if (id && _engineWorkerPending.has(id)) {
-              const p = _engineWorkerPending.get(id);
-              _engineWorkerPending.delete(id);
-              p.resolve(r);
+            const _pm = /^###PROG\s+(\{.*\})/.exec(String(_line).trim());
+            if (_pm) {
+              const _d = JSON.parse(_pm[1]);
+              const _total = Number(_d.total) || 0;
+              const _done = Number(_d.completed) || 0;
+              // 单调保护：任务中心的 progress 是直接赋值，引擎的阶段切换
+              // （如 MIROS 先打 percent=14，再打 completed:0/total:N）会让它倒退。
+              const _push = (v, txt) => {
+                const _v = Math.max(0, Math.min(1, Number(v) || 0));
+                const _prev = Number(ent._prog) || 0;
+                ent._prog = Math.max(_prev, _v);
+                ent.task.progress(ent._prog, txt);
+              };
+              // percent 优先：它是引擎算好的**总进度**（阶段权重已计入）。
+              // 只有 completed/total 的老引擎（MuScriptor）走下面的分块比例。
+              if (_d.percent != null) {
+                const _p = Math.max(0, Math.min(100, Number(_d.percent) || 0));
+                const _lab = _d.label ? String(_d.label) : '处理中';
+                _push(_p / 100, _lab + ' ' + Math.round(_p) + '%');
+              } else if (_total > 0) {
+                _push(_done / _total, '推理中 ' + Math.round(_done / _total * 100) + '%');
+              }
+            } else if (/^\[(预处理|体检|模型|分段探测|推理|音频证据|节拍|收尾|计时|内存)/.test(String(_line).trim()) || String(_line).includes('使用 GPU')) {
+              ent.task.log(_line);
             }
           } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
         }
+        if (ent && ent.win && !ent.win.isDestroyed() && ent.logId) {
+          ent.win.webContents.send('engine:log', { id: ent.logId, line: _line });
+        }
+      } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
+      return;
+    }
+    if (t.startsWith('###RESULT ')) {
+      try {
+        const r = JSON.parse(t.slice(10));
+        const id = r && r._id;
+        if (id && _engineWorkerPending.has(id)) {
+          const p = _engineWorkerPending.get(id);
+          _engineWorkerPending.delete(id);
+          p.resolve(r);
+        }
+      } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
+    }
+  }
+
+  /** 某个 worker 崩了：只清理属于它的在途请求，不影响其他槽位 */
+  function failWorker(slot, err, exitedChild) {
+    if (_workers.get(slot) !== exitedChild) return;
+    _workers.delete(slot);
+    const t = _workerIdle.get(slot);
+    if (t) { clearTimeout(t); _workerIdle.delete(slot); }
+    for (const [id, p] of [..._engineWorkerPending.entries()]) {
+      if (p.child === exitedChild) {
+        _engineWorkerPending.delete(id);
+        try { p.reject(err); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       }
+    }
+  }
+
+  /**
+   * 每个槽位一个守护：readiness / 退避 / 熔断（FLAD-05）。
+   * ★ 只守护进程生命周期：崩溃时在途请求照旧 reject，由调用方回退一次性路径，
+   *   superviser 不会替用户重放任务（重放会把转录跑两遍）。
+   */
+  function workerSupervisor(slot) {
+    let sup = _workerSupervisors.get(slot);
+    if (sup) return sup;
+    sup = createSupervisor({
+      name: 'worker#' + slot,
+      spawnChild: () => {
+        const py = resolvePython();
+        const eng = engineDir();
+        const child = spawn(py, [path.join(eng, 'music2midi.py'), 'worker'], {
+          cwd: eng,
+          windowsHide: true,
+          env: engineEnv(),
+        });
+        activeChildren.add(child);
+        _workers.set(slot, child);
+        return child;
+      },
+      onLine: handleWorkerLine,
+      onExit: (err, exited) => {
+        activeChildren.delete(exited);
+        if (_workers.get(slot) === exited) _workers.delete(slot);
+        // err === null：守护被主动 stop（空闲回收 / 取消 / 切换引擎），不算崩溃
+        if (!err) return;
+        failWorker(slot, err, exited);
+      },
+      log: (level, msg) => { try { require('./log').write(level, msg); } catch (e) { /* 日志失败不影响引擎 */ } },
     });
-    child.stderr.on('data', () => {});
-    // 池化：子进程异常退出只清理自己的在途请求，不影响其他槽位
-    const failOne = (err) => {
-      if (_workers.get(slot) !== child) return;
-      _workers.delete(slot);
-      const t = _workerIdle.get(slot);
-      if (t) { clearTimeout(t); _workerIdle.delete(slot); }
-      for (const [id, p] of [..._engineWorkerPending.entries()]) {
-        if (p.child === child) { _engineWorkerPending.delete(id); try { p.reject(err); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } }
-      }
-    };
-    child.on('error', e => failOne(new Error('engine worker error: ' + e)));
-    child.on('close', () => { activeChildren.delete(child); failOne(new Error('engine worker exited')); });
-    _workers.set(slot, child);
+    _workerSupervisors.set(slot, sup);
+    return sup;
+  }
+
+  async function ensureEngineWorker(slot = 0) {
+    const sup = workerSupervisor(slot);
+    const child = await sup.ensure();
+    reapWorker(slot);
     return child;
   }
 
-  function engineWorkerConvert(cfg) {
+  async function engineWorkerConvert(cfg) {
     // 并行槽位配额：__slots 为渲染端并行路数（1-4）。GPU 环境显存有限，自动降 1 路；
     // CPU 环境用满配额。在配额内挑选在途请求最少的 worker 槽位，尽量并行不串队。
     let slots = Math.max(1, Math.min(4, parseInt(cfg.__slots, 10) || 1));
@@ -239,7 +275,7 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
       const l = load.get(s) || 0;
       if (l < bestLoad) { bestLoad = l; best = s; }
     }
-    const child = ensureEngineWorker(best);
+    const child = await ensureEngineWorker(best);
     reapWorker(best);
     const id = 'w' + (++_engineWorkerSeq);
     const req = {
@@ -263,7 +299,13 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
     for (const [k, rk] of Object.entries(map)) if (cfg[k] != null) req[rk] = cfg[k];
     for (const k of ['denoise','normalize','auto_bpm','no_merge','no_velnorm','with_drums','export_stems','no_pedal','no_melodia','multiple_pitch_bends','timbre_stabilize']) if (cfg[k]) req[k] = true;
     const p = new Promise((resolve, reject) => { _engineWorkerPending.set(id, { resolve, reject, win: cfg.__win, logId: cfg.__logId || cfg.id, task: cfg.__task || null, child }); });
-    child.stdin.write(JSON.stringify(req) + '\n');
+    try {
+      child.stdin.write(JSON.stringify(req) + '\n');
+    } catch (e) {
+      // 进程刚好在这一瞬没了：别把请求留在账上（否则取消/统计都会看到幽灵请求）
+      _engineWorkerPending.delete(id);
+      throw e;
+    }
     return p;
   }
 
@@ -438,8 +480,15 @@ function createEngineService({ resolvePython, engineDir, engineEnv }) {
       const err = new Error('canceled');
       err.canceled = true;
       try { p.reject(err); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
-      // 杀掉 worker 进程才算真停：python 那边一旦开始解码，只 reject Promise 不会让它停手
-      try { if (p.child && !p.child.killed && p.child.exitCode === null) p.child.kill(); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
+      // 杀掉 worker 进程才算真停：python 那边一旦开始解码，只 reject Promise 不会让它停手。
+      // ★ 走守护的 stop（主动停止不计崩溃），否则取消会被算成一次引擎崩溃、触发退避/熔断。
+      try {
+        let slot = -1;
+        for (const [s, c] of _workers.entries()) if (c === p.child) { slot = s; break; }
+        const sup = slot >= 0 ? _workerSupervisors.get(slot) : null;
+        if (sup) sup.stop();
+        else if (p.child && !p.child.killed && p.child.exitCode === null) p.child.kill();
+      } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } }
       hit = true;
     }
     for (const s of _sessions) { try { if (s.cancel(id)) hit = true; } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } }

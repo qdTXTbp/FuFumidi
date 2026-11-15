@@ -10,6 +10,8 @@
 // 1) apply 直接改传进来的 note 对象。预览层每次都从**基线**重算，所以实现里可以放心写 +=。
 // 2) 需要随机性的工具一律从 params.seed 派生 PRNG —— 否则拖动别的滑杆时结果会乱跳。
 // 3) apply 返回改动条数（0 = 当前参数下是恒等变换，界面据此提示「无变化」）。
+//    需要新增音符时（Flam / Slice）返回 { changed, add:[note...] }，预览层负责把
+//    add 里的音符挂到轨道上，并在取消时整体撤掉 —— 仍然只占一个撤销点。
 
 export const TOOL_GROUPS = ['音高', '力度', '时值', '节奏', '生成'];
 
@@ -48,6 +50,10 @@ function order(notes) { return [...notes].sort((a, b) => a.start - b.start || a.
 const GRIDS = [['1/4', 1], ['1/8', 0.5], ['1/8T', 1 / 3], ['1/16', 0.25], ['1/16T', 1 / 6], ['1/32', 0.125]];
 const GRID_OPTS = GRIDS.map(([k]) => [k, k]);
 function gridTicks(key, tpb) { const hit = GRIDS.find(([k]) => k === key); return Math.max(1, Math.round((hit ? hit[1] : 0.25) * tpb)); }
+/* 三连音专用网格：1/8T = 1/3 拍、1/16T = 1/6 拍、1/32T = 1/12 拍 */
+const TRIPLET_GRIDS = [['1/8T', 1 / 3], ['1/16T', 1 / 6], ['1/32T', 1 / 12]];
+const TRIPLET_OPTS = TRIPLET_GRIDS.map(([k]) => [k, k]);
+function tripletTicks(key, tpb) { const hit = TRIPLET_GRIDS.find(([k]) => k === key); return Math.max(1, Math.round((hit ? hit[1] : 1 / 6) * tpb)); }
 
 export const MIDI_TOOLS = [
   /* ---------------- 音高 ---------------- */
@@ -84,6 +90,51 @@ export const MIDI_TOOLS = [
     apply(notes, p) {
       const ax = ci(p.axis, 0, 127); let n = 0;
       for (const x of notes) { const m = Math.max(0, Math.min(127, ax * 2 - x.midi)); if (m !== x.midi) { x.midi = m; n++; } }
+      return n;
+    },
+  },
+  {
+    id: 'flip', name: '翻转', group: '音高', hint: '水平 = 以选区中心翻转时间；垂直 = 围绕轴音翻转音高',
+    params: [
+      { k: 'mode', label: '方向', type: 'enum', def: 'time', options: [['time', '水平（时间）'], ['pitch', '垂直（音高）']] },
+      { k: 'axis', label: '轴音', type: 'int', min: 0, max: 127, step: 1, def: 60 },
+    ],
+    apply(notes, p) {
+      if (!notes.length) return 0;
+      if (p.mode === 'pitch') {
+        const ax = ci(p.axis, 0, 127); let n = 0;
+        for (const x of notes) { const m = Math.max(0, Math.min(127, ax * 2 - x.midi)); if (m !== x.midi) { x.midi = m; n++; } }
+        return n;
+      }
+      // 水平：把 [start,end] 以选区时间范围中心镜像（两次翻转回到原状）
+      let lo = Infinity, hi = -Infinity;
+      for (const x of notes) { if (x.start < lo) lo = x.start; if (x.end > hi) hi = x.end; }
+      if (!(hi > lo)) return 0;
+      const sum = lo + hi; let n = 0;
+      for (const x of notes) {
+        const ns = Math.max(0, sum - x.end);
+        const ne = Math.max(ns + 1, sum - x.start);
+        if (ns !== x.start || ne !== x.end) { x.start = ns; x.end = ne; n++; }
+      }
+      return n;
+    },
+  },
+  {
+    id: 'keyLimit', name: '键位限制', group: '音高', hint: '把选区外的音夹到边界，或直接静音（不改音高以外的字段）',
+    params: [
+      { k: 'low', label: '最低', type: 'int', min: 0, max: 127, step: 1, def: 48 },
+      { k: 'high', label: '最高', type: 'int', min: 0, max: 127, step: 1, def: 72 },
+      { k: 'mode', label: '方式', type: 'enum', def: 'clip', options: [['clip', '夹到边界'], ['mute', '范围外静音']] },
+    ],
+    apply(notes, p) {
+      let lo = ci(p.low, 0, 127), hi = ci(p.high, 0, 127);
+      if (lo > hi) { const t = lo; lo = hi; hi = t; }
+      let n = 0;
+      for (const x of notes) {
+        if (x.midi >= lo && x.midi <= hi) continue;
+        if (p.mode === 'mute') { if (!x.muted) { x.muted = true; n++; } }
+        else { const m = Math.max(lo, Math.min(hi, x.midi)); if (m !== x.midi) { x.midi = m; n++; } }
+      }
       return n;
     },
   },
@@ -229,6 +280,55 @@ export const MIDI_TOOLS = [
     },
   },
   {
+    id: 'triplet', name: '三连音', group: '节奏', hint: '把起点吸附到三连音网格（1/8T、1/16T、1/32T），强度决定吸附多少',
+    params: [
+      { k: 'grid', label: '网格', type: 'enum', def: '1/16T', options: TRIPLET_OPTS },
+      { k: 'strength', label: '强度', type: 'int', min: 0, max: 100, step: 1, def: 100, unit: '%' },
+    ],
+    apply(notes, p, ctx) {
+      const tpb = (ctx && ctx.tpb) || 480; const g = tripletTicks(p.grid, tpb); const s = ci(p.strength, 0, 100) / 100;
+      if (!s) return 0;
+      let n = 0;
+      for (const x of notes) {
+        const q = Math.round(x.start / g) * g;
+        const ns = Math.max(0, Math.round(x.start + (q - x.start) * s));
+        if (ns !== x.start) { const len = x.end - x.start; x.start = ns; x.end = ns + len; n++; }
+      }
+      return n;
+    },
+  },
+  {
+    id: 'slice', name: '切片', group: '节奏', hint: '按播放头或网格切开音符，切段首尾相接、总时值不变',
+    params: [
+      { k: 'mode', label: '切点', type: 'enum', def: 'playhead', options: [['playhead', '播放头'], ['grid', '网格']] },
+      { k: 'grid', label: '网格', type: 'enum', def: '1/16', options: GRID_OPTS },
+    ],
+    apply(notes, p, ctx) {
+      const tpb = (ctx && ctx.tpb) || 480;
+      const g = gridTicks(p.grid, tpb);
+      const ph = Number(ctx && ctx.playhead);
+      const add = []; let affected = 0;
+      for (const x of notes) {
+        const start = x.start, end = x.end;
+        const cuts = [];
+        if (p.mode === 'grid') {
+          for (let c = Math.ceil((start + 1) / g) * g; c < end && cuts.length < 64; c += g) cuts.push(c);
+        } else if (Number.isFinite(ph) && ph > start && ph < end) {
+          cuts.push(Math.round(ph));
+        }
+        if (!cuts.length) continue;
+        const points = [start].concat(cuts, [end]);
+        // 原音符保留第一段，其余段作为新增音符：切完首尾相接，总时值不变
+        x.end = Math.max(start + 1, points[1]);
+        for (let i = 1; i < points.length - 1; i++) {
+          add.push(Object.assign({}, x, { start: points[i], end: Math.max(points[i] + 1, points[i + 1]) }));
+        }
+        affected++;
+      }
+      return { changed: affected + add.length, add };
+    },
+  },
+  {
     id: 'swing', name: '摇摆', group: '节奏', hint: '把网格上的后半拍往后推（三连感）',
     params: [
       { k: 'grid', label: '网格', type: 'enum', def: '1/8', options: [['1/8', '1/8'], ['1/16', '1/16']] },
@@ -291,6 +391,31 @@ export const MIDI_TOOLS = [
     },
   },
   /* ---------------- 生成 / 清理 ---------------- */
+  {
+    id: 'flam', name: '装饰音', group: '生成', hint: '在每个音起点后生成 1–4 个装饰音，力度按比例衰减（固定种子可复现）',
+    params: [
+      { k: 'count', label: '数量', type: 'int', min: 1, max: 4, step: 1, def: 2 },
+      { k: 'spacing', label: '间距', type: 'int', min: 1, max: 120, step: 1, def: 24, unit: 'tick' },
+      { k: 'decay', label: '衰减', type: 'int', min: 0, max: 90, step: 5, def: 35, unit: '%' },
+      { k: 'jitter', label: '抖动', type: 'int', min: 0, max: 60, step: 1, def: 0, unit: 'tick' },
+      { k: 'seed', label: '种子', type: 'int', min: 0, max: 9999, step: 1, def: 5, dice: true },
+    ],
+    apply(notes, p) {
+      const cnt = ci(p.count, 1, 4), gap = ci(p.spacing, 1, 120), decay = ci(p.decay, 0, 90) / 100, jit = ci(p.jitter, 0, 60);
+      const rnd = mulberry32(p.seed);
+      const add = [];
+      for (const x of notes) {
+        const len = Math.max(1, x.end - x.start);
+        for (let i = 1; i <= cnt; i++) {
+          const off = gap * i + Math.round((rnd() * 2 - 1) * jit);
+          const ns = Math.max(0, x.start + off);
+          const vel = Math.max(1, Math.min(127, Math.round(x.vel * Math.pow(1 - decay, i))));
+          add.push(Object.assign({}, x, { start: ns, end: ns + len, vel }));
+        }
+      }
+      return { changed: add.length, add };
+    },
+  },
   {
     id: 'thin', name: '稀疏化', group: '生成', hint: '随机静音一部分音符（不改力度、不删除，可撤销）',
     params: [

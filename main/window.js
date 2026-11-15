@@ -6,7 +6,7 @@
 const path = require('path');
 const fs = require('fs');
 
-function createWindow({ BrowserWindow, shell, pluginHost, rootDir }) {
+function createWindow({ BrowserWindow, shell, pluginHost, rootDir, show = true }) {
   const win = new BrowserWindow({
     width: 1280,
     height: 820,
@@ -14,7 +14,8 @@ function createWindow({ BrowserWindow, shell, pluginHost, rootDir }) {
     minHeight: 640,
     backgroundColor: '#0a0f18',
     autoHideMenuBar: true,
-    show: true,
+    // 启动页存在时先隐藏，等 splash 扩展到位再显示（避免主窗口先闪一下）
+    show: false,
     title: 'FuFumidi',
     // ★ 图标必须解析到**真实磁盘文件**：打包后 rootDir 在 app.asar 内，而 build/ 不进包，
     //   `rootDir/build/icon.png` 解析不到 → Electron 用空图标覆盖 exe 自带图标 →
@@ -42,7 +43,7 @@ function createWindow({ BrowserWindow, shell, pluginHost, rootDir }) {
     },
   });
 
-  win.once('ready-to-show', () => win.show());
+  win.once('ready-to-show', () => { if (show) win.show(); });
   // 渲染器就绪后补发插件渲染脚本（registerPluginsIpc 在窗口创建前已 loadAll，
   // 首次广播会落在渲染器监听之前而丢失，这里重播兜底）
   win.webContents.on('did-finish-load', () => {

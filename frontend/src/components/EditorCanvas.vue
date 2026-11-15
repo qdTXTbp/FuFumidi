@@ -1810,58 +1810,91 @@ function applyDraft(arr) {
    预览期间**不碰撤销栈**：beginPreview 存一份「选中音符的字段基线」，
    每次 applyPreviewNow 先把字段恢复成基线、再从基线重算 —— 于是拖动滑杆 200 次
    撤销栈也只多一条（commit 时才把基线压进去），Esc 能把整段预览一次还原。
-   只记字段、不换对象：选中集合是对象引用的 Set，换成新对象会让选择当场失效。 */
+   只记字段、不换对象：选中集合是对象引用的 Set，换成新对象会让选择当场失效。
+   ★ 结构变更（Flam/Slice）：工具可以返回 { changed, add }，新增的音符记在
+   previewBase.extra 里；下一次预览先移除它们，提交时随快照一起落盘 ——
+   这样「加音符」也仍然只占一个撤销点，取消能干净回退。 */
 let previewBase = null;
 /** order：可选，指定预览基线的顺序（列表编辑器要把「表格第 i 行」稳定映射到音符，
     所以传它自己那份按 start 排序的引用数组）。不传就用选择集合的插入顺序。 */
 function beginPreview(order) {
+  // 上一次预览没提交就开新的：先把它的结构变更撤干净，避免新增音符泄漏到轨道
+  if (previewBase) restorePreviewBase();
   const tr = curTrack();
   if (!tr || !selection.size) { previewBase = null; return 0; }
   const arr = (Array.isArray(order) && order.length) ? order.filter((n) => tr.notes.includes(n)) : [...selection];
   if (!arr.length) { previewBase = null; return 0; }
-  previewBase = arr.map((n) => ({ n, start: n.start, end: n.end, midi: n.midi, vel: n.vel, muted: !!n.muted }));
-  return previewBase.length;
+  previewBase = {
+    track: tr,
+    notes: arr,
+    base: arr.map((n) => ({ start: n.start, end: n.end, midi: n.midi, vel: n.vel, muted: !!n.muted })),
+    extra: [],          // 预览期间新增的音符（结构变更）
+    changed: 0,
+  };
+  return arr.length;
 }
 function previewing() { return !!previewBase; }
-function previewCount() { return previewBase ? previewBase.length : 0; }
+function previewCount() { return previewBase ? previewBase.notes.length : 0; }
 function restorePreviewBase() {
-  for (const b of previewBase) {
-    const { n } = b;
+  const pb = previewBase; if (!pb) return;
+  // 先撤掉预览新增的音符，再还原原音符字段
+  for (const n of pb.extra) {
+    const i = pb.track.notes.indexOf(n);
+    if (i >= 0) pb.track.notes.splice(i, 1);
+  }
+  pb.extra.length = 0;
+  pb.notes.forEach((n, i) => {
+    const b = pb.base[i];
     n.start = b.start; n.end = b.end; n.midi = b.midi; n.vel = b.vel;
     if (b.muted) n.muted = true; else n.muted = false;
-  }
+  });
+  pb.changed = 0;
 }
-/** 从基线重算一次：fn(notes) 直接改 note 对象，返回改动条数 */
+/** 从基线重算一次：fn(notes) 直接改 note 对象，返回改动条数；
+    需要新增音符时返回 { changed, add:[note...] }。 */
 function applyPreviewNow(fn) {
-  if (!previewBase) return 0;
+  const pb = previewBase;
+  if (!pb) return 0;
   restorePreviewBase();
   let changed = 0;
-  try { changed = fn(previewBase.map((b) => b.n)) || 0; } catch (e) { changed = 0; }
-  const tr = curTrack(); if (tr) sortNotes(tr.notes);
+  try {
+    const res = fn(pb.notes);
+    if (res && typeof res === 'object') {
+      const add = Array.isArray(res.add) ? res.add : [];
+      for (const n of add) { if (!n || typeof n !== 'object') continue; pb.track.notes.push(n); pb.extra.push(n); }
+      changed = Number.isFinite(res.changed) ? res.changed : add.length;
+    } else changed = Number(res) || 0;
+  } catch (e) { changed = 0; }
+  pb.changed = changed;
+  sortNotes(pb.track.notes);
   emit('modify');
   draw();
   return changed;
 }
 function commitPreview() {
-  if (!previewBase) return 0;
-  const after = previewBase.map((b) => ({ start: b.n.start, end: b.n.end, midi: b.n.midi, vel: b.n.vel, muted: !!b.n.muted }));
-  restorePreviewBase();
-  pushState('编辑');                 // 存的是「预览之前」的轨道，撤销一次回到预览前
-  previewBase.forEach((b, i) => {
-    const a = after[i];
-    b.n.start = a.start; b.n.end = a.end; b.n.midi = a.midi; b.n.vel = a.vel; b.n.muted = a.muted;
+  const pb = previewBase;
+  if (!pb) return 0;
+  const final = pb.notes.map((n) => ({ start: n.start, end: n.end, midi: n.midi, vel: n.vel, muted: !!n.muted }));
+  const extras = pb.extra.slice();
+  const affected = pb.changed || pb.notes.length;
+  restorePreviewBase();                 // 回到预览前，快照才是「修改前」
+  pushState('编辑');                    // 预览 + 结构变更一起落成一个撤销点
+  pb.notes.forEach((n, i) => {
+    const a = final[i];
+    n.start = a.start; n.end = a.end; n.midi = a.midi; n.vel = a.vel; n.muted = a.muted;
   });
-  const n = previewBase.length;
+  for (const n of extras) pb.track.notes.push(n);
   previewBase = null;
   afterEdit();
-  return n;
+  return affected;
 }
 function cancelPreview() {
-  if (!previewBase) return 0;
+  const pb = previewBase;
+  if (!pb) return 0;
+  const n = pb.notes.length;
   restorePreviewBase();
-  const n = previewBase.length;
   previewBase = null;
-  const tr = curTrack(); if (tr) sortNotes(tr.notes);
+  sortNotes(pb.track.notes);
   emit('modify');
   draw();
   return n;

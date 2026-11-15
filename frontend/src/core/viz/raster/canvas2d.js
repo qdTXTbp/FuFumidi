@@ -6,6 +6,8 @@
 // WebGL2 光栅器（M2）会吃**同一份图元**，两者用像素对齐测试互相约束。
 // ============================================================
 
+import { squirclePath } from '../../canvas_shape.js';
+
 function fillOf(ctx, fill, x, y, w, h) {
   if (typeof fill === 'string' || !fill) { ctx.fillStyle = fill || '#fff'; return; }
   const stops = fill.stops || [];
@@ -15,19 +17,8 @@ function fillOf(ctx, fill, x, y, w, h) {
 }
 
 function roundRectPath(ctx, x, y, w, h, r) {
-  let q = r;
-  if (typeof q === 'number') q = [q, q, q, q];
-  else if (!Array.isArray(q)) q = [0, 0, 0, 0];
-  const lim = Math.min(Math.abs(w), Math.abs(h)) / 2;
-  q = q.slice(0, 4).map((v) => Math.max(0, Math.min(v || 0, lim)));
-  if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(x, y, w, h, q); return; }
-  ctx.beginPath();
-  ctx.moveTo(x + q[0], y);
-  ctx.lineTo(x + w - q[1], y); ctx.arcTo(x + w, y, x + w, y + q[1], q[1]);
-  ctx.lineTo(x + w, y + h - q[2]); ctx.arcTo(x + w, y + h, x + w - q[2], y + h, q[2]);
-  ctx.lineTo(x + q[3], y + h); ctx.arcTo(x, y + h, x, y + h - q[3], q[3]);
-  ctx.lineTo(x, y + q[0]); ctx.arcTo(x, y, x + q[0], y, q[0]);
-  ctx.closePath();
+  // 连续曲率：可视化图元与 DOM/轨道的圆角统一
+  squirclePath(ctx, x, y, w, h, r);
 }
 
 export function drawCanvas2D(ctx, prims) {

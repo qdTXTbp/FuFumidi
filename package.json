@@ -1,7 +1,7 @@
 {
   "name": "fufumidi",
   "productName": "FuFumidi",
-  "version": "6.6.2",
+  "version": "6.7.0-beta.1",
   "description": "离线 MIDI 播放 / 编辑 / 可视化 / 分析 / 乐谱 / 转录（音频转 MIDI）一体工具",
   "main": "main.js",
   "author": {
@@ -31,11 +31,12 @@
     "audit:ui-tokens": "node scripts/check-ui-tokens.mjs",
     "test:ui": "node --test \"frontend/tests/*.test.js\"",
     "test:e2e": "npm run build:ui && node scripts/e2e/run.mjs",
-    "test": "npm run test:rust && npm run test:ui && npm run test:plugin && npm run test:separate && npm run test:download && npm run test:hotpatch && npm run test:autosave && npm run test:export && npm run test:taskcenter && npm run test:quality && npm run test:storage && npm run test:update-sign && npm run test:update-util && npm run test:update-channel && npm run test:platform && npm run test:dataroot && npm run test:zip && npm run test:plugin-host && npm run test:dawproject && npm run check:version && npm run test:usermeta && npm run test:speedtest && npm run test:feedback && npm run test:netlify && npm run test:worker",
+    "test": "npm run test:rust && npm run test:ui && npm run test:plugin && npm run test:separate && npm run test:download && npm run test:hotpatch && npm run test:engine && npm run test:autosave && npm run test:export && npm run test:taskcenter && npm run test:quality && npm run test:storage && npm run test:update-sign && npm run test:update-util && npm run test:update-channel && npm run test:platform && npm run test:dataroot && npm run test:zip && npm run test:plugin-host && npm run test:dawproject && npm run check:version && npm run test:usermeta && npm run test:speedtest && npm run test:feedback && npm run test:netlify && npm run test:worker",
     "test:worker": "npm --prefix cloud-sync/worker run test:worker",
     "test:plugin": "node --test scripts/test-plugin-sandbox.mjs",
     "test:download": "node --test scripts/test-fast-download.mjs scripts/test-model-sources.mjs scripts/test-download-registry.mjs",
     "test:hotpatch": "node --test scripts/test-hotpatch.mjs",
+    "test:engine": "node --test scripts/test-engine-supervisor.mjs",
     "test:autosave": "node --test scripts/test-autosave.mjs",
     "test:export": "node --test scripts/test-export.mjs",
     "test:taskcenter": "node --test scripts/test-taskcenter.mjs",
@@ -75,7 +76,7 @@
     "webwallgl": "^3.0.0"
   },
   "devDependencies": {
-    "electron": "^37.10.3",
+    "electron": "^38.8.6",
     "electron-builder": "^26.15.3"
   }
 }

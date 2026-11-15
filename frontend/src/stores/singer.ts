@@ -41,6 +41,13 @@ import {
 import {
   curveOf, normalizeCurve, normalizeCurves, targetsFor, valueForNote,
 } from '../core/track_automation.js';
+import {
+  curveAbbrOf, curveParamId, LAST_TWEAK_TTL_MS, normalizeParamValue, paramById,
+} from '../core/param_registry.js';
+import {
+  hasClipFor, mergedCurvePoints, normalizeAutomationClip, normalizeAutomationClips,
+  createClipFromCurve, cloneClip, trimClip,
+} from '../core/automation_clip.js';
 
 /* ------------------------------------------------------------------ 类型 */
 
@@ -225,6 +232,41 @@ export interface FxNode {
 export interface AutomationCurve {
   abbr: string;
   points: { beat: number; value: number }[];
+}
+
+/**
+ * 「最后一次调整的参数」（FLAD-04 数据层）。
+ *
+ * ★ 只活在内存里、且是**短生命周期**：`at` 超过 `LAST_TWEAK_TTL_MS`
+ *   之后 `lastTweakedParam` getter 返回 null。存的是注册表的稳定
+ *   `parameterId`（如 `curve.VOL` / `track.gain`），不是显示名。
+ */
+export interface LastTweakedParam {
+  parameterId: string;
+  trackId: string;
+  noteId?: string;
+  /** 调整后的值（曲线类没有单一标量值，用该参数的默认值占位） */
+  value: number;
+  at: number;
+}
+
+/**
+ * Playlist 一级自动化片段（FLAD-04）。
+ *
+ * `points[].beat` 是 **clip 内部相对拍**（0 = clip 起点）；`startBeat/endBeat`
+ * 是工程绝对拍。归一化/取值逻辑在 `core/automation_clip.js`，这里只存数据。
+ */
+export interface AutomationClip {
+  id: string;
+  trackId: string;
+  parameterId: string;
+  points: { beat: number; value: number }[];
+  startBeat: number;
+  endBeat: number;
+  loop: boolean;
+  /** 参数自身单位的整体偏移（VOL 是 dB，PIT 是音分） */
+  gain: number;
+  name: string;
 }
 
 export interface SingTrack {
@@ -536,6 +578,10 @@ export const useSingerStore = defineStore('singer', {
      * 只是显示开关：不影响发声、不写进工程文件。
      */
     rollHidden: [] as string[],
+    /** 最后调整的参数（短生命周期；后续右键菜单据此创建 automation clip） */
+    lastTweaked: null as LastTweakedParam | null,
+    /** Playlist 一级自动化片段（FLAD-04；与轨上的 curves 子轨并存） */
+    automationClips: [] as AutomationClip[],
   }),
 
   getters: {
@@ -557,6 +603,17 @@ export const useSingerStore = defineStore('singer', {
     /** 是否可撤销 / 可重做（工具条按钮的禁用态用） */
     canUndo(state): boolean { void state.histRev; return !!(state._hist && state._hist.canUndo); },
     canRedo(state): boolean { void state.histRev; return !!(state._hist && state._hist.canRedo); },
+    /**
+     * 最后一次参数调整（过期即 null）。
+     *
+     * 为什么在这里判过期而不是写定时器：getter 是唯一出口，
+     * 任何调用方拿到的都只会是"刚刚调的"，不需要额外清理逻辑。
+     */
+    lastTweakedParam(state): LastTweakedParam | null {
+      const e = state.lastTweaked;
+      if (!e) return null;
+      return (Date.now() - e.at <= LAST_TWEAK_TTL_MS) ? e : null;
+    },
     activeTrack(state): SingTrack | null {
       return state.tracks.find(t => t.id === state.activeTrackId) || null;
     },
@@ -660,7 +717,10 @@ export const useSingerStore = defineStore('singer', {
     patchAudio(id: string, patch: Partial<AudioClip>) {
       this.pushUndo();
       const t = this.tracks.find(x => x.id === id);
-      if (t && t.audio) Object.assign(t.audio, patch);
+      if (!t || !t.audio) return;
+      Object.assign(t.audio, patch);
+      // 伴奏轨增益与声部轨共用同一个可自动化参数（track.gain）
+      if (patch.gainDb !== undefined) this.touchParam('track.gain', Number(patch.gainDb), { trackId: id });
     },
 
     /**
@@ -856,6 +916,8 @@ export const useSingerStore = defineStore('singer', {
       const t = this.tracks.find(x => x.id === id);
       if (!t) return;
       Object.assign(t, patch);
+      // 轨增益 = 可自动化参数（注册表 track.gain）
+      if (patch.gainDb !== undefined) this.touchParam('track.gain', Number(patch.gainDb), { trackId: id });
       // ★ 换引擎时清掉另一侧的歌手，避免「UTAU 轨指向 DiffSinger 声库」这类脏数据
       if (patch.engine && patch.engine !== t.engine) {
         t.singer = '';
@@ -922,6 +984,34 @@ export const useSingerStore = defineStore('singer', {
       t.fx = arr;
     },
 
+    /* ---------------- 参数注册表 / 最后调整的参数（FLAD-04 数据层） ---------------- */
+    /**
+     * 记一笔「刚刚调了哪个参数」。
+     *
+     * ★ 只做数据：后续的参数控件 / 右键菜单通过 `lastTweakedParam` 取，
+     *   「为 xxx 创建自动化」就是从这里起步。未知 parameterId 直接忽略，
+     *   免得脏 id 流进将来的 clip 模型。
+     */
+    touchParam(
+      parameterId: string,
+      value: number | null,
+      opts?: { trackId?: string; noteId?: string },
+    ): LastTweakedParam | null {
+      const def = paramById(parameterId);
+      if (!def) return null;
+      const v = normalizeParamValue(parameterId, value);
+      const entry: LastTweakedParam = {
+        parameterId,
+        trackId: (opts && opts.trackId) || this.activeTrackId || '',
+        noteId: (opts && opts.noteId) || '',
+        value: typeof v === 'number' ? v : def.def,
+        at: Date.now(),
+      };
+      this.lastTweaked = entry;
+      return entry;
+    },
+    clearLastTweakedParam() { this.lastTweaked = null; },
+
     /* ---------------- 自动化子轨 ---------------- */
     /** 这条轨能挂哪些自动化 —— DiffSinger 没有 DYN/BRE/GEN，别让用户看见调不动的旋钮 */
     curveTargets(id: string): string[] {
@@ -947,6 +1037,10 @@ export const useSingerStore = defineStore('singer', {
       if (norm.abbr === 'PIT') {
         t.pitchCurve = norm.points.map(p => ({ beat: p.beat, cents: p.value }));
       }
+      // 写曲线 = 一次参数调整：记下目标，供「据此创建自动化 clip」
+      // 曲线没有单一标量值，value 传 null 让注册表的默认值占位
+      const pid = curveParamId(norm.abbr);
+      if (pid) this.touchParam(pid, null, { trackId: id });
     },
     clearCurve(id: string, abbr: string) {
       this.pushUndo();
@@ -954,6 +1048,96 @@ export const useSingerStore = defineStore('singer', {
       if (!t) return;
       t.curves = (t.curves || []).filter(c => c.abbr !== abbr);
       if (abbr === 'PIT') t.pitchCurve = [];
+    },
+
+    /* ---------------- Playlist 一级自动化片段（FLAD-04） ----------------
+     * clip 与轨上的 curves 子轨并存：播放/导出时 clip 覆盖子轨（见 automation_clip.js）。
+     * 每个动作内部 pushUndo 一次 = 一个撤销事务；拖动过程走 replaceAutomationClips，
+     * 由 UI 在手势开始时 pushUndo 一次。 */
+    automationClipsOf(trackId: string): AutomationClip[] {
+      const id = String(trackId || '');
+      return (this.automationClips || []).filter(c => c.trackId === id);
+    },
+    addAutomationClip(raw: any): AutomationClip | null {
+      const c = normalizeAutomationClip(raw);
+      if (!c) return null;
+      this.pushUndo();
+      this.automationClips = [...this.automationClips, c];
+      return c;
+    },
+    updateAutomationClip(id: string, patch: Partial<AutomationClip>): boolean {
+      const i = this.automationClips.findIndex(c => c.id === id);
+      if (i < 0) return false;
+      const merged = normalizeAutomationClip({ ...this.automationClips[i], ...patch, id });
+      if (!merged) return false;
+      this.pushUndo();
+      const list = this.automationClips.slice();
+      list[i] = merged;
+      this.automationClips = list;
+      return true;
+    },
+    removeAutomationClip(id: string): boolean {
+      if (!this.automationClips.some(c => c.id === id)) return false;
+      this.pushUndo();
+      this.automationClips = this.automationClips.filter(c => c.id !== id);
+      return true;
+    },
+    duplicateAutomationClip(id: string): AutomationClip | null {
+      const src = this.automationClips.find(c => c.id === id);
+      if (!src) return null;
+      this.pushUndo();
+      const copy = cloneClip(src);
+      this.automationClips = [...this.automationClips, copy];
+      return copy;
+    },
+    /** 拖动中的写回：**不**记撤销（手势开始已记过） */
+    replaceAutomationClips(list: AutomationClip[]) {
+      this.automationClips = normalizeAutomationClips(list) as AutomationClip[];
+    },
+    /** 拖边裁剪（start 边同步平移内部点，内容不漂移） */
+    trimAutomationClip(id: string, edge: 'start' | 'end', beat: number): boolean {
+      const i = this.automationClips.findIndex(c => c.id === id);
+      if (i < 0) return false;
+      const next = trimClip(this.automationClips[i], edge, beat) as AutomationClip | null;
+      if (!next) return false;
+      this.pushUndo();
+      const list = this.automationClips.slice();
+      list[i] = next;
+      this.automationClips = list;
+      return true;
+    },
+    /**
+     * 从「最后调整的参数」创建 clip。
+     *
+     * 曲线参数截取该轨当前曲线的 `[startBeat, endBeat)`；混音参数（track.gain）
+     * 以轨当前标量值生成两点常量折线。没有最近调整时返回 null。
+     */
+    createAutomationClipFromLastTweak(startBeat: number, endBeat: number): AutomationClip | null {
+      const e = this.lastTweakedParam;
+      if (!e) return null;
+      const tr = this.tracks.find(t => t.id === e.trackId) || this.activeTrack;
+      if (!tr) return null;
+      const from = Math.max(0, Number(startBeat) || 0);
+      const to = Math.max(from + 0.25, Number(endBeat) || (from + 4));
+      const abbr = curveAbbrOf(e.parameterId);
+      let c: AutomationClip | null = null;
+      if (abbr) {
+        const curve = curveOf(tr as any, abbr) || { abbr, points: [] };
+        c = createClipFromCurve(curve as any, {
+          trackId: tr.id, startBeat: from, endBeat: to, name: abbr,
+        }) as AutomationClip | null;
+      } else if (e.parameterId === 'track.gain') {
+        const v = Number((tr as any).gainDb) || 0;
+        c = normalizeAutomationClip({
+          trackId: tr.id, parameterId: e.parameterId,
+          points: [{ beat: 0, value: v }, { beat: to - from, value: v }],
+          startBeat: from, endBeat: to, name: 'GAIN',
+        });
+      }
+      if (!c) return null;
+      this.pushUndo();
+      this.automationClips = [...this.automationClips, c];
+      return c;
     },
 
     /* ---------------- 音符 ---------------- */
@@ -1026,12 +1210,19 @@ export const useSingerStore = defineStore('singer', {
      * PianoRoll 的画布编辑（拖拽/删除/泳道/音素）都会先 pushUndo ——
      * 之前 rollApi 没提供这些方法、全部判空跳过，等于**没有撤销**。 */
     _snapshotNotes(): string {
-      return JSON.stringify((this.tracks || []).map((t: any) => ({
-        id: t.id, notes: t.notes, curves: t.curves || [], pitchCurve: t.pitchCurve || [],
-      })));
+      return JSON.stringify({
+        tracks: (this.tracks || []).map((t: any) => ({
+          id: t.id, notes: t.notes, curves: t.curves || [], pitchCurve: t.pitchCurve || [],
+        })),
+        // automation clip 也是工程内容：撤销「加/删/拖动 clip」必须能一起回滚
+        clips: this.automationClips || [],
+      });
     },
     _restoreNotes(s: string) {
-      const byId = new Map<string, any>((JSON.parse(s) as any[]).map(r => [r.id, r]));
+      const parsed: any = JSON.parse(s);
+      // 兼容旧快照（纯数组 = 只有 tracks）
+      const rows: any[] = Array.isArray(parsed) ? parsed : (parsed.tracks || []);
+      const byId = new Map<string, any>(rows.map(r => [r.id, r]));
       for (const t of this.tracks as any[]) {
         const r = byId.get(t.id);
         if (!r) continue;
@@ -1039,6 +1230,7 @@ export const useSingerStore = defineStore('singer', {
         t.curves = r.curves;
         t.pitchCurve = r.pitchCurve;
       }
+      if (!Array.isArray(parsed)) this.automationClips = parsed.clips || [];
     },
     pushUndo() {
       this.histRev++;
@@ -1214,6 +1406,8 @@ export const useSingerStore = defineStore('singer', {
       this.renderByTrack = {};
       this._phraseCache = {};
       this.renderPrevByTrack = {};
+      this.lastTweaked = null;          // 整盘换掉：上一条「最后调整」已经指向不存在的轨
+      this.automationClips = [];        // clip 也指向旧轨，必须一起清
       // 整盘换掉 = 新起点：历史里留着上一批快照，Ctrl+Z 会把旧曲目"复活"
       this.clearHistory();
     },
@@ -1263,6 +1457,7 @@ export const useSingerStore = defineStore('singer', {
         activeTrackId: this.activeTrackId,
         meta: this.meta,
         createdAt: this.createdAt,
+        automationClips: this.automationClips,
       });
       const plain = JSON.parse(JSON.stringify(json));
       try {
@@ -1337,11 +1532,13 @@ export const useSingerStore = defineStore('singer', {
       this.activeTrackId = proj.activeTrackId || (tracks[0]?.id || '');
       this.meta = Object.assign({ title: '', comment: '', artist: '', timeSig: '4/4', alignMs: 0, groups: [] }, proj.meta || {});
       this.createdAt = proj.createdAt || '';
+      this.automationClips = (proj.automationClips || []) as AutomationClip[];
       // ★ 导入的 OpenUTAU 工程：projectPath 置空 —— 用户的 .ustx 原文件不能被
       //   「保存」覆盖（保存会写 zip 包），首次保存时走另存为生成 .fufumidi。
       this.projectPath = r.external ? '' : (r.filePath || '');
       this.selectedId = null;
       this.selectedIds = [];
+      this.lastTweaked = null;              // 新工程：上一条「最后调整」已失效
       this.missingAudio = missingAssets(tracks);
       this.clearHistory();
 
@@ -1402,10 +1599,12 @@ export const useSingerStore = defineStore('singer', {
       this.activeTrackId = proj.activeTrackId || (tracks[0]?.id || '');
       this.meta = proj.meta;
       this.createdAt = proj.createdAt || '';
+      this.automationClips = (proj.automationClips || []) as AutomationClip[];
       // ★ 导入的 .ustx 不是 .fufumidi —— projectPath 置空，"保存"会走另存为
       this.projectPath = '';
       this.selectedId = null;
       this.selectedIds = [];
+      this.lastTweaked = null;              // 新工程：上一条「最后调整」已失效
       this.missingAudio = missingAssets(tracks);
       this.clearHistory();
 
@@ -1827,7 +2026,8 @@ export const useSingerStore = defineStore('singer', {
         phonemeOverrides: (n.phonemeOverrides || []).map(o => ({ ...o })),
         pitchOffset: n.pitchOffset || 0,
       }));
-      const pitchCurve = (tr.pitchCurve || []).map(p => ({ beat: p.beat, cents: p.cents }));
+      // PIT 同样叠加 clip 覆盖（DiffSinger 没有乐句缓存，改了立即生效）
+      const pitchCurve = this._pitPoints(tr).map(p => ({ beat: p.beat, cents: p.value }));
       const r = await (bridge as any).diffsingerRender({
         voicebank: tr.singer,
         notes,
@@ -1864,6 +2064,16 @@ export const useSingerStore = defineStore('singer', {
       const bre = curveOf(tr, 'BRE');
       const gen = curveOf(tr, 'GEN');
       const vol = curveOf(tr, 'VOL');
+      /* ★ automation clip 覆盖在子轨之上：先把两条来源烘焙成同一条点列表，
+         再按音符中点取值 —— 播放侧走的是同一套 `effectiveValueAt`，
+         所以「听着对」和「渲出来对」不会各说各话。 */
+      const clips = this.automationClips || [];
+      const dynPts = mergedCurvePoints(dyn ? dyn.points : [], 'DYN', clips, tr.id);
+      const brePts = mergedCurvePoints(bre ? bre.points : [], 'BRE', clips, tr.id);
+      const genPts = mergedCurvePoints(gen ? gen.points : [], 'GEN', clips, tr.id);
+      const useDyn = !!dyn || hasClipFor(clips, tr.id, 'DYN');
+      const useBre = !!bre || hasClipFor(clips, tr.id, 'BRE');
+      const useGen = !!gen || hasClipFor(clips, tr.id, 'GEN');
       return tr.notes.map(n => {
         /* ★★ 两个引擎的默认值口径不同，所以**没设过的参数一律不发**，
               让引擎用它自己的原生默认值（legacy: velocity/volume=100、gender=50、breath=0；
@@ -1889,15 +2099,15 @@ export const useSingerStore = defineStore('singer', {
         /* 力度 / 音量 / 性别 / 气声：
            - 有对应自动化子轨（DYN/VOL/GEN/BRE）→ 按音符中点取值（自动化优先级最高）
            - 否则只在音符上**真设过**时才发；没设过就整个键不发 */
-        const velocity = dyn ? valueForNote(dyn.points, n.startBeat, n.durBeat, 'DYN') : n.velocity;
+        const velocity = useDyn ? valueForNote(dynPts, n.startBeat, n.durBeat, 'DYN') : n.velocity;
         if (typeof velocity === 'number') { raw.velocity = velocity; expressions.vel = velocity; }
         const volume = vol ? valueForNote(vol.points, n.startBeat, n.durBeat, 'VOL') : n.volume;
         /* ★ volume=0 一律当成"没设"：0 是"乘 0"（静音），而界面里 0 只是"没调过"的占位。
            老工程里存着 volume:0 的音符因此也能正常出声。 */
         if (typeof volume === 'number' && volume > 0) { raw.volume = volume; expressions.vol = volume; }
-        const breath = bre ? valueForNote(bre.points, n.startBeat, n.durBeat, 'BRE') : n.breath;
+        const breath = useBre ? valueForNote(brePts, n.startBeat, n.durBeat, 'BRE') : n.breath;
         if (typeof breath === 'number') { raw.breath = breath; expressions.bre = breath; }
-        const genderUi = gen ? valueForNote(gen.points, n.startBeat, n.durBeat, 'GEN') : n.gender;
+        const genderUi = useGen ? valueForNote(genPts, n.startBeat, n.durBeat, 'GEN') : n.gender;
         if (typeof genderUi === 'number') {
           /* 界面 GENC 是 -100..100（0 = 不变），legacy 引擎要 0..100（50 = 不变）：
              这里做显式映射，负值压到 0（legacy 没有"更暗"的区间，夹住而不是乱翻）。 */
@@ -1938,12 +2148,25 @@ export const useSingerStore = defineStore('singer', {
       });
     },
 
+    /**
+     * 某条轨的 PIT 曲线（子轨镜像 + clip 覆盖，工程绝对拍/音分）。
+     *
+     * 渲染与缓存键共用这一份：PIT 是**连续**下发的，不像 DYN/BRE/GEN 会进
+     * 每音符 payload，所以 clip 改了必须让乐句缓存一起失效，否则听感停在旧值。
+     */
+    _pitPoints(tr: SingTrack): { beat: number; value: number }[] {
+      const base = (tr.pitchCurve || []).map(p => ({ beat: p.beat, value: p.cents }));
+      return mergedCurvePoints(base, 'PIT', this.automationClips || [], tr.id);
+    },
+
     /** 渲染上下文串：这些设置一变，所有乐句缓存作废（换歌手/换引擎/改 BPM 都不能复用旧音频） */
     _renderCtxKey(tr: SingTrack): string {
       return [
         'utau', tr.singer || '', String(this.bpm),
         normalizeSampleNote(this.sampleNote), tr.language || '',
         tr.resampler || '', tr.wavtool || '',
+        // PIT 不进每音符 payload，只能靠上下文串带动缓存失效
+        'pit:' + JSON.stringify(this._pitPoints(tr)),
       ].join('|');
     },
 
@@ -1989,11 +2212,16 @@ export const useSingerStore = defineStore('singer', {
           // 自动化子轨（连续曲线值进渲染）：只送 render 模式的曲线（DYN/BRE/GEN）；
           // 音高曲线（音分，相对音符音高的偏差）镜像成 PIT —— render_phrase 会对
           // 渲染音高做 pitches[i] += pitd.sample(...) 偏差应用。
-          curves: (tr.curves || [])
-            .filter((c: any) => ['DYN', 'BRE', 'GEN'].includes(c.abbr) && c.points.length)
-            .map((c: any) => ({ abbr: c.abbr, points: c.points.map((p: any) => ({ beat: p.beat, value: p.value })) }))
-            .concat((tr.pitchCurve || []).length
-              ? [{ abbr: 'PIT', points: tr.pitchCurve.map((p: any) => ({ beat: p.beat, value: p.cents })) }]
+          // ★ 送的是**烘焙后**的点：clip 覆盖已经合并进去，引擎侧不需要认识 clip。
+          curves: ['DYN', 'BRE', 'GEN']
+            .map((abbr) => ({
+              abbr,
+              points: mergedCurvePoints(
+                (curveOf(tr, abbr)?.points) || [], abbr, this.automationClips || [], tr.id),
+            }))
+            .filter((c) => c.points.length)
+            .concat(this._pitPoints(tr).length
+              ? [{ abbr: 'PIT', points: this._pitPoints(tr) }]
               : []),
         });
         calls = 1;

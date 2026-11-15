@@ -17,7 +17,7 @@
 
 import { ensureAudio, getCtx } from '../audio.js';
 import { buildFxChain } from './track_fx.js';
-import { envelopeFrom } from './track_automation.js';
+import { automationEnvelope, hasClipFor } from './automation_clip.js';
 
 // 进度驱动：浏览器用 rAF（与刷新同步）；Node（测试）退回定时器。
 // ★ 不硬依赖 rAF —— 同步逻辑本身与渲染无关，测试不该为了它引一个 DOM 垫片。
@@ -187,6 +187,9 @@ export class SingTransport {
         tempoMap: Array.isArray(it.tempoMap) ? it.tempoMap.slice() : [],
         volPoints: Array.isArray(it.volPoints) ? it.volPoints.slice() : [],
         panPoints: Array.isArray(it.panPoints) ? it.panPoints.slice() : [],
+        /* automation clip 覆盖层：trackId 用来过滤，clips 保持共享（只读） */
+        trackId: it.trackId || '',
+        clips: Array.isArray(it.clips) ? it.clips : [],
       });
     }
     this.lanes = out;
@@ -246,10 +249,13 @@ export class SingTransport {
       g.gain.value = lane.muted ? 0 : SingTransport._gain(lane.gainDb);
       // 自动化按**工程时间**走：buffer 时间 − skipMs = 工程时间
       const t0 = Math.max(0, offsetSec - lane.skipMs / 1000);
-      if (!lane.muted && lane.volPoints && lane.volPoints.length) {
+      // ★ 有没有基础曲线都要看 clip —— 只画了 clip、没画子轨时同样要建自动化。
+      const hasVol = (lane.volPoints && lane.volPoints.length) || hasClipFor(lane.clips, lane.trackId, 'VOL');
+      if (!lane.muted && hasVol) {
         try {
           g.gain.setValueCurveAtTime(
-            envelopeFrom(lane.volPoints, lane.bpm, t0, t0 + durSec, 256, 'VOL', lane.tempoMap),
+            automationEnvelope(lane.volPoints, 'VOL', lane.clips, lane.trackId,
+              lane.bpm, t0, t0 + durSec, 256, lane.tempoMap),
             when, durSec);
         } catch (_) { /* 老浏览器不支持 setValueCurveAtTime：退回上面的固定增益 */ }
       }
@@ -257,11 +263,13 @@ export class SingTransport {
       this._nodes.push(g);
 
       let tail = g;
-      if (ctx.createStereoPanner && lane.panPoints && lane.panPoints.length) {
+      const hasPan = (lane.panPoints && lane.panPoints.length) || hasClipFor(lane.clips, lane.trackId, 'PAN');
+      if (ctx.createStereoPanner && hasPan) {
         const p = ctx.createStereoPanner();
         try {
           p.pan.setValueCurveAtTime(
-            envelopeFrom(lane.panPoints, lane.bpm, t0, t0 + durSec, 256, 'PAN', lane.tempoMap),
+            automationEnvelope(lane.panPoints, 'PAN', lane.clips, lane.trackId,
+              lane.bpm, t0, t0 + durSec, 256, lane.tempoMap),
             when, durSec);
         } catch (_) { /* 同上，退回 0（居中） */ }
         g.connect(p);
@@ -312,19 +320,23 @@ export class SingTransport {
       if (chain && chain.input && chain.output) { src.connect(chain.input); head = chain.output; }
       const g = ctx.createGain();
       g.gain.value = SingTransport._gain(lane.gainDb);
-      if (lane.volPoints && lane.volPoints.length) {
+      const hasVol = (lane.volPoints && lane.volPoints.length) || hasClipFor(lane.clips, lane.trackId, 'VOL');
+      if (hasVol) {
         try {
           g.gain.setValueCurveAtTime(
-            envelopeFrom(lane.volPoints, lane.bpm, 0, outDur, 256, 'VOL'), 0, outDur);
+            automationEnvelope(lane.volPoints, 'VOL', lane.clips, lane.trackId,
+              lane.bpm, 0, outDur, 256), 0, outDur);
         } catch (_) { /* 不支持就退回固定增益 */ }
       }
       head.connect(g);
       let tail = g;
-      if (ctx.createStereoPanner && lane.panPoints && lane.panPoints.length) {
+      const hasPan = (lane.panPoints && lane.panPoints.length) || hasClipFor(lane.clips, lane.trackId, 'PAN');
+      if (ctx.createStereoPanner && hasPan) {
         const p = ctx.createStereoPanner();
         try {
           p.pan.setValueCurveAtTime(
-            envelopeFrom(lane.panPoints, lane.bpm, 0, outDur, 256, 'PAN'), 0, outDur);
+            automationEnvelope(lane.panPoints, 'PAN', lane.clips, lane.trackId,
+              lane.bpm, 0, outDur, 256), 0, outDur);
         } catch (_) { /* 同上，退回居中 */ }
         g.connect(p);
         tail = p;

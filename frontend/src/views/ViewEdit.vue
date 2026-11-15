@@ -442,7 +442,11 @@ const toolCtx = computed(() => {
   }
   let pcs = [];
   try { pcs = spec ? scalePitchClasses(spec) : []; } catch (e) { pcs = []; }
-  return { tpb: (s && s.tpb) || 480, scalePcs: pcs, track: curTrackInfo.value };
+  const tpb = (s && s.tpb) || 480;
+  // 播放头位置（tick）：Slice 的「按播放头切」要用；tempo 为 0 时按 1 处理，避免除零
+  let playhead = 0;
+  try { if (s) playhead = Math.max(0, Math.round(s.secToTick(state.curSec / (state.tempo || 1)))); } catch (e) { playhead = 0; }
+  return { tpb, scalePcs: pcs, track: curTrackInfo.value, playhead };
 });
 function openMidiTools(toolId) {
   if (!song.value) { toast(t('请先载入 MIDI'), 'warn'); return; }

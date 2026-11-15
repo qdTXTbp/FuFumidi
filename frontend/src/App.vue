@@ -154,6 +154,27 @@ onMounted(() => {
 });
 onBeforeUnmount(() => { try { if (offWpTasks) offWpTasks(); } catch (e) {} offWpTasks = null; });
 
+/* 启动页收尾：**等首屏数据真正落定**再通知主进程，而不是"首帧画完"就放行。
+   ★ 只等首帧不够：曲库恢复（restoreSongs）是异步的，太早放行会让用户先看到
+     空白首页、再看到列表一个个冒出来 —— 启动页就白做了。
+   所以真正触发点在下面 restoreSongs 的 finally 里；这里只留 8s 硬兜底，
+   任何一步卡住都不会把启动页钉死。 */
+let uiReadySent = false;
+function signalUiReady() {
+  if (uiReadySent) return;
+  uiReadySent = true;
+  try {
+    const b = window.fuBridge;
+    if (b && typeof b.uiReady === 'function') b.uiReady();
+  } catch (e) {}
+}
+/** 数据落定后再等两帧：确保列表已经排版/绘制，而不是"DOM 有了、画面还没" */
+function signalUiReadyAfterPaint() {
+  requestAnimationFrame(() => requestAnimationFrame(signalUiReady));
+  setTimeout(signalUiReady, 800);   // rAF 被节流（窗口隐藏/后台）时的兜底
+}
+onMounted(() => { setTimeout(signalUiReady, 8000); });
+
 async function loadWallpaper() {
   try {
     const s = await settingsStore.load();
@@ -755,6 +776,8 @@ onMounted(() => {
       tabsStore.hydrate((state.songs || []).map((s) => s.id));
       if (state.currentId) tabsStore.open(state.currentId, (state.songs.find((s) => s.id === state.currentId) || {}).name || state.currentId);
     } catch (e) {}
+    // 曲库列表已就位 = 首页不再是空的：现在才通知启动页收尾
+    signalUiReadyAfterPaint();
   });
   setTimeout(restoreSessionView, 350);   // 等首屏路由/曲库恢复稳定后再套用会话
   playlistStore.hydrateFromDb();

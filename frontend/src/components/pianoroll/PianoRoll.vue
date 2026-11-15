@@ -19,6 +19,7 @@ import { fitMenu } from '../../core/menu.js';
 import Icon from '../Icon.vue';
 import { t } from '../../core/i18n.js';
 import { derivePhonemes } from '../../core/phoneme.js';
+import { squirclePath } from '../../core/canvas_shape.js';
 /* 手写笔 / 触控（M9 收尾）：掌侧误触、第二根手指、长按=右键 */
 import { claimPointer, isPrimaryPointer, releasePointer, palmRejected, makeLongPress } from '../../core/pointer.js';
 
@@ -224,14 +225,8 @@ function V(name) {
   try { const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim(); return v || '#888'; } catch (e) { return '#888'; }   // ui-tokens-allow: V() 的颜色兜底
 }
 function roundRect(g, x, y, w, h, r) {
-  const rr = Math.min(r, w / 2, h / 2);
-  g.beginPath();
-  g.moveTo(x + rr, y);
-  g.arcTo(x + w, y, x + w, y + h, rr);
-  g.arcTo(x + w, y + h, x, y + h, rr);
-  g.arcTo(x, y + h, x, y, rr);
-  g.arcTo(x, y, x + w, y, rr);
-  g.closePath();
+  // 连续曲率：音符块的圆角与 DOM 一致
+  squirclePath(g, x, y, w, h, r);
 }
 
 function setupCanvas() {

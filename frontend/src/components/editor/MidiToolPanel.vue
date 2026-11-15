@@ -30,6 +30,42 @@ const presets = ref(loadPresets());
 const presetName = ref('');
 const scaleOk = computed(() => Array.isArray(props.ctx && props.ctx.scalePcs) && props.ctx.scalePcs.length > 0);
 
+/* ---------------- 搜索 / 最近使用（FLAD-03） ----------------
+ * 工具已经有分组，但组一多还是要来回找。这里只补两件小事：
+ *   1. 输入关键词按名字/分组/说明过滤，过滤时隐藏空分组；
+ *   2. 顶部保留「最近使用」（跨会话，localStorage），最多 5 条。
+ * 不改面板结构，也不改任何工具的 apply。
+ */
+const RECENT_KEY = 'fufumidi.midiTool.recent';
+const RECENT_MAX = 5;
+const search = ref('');
+
+function loadRecent() {
+  try {
+    const arr = JSON.parse(localStorage.getItem(RECENT_KEY) || '[]');
+    return (Array.isArray(arr) ? arr : []).filter((id) => toolById(id)).slice(0, RECENT_MAX);
+  } catch (e) {
+    return [];   // 隐私模式/存储被禁用：退化成「没有最近使用」
+  }
+}
+function rememberTool(id) {
+  const next = [id, ...recent.value.filter((x) => x !== id)].slice(0, RECENT_MAX);
+  recent.value = next;
+  try { localStorage.setItem(RECENT_KEY, JSON.stringify(next)); } catch (e) { /* 存不了就算了，不影响本次使用 */ }
+}
+const recent = ref(loadRecent());
+
+const query = computed(() => search.value.trim().toLowerCase());
+function hitTool(tool) {
+  if (!query.value) return true;
+  const hay = [tool.id, t(tool.name), t(tool.group), t(tool.hint)].join(' ').toLowerCase();
+  return hay.includes(query.value);
+}
+const recentTools = computed(() => (query.value ? [] : recent.value.map((id) => toolById(id)).filter(Boolean)));
+const shownGroups = computed(() => TOOL_GROUPS
+  .map((g) => ({ name: g, tools: toolsOfGroup(g).filter(hitTool) }))
+  .filter((g) => g.tools.length));
+
 const cur = computed(() => toolById(toolId.value) || MIDI_TOOLS[0]);
 const curPresets = computed(() => (presets.value[toolId.value] || []));
 
@@ -45,6 +81,7 @@ function pick(id) {
   toolId.value = id;
   params.value = defaultParams(cur.value);
   presetName.value = '';
+  rememberTool(id);
   preview();
 }
 function resetParams() { params.value = defaultParams(cur.value); preview(); }
@@ -95,6 +132,7 @@ watch(() => props.open, (v) => {
     toolId.value = toolById(props.initialTool) ? props.initialTool : MIDI_TOOLS[0].id;
     params.value = defaultParams(cur.value);
     changed.value = 0;
+    rememberTool(toolId.value);
     preview();
   }
 });
@@ -113,11 +151,18 @@ watch(() => props.open, (v) => {
 
       <div class="mtp-body">
         <div class="mtp-list">
-          <div v-for="g in TOOL_GROUPS" :key="g" class="mtp-grp">
-            <div class="mtp-grp-h">{{ t(g) }}</div>
-            <button v-for="tool in toolsOfGroup(g)" :key="tool.id" class="mtp-item"
+          <input class="text-input mtp-search" v-model="search" :placeholder="t('搜索工具')" />
+          <div v-if="recentTools.length" class="mtp-grp">
+            <div class="mtp-grp-h">{{ t('最近使用') }}</div>
+            <button v-for="tool in recentTools" :key="'r-' + tool.id" class="mtp-item"
                     :class="{ on: toolId === tool.id }" @click="pick(tool.id)">{{ t(tool.name) }}</button>
           </div>
+          <div v-for="g in shownGroups" :key="g.name" class="mtp-grp">
+            <div class="mtp-grp-h">{{ t(g.name) }}</div>
+            <button v-for="tool in g.tools" :key="tool.id" class="mtp-item"
+                    :class="{ on: toolId === tool.id }" @click="pick(tool.id)">{{ t(tool.name) }}</button>
+          </div>
+          <div v-if="!shownGroups.length" class="mtp-empty">{{ t('没有匹配的工具') }}</div>
         </div>
 
         <div class="mtp-form">
@@ -185,6 +230,8 @@ watch(() => props.open, (v) => {
 .mtp-body { display: flex; gap: var(--sp-3); min-height: 300px; }
 .mtp-list { flex: none; width: 168px; display: flex; flex-direction: column; gap: var(--sp-2); max-height: 52vh; overflow-y: auto;
   border: 1px solid var(--hairline); border-radius: var(--r-md); padding: 8px; background: var(--surface-soft); }
+.mtp-search { width: 100%; margin-bottom: 4px; }
+.mtp-empty { font-size: var(--fs-sm); color: var(--stone); text-align: center; padding: 12px 0; }
 .mtp-grp-h { font-size: var(--fs-xs); font-weight: 700; color: var(--stone); letter-spacing: .02em; margin: 2px 0 3px; }
 .mtp-item { display: block; width: 100%; text-align: left; padding: 5px 8px; border: 1px solid transparent; border-radius: var(--r-sm);
   background: transparent; color: var(--ink); font-size: var(--fs-sm); cursor: pointer; transition: background var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out); }

@@ -250,6 +250,25 @@ test('效果/曲线的脏条目被丢弃，非有限值不进包', () => {
   assert.deepEqual(r.project.tracks[0].curves[0].points, [{ beat: 2, value: 3 }]);
 });
 
+test('automation clip：往返保留 placement/loop/gain，坏条目与旧工程都能兜底', () => {
+  const clip = {
+    id: 'ac1', trackId: 'tr1', parameterId: 'curve.VOL',
+    points: [{ beat: 0, value: 0 }, { beat: 4, value: -6 }],
+    startBeat: 8, endBeat: 12, loop: true, gain: -3, fadeIn: 1, fadeOut: 2, name: '音量',
+  };
+  const { json } = serializeProject(state({ automationClips: [clip, { trackId: 'tr1', parameterId: 'curve.NOPE' }, null] }));
+  assert.equal(json.automationClips.length, 1, '认不出参数的 clip 不写盘');
+
+  const r = parseProject(json);
+  assert.equal(r.ok, true, r.error);
+  assert.deepEqual(r.project.automationClips[0], clip, '存了再打开，clip 原样回来');
+
+  // 旧工程（没有这个字段）→ 空数组，不影响打开
+  const legacy = parseProject({ format: FORMAT_ID, version: 1, tracks: [voiceTrack()] });
+  assert.equal(legacy.ok, true, legacy.error);
+  assert.deepEqual(legacy.project.automationClips, []);
+});
+
 test('audio 缺失时仍然产出合法音频轨', () => {
   const r = parseProject({
     format: FORMAT_ID, version: 1,

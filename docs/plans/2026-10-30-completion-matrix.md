@@ -90,3 +90,21 @@ FuMiVoice 完成度按方案条目粗估：**约 55%–65%**，UI/图标/核心 
 2. FuMiVoice：导出取消、token 加密、设置入口/通知 i18n、R8/lite、单测与真机验收。
 3. 上述完成后再构建 FuFumidi 6.3.1 安装包并发布。
 
+---
+
+## 四、2026-11-15 实测校正（V0.3，以当前代码为准）
+
+> 本文件第一~三节评估的是 **6.3.1 之前的本机安装版**，保留原样作为历史台账，不改写。
+> 以下为当前工作区（6.7.0-beta.1）的实测结果，依据
+> `docs/test-reports/2026-11-15-v0-baseline-probe.md` 与 `frontend/tests/baseline-probe.test.js`（11/11 通过，全量 `npm run test:ui` 646/646）。
+
+| 条目 | 原表状态 | 当前代码实测 | 处置 |
+|---|---|---|---|
+| F-05 编排片段不参与播放 | 未做 | **已修**：`core/player.js:99-138` 让 `arrange.clips` 成为播放真源；`ViewConvert.vue` 导出同样读取 | 关闭，勿重复排工 |
+| F-06 内置音色 CC / 踏板 / 弯音静默 | 未做 | **已修（SF2 路径）**：`core/synth.js:797-843` 有 CC7/10/11/64 与 bend 下发；播放器把 CC 排进 `ctlEvents` | 关闭；内置合成器路径另有一套部分实现，未做听感验证 |
+| F-07 乐谱跨小节时值 / 连音线 | 未做 | **ABC 记谱路径已修**（`core/score.js:77-114` 产出连音线） | 部分关闭；MusicXML / Verovio 路径仍待 UI 实测，不要据此关单 |
+| P1-7 混音台 per-track / per-channel | 未做 | **表述不准确**：内置合成器路径本就有每轨独立 `GainNode` + Panner 与 `setTrackVol/Mute/Solo/Pan`（`core/synth.js:734-757`，UI 已接）；只有 SF2 路径因单路输出退回通道级 | 改写为「SF2 路径的每轨增益」或「混音台区分两种模式并提示限制」 |
+
+**因此第三节「下一步顺序」第 1 项已过期**：F-05、F-06 已完成，F-07 部分完成。
+继续按原顺序开工等于重复劳动。后续顺序以 `docs/plans/2026-11-15-workstation-roadmap.md` 为准。
+

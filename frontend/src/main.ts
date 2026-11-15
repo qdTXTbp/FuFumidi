@@ -15,6 +15,10 @@ import './styles/typography.css';
 import './styles/controls.css';
 // 品牌层：只做皮肤，不改变布局与业务逻辑
 import './styles/brand.css';
+// 全局动效：把阻尼弹簧参数写成内联 CSS 变量（必须在样式加载后、挂载前）
+import { applyMotionVars } from './core/motion.js';
+
+applyMotionVars();
 
 /* 主题：深色主导（设计语言决定），浅色可选。
    ★ 必须走应用自己的键：theme.js 用 'fufumidi_theme' 存**主题 ID**、'fufumidi_mode' 存明暗模式。

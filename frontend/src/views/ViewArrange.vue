@@ -9,6 +9,7 @@ import { t } from '../core/i18n.js';
 import { themeColor } from '../core/palette.js';
 import { ensureAudio } from '../audio.js';
 import { timelineOfSong, iterBars, secOfTick, tickOfSec } from '../core/timeline.js';
+import { squirclePath } from '../core/canvas_shape.js';
 // P1-13 B1：手势状态机（拖动/拖边/框选/平移/点击的判定与阈值统一走 core/gesture.js）
 import { createGestureState, beginGesture, updateGesture, endGesture, INTENTS, isMutatingIntent } from '../core/gesture.js';
 // P1-13 B2：撤销/重做走统一历史栈 + C1 命令注册表（菜单/命令面板/快捷键同一份）
@@ -237,12 +238,7 @@ function draw() {
       if (clip.muted) g.globalAlpha = 0.35;
       const r = 7;
       const trackColor = themeColor('--accent-sky', '#69c8f0');
-      g.beginPath();
-      g.moveTo(left + r, y + 7); g.arcTo(right, y + 7, right, y + rowH - 7, r);
-      g.arcTo(right, y + rowH - 7, left, y + rowH - 7, r);
-      g.arcTo(left, y + rowH - 7, left, y + 7, r);
-      g.arcTo(left, y + 7, right, y + 7, r);
-      g.closePath();
+      squirclePath(g, left, y + 7, right - left, rowH - 14, r);
       const grad = g.createLinearGradient(0, y + 7, 0, y + rowH - 7);
       grad.addColorStop(0, sel ? 'rgba(105,200,240,.34)' : 'rgba(47,99,212,.24)');
       grad.addColorStop(1, sel ? 'rgba(47,99,212,.28)' : 'rgba(47,99,212,.13)');

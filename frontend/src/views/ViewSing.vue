@@ -13,7 +13,7 @@ import PianoRoll from '../components/pianoroll/PianoRoll.vue';
 import { trackColorOf, newNoteId, colorblindMode, setColorblindMode } from '../stores/singer';
 import VoicebankPanel from '../components/sing/VoicebankPanel.vue';
 import ArrangeView from '../components/sing/ArrangeView.vue';
-import { shiftRange, shiftCurveRange, shiftBoundsRange } from '../core/arrange.js';
+import { shiftRange, shiftCurveRange, shiftBoundsRange, partClusters, PART_GAP_BEATS } from '../core/arrange.js';
 import CurveCanvas from '../components/sing/CurveCanvas.vue';
 import ViewVoicebank from './ViewVoicebank.vue';
 import { t } from '../core/i18n.js';
@@ -792,6 +792,96 @@ function onArrMove(e: any) {
       .sort((a: number, b: number) => a - b),
   });
   store.activeTrackId = e.toTrackId;
+}
+
+/* ------------------------------------------------------------ 自动化 clip（FLAD-04） */
+const selClipId = ref('');
+const clipMenu = ref<{ id: string; x: number; y: number } | null>(null);
+let clipDragging = false;
+
+function onClipSelect(id: string) {
+  selClipId.value = id || '';
+  clipMenu.value = null;
+}
+/** 一次拖动只记一个撤销点：首个 move 前 pushUndo，松手结束 */
+function onClipDragStart() {
+  if (clipDragging) return;
+  clipDragging = true;
+  store.pushUndo();
+}
+function onClipMove(e: any) {
+  if (!e || !e.id) return;
+  const list = (store.automationClips || []).map((c: any) => (c.id === e.id
+    ? { ...c, startBeat: Number(e.startBeat) || 0, endBeat: Math.max((Number(e.startBeat) || 0) + 0.25, Number(e.endBeat) || 0) }
+    : c));
+  store.replaceAutomationClips(list);
+}
+function onClipResize(clip: any) {
+  if (!clip || !clip.id) return;
+  const list = (store.automationClips || []).map((c: any) => (c.id === clip.id ? clip : c));
+  store.replaceAutomationClips(list);
+}
+function onClipDragEnd() { clipDragging = false; }
+function onClipMenu(e: any) {
+  if (!e || !e.id) return;
+  selClipId.value = e.id;
+  clipMenu.value = { id: e.id, x: e.x, y: e.y };
+}
+function closeClipMenu() { clipMenu.value = null; }
+
+/** 以活动轨当前 part 区间（否则播放头所在 4 小节）作为新 clip 的放置区间 */
+function clipSpanAtPlayhead(trackId: string): { from: number; to: number } {
+  const bpb = Math.max(1, beatsPerBar.value || 4);
+  const pf = playheadBeat.value;
+  let from = Math.max(0, Math.floor(pf / bpb) * bpb);
+  let to = from + bpb * 4;
+  const tr = (store.tracks || []).find((x: any) => x.id === trackId);
+  if (tr) {
+    try {
+      const parts = partClusters(tr.notes || [], tr.partStarts || [], PART_GAP_BEATS);
+      const hit = parts.find((p) => pf >= p.from && pf <= p.to) || parts[0];
+      if (hit) { from = hit.from; to = hit.to; }
+    } catch (e) { /* 聚类失败就退回小节区间 */ }
+  }
+  return { from, to: Math.max(from + 0.25, to) };
+}
+function createClipFromTweak() {
+  const p = store.lastTweakedParam;
+  if (!p) { say(t('请先调整一个参数'), 'warn'); return; }
+  const trackId = p.trackId || store.activeTrackId;
+  const span = clipSpanAtPlayhead(trackId);
+  const c = store.createAutomationClipFromLastTweak(span.from, span.to);
+  if (!c) { say(t('还没有可创建的参数'), 'warn'); return; }
+  selClipId.value = c.id;
+  say(t('已创建自动化片段') + ' · ' + (c.name || c.parameterId), 'ok');
+}
+function duplicateClip() {
+  const c = store.duplicateAutomationClip(selClipId.value);
+  if (!c) return;
+  selClipId.value = c.id;
+  closeClipMenu();
+}
+/** 淡化开关：默认 1 拍（短 clip 取半长），再点一次取消 */
+function toggleClipFade(which: 'in' | 'out') {
+  const c = (store.automationClips || []).find((x: any) => x.id === selClipId.value);
+  if (!c) return;
+  const key = which === 'in' ? 'fadeIn' : 'fadeOut';
+  const len = Math.max(0.25, c.endBeat - c.startBeat);
+  const cur = Number((c as any)[key]) || 0;
+  store.updateAutomationClip(c.id, { [key]: cur > 0 ? 0 : Math.min(1, len / 2) });
+  closeClipMenu();
+}
+function toggleClipLoop() {
+  const c = (store.automationClips || []).find((x: any) => x.id === selClipId.value);
+  if (!c) return;
+  store.updateAutomationClip(c.id, { loop: !c.loop });
+  closeClipMenu();
+}
+function deleteClip() {
+  if (!store.removeAutomationClip(selClipId.value)) return;
+  selClipId.value = '';
+  closeClipMenu();
+  say(t('自动化片段已删除'), 'ok');
 }
 
 /* 卷帘组件实例（只为读它暴露的 xOf / beatOf / scrollEl）。
@@ -1737,6 +1827,10 @@ function laneOf(t0: any): any {
     bpm: store.bpm || 120,
     volPoints: (curveOf(t0, 'VOL')?.points || []).slice(),
     panPoints: (curveOf(t0, 'PAN')?.points || []).slice(),
+    // ★ automation clip 是播放/导出时叠加在子轨之上的覆盖层：
+    //   这里带上轨 id 与整份 clip 列表，由 sing_transport 按 trackId 过滤。
+    trackId: t0.id,
+    clips: store.automationClips || [],
   };
 }
 
@@ -2432,13 +2526,32 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
           <Icon :name="arrangeOpen ? 'chevron' : 'chevron'" :size="12"
                 :style="{ transform: arrangeOpen ? 'rotate(180deg)' : 'none' }" /> {{ t('时间线') }}
         </button>
+        <span class="sp" />
+        <!-- FLAD-04：参数 → 自动化 clip 的入口（取 store.lastTweakedParam） -->
+        <button class="btn" :disabled="!store.lastTweakedParam"
+                :title="t('从最后调整创建') + ' · ' + (store.lastTweakedParam ? (store.lastTweakedParam.parameterId) : t('请先调整一个参数'))"
+                @click="createClipFromTweak">
+          <Icon name="spark" :size="12" /> {{ t('从最后调整创建') }}
+        </button>
+        <template v-if="selClipId">
+          <button class="btn sm" @click="duplicateClip">{{ t('复制自动化') }}</button>
+          <button class="btn sm" @click="toggleClipFade('in')">{{ t('淡入') }}</button>
+          <button class="btn sm" @click="toggleClipFade('out')">{{ t('淡出') }}</button>
+          <button class="btn sm" @click="toggleClipLoop">{{ t('循环') }}</button>
+          <button class="btn sm" @click="deleteClip">{{ t('删除自动化') }}</button>
+        </template>
       </div>
       <ArrangeView v-if="arrangeOpen" class="arrv" data-guide="sing-arrange" :tracks="arrangeTracks"
                    :bpm="store.bpm" :beats-per-bar="beatsPerBar"
                    :playhead-beat="playheadBeat"
                    :active-track-id="store.activeTrackId"
                    :roll-viewport="rollViewport"
-                   @pick-track="onArrPick" @open-part="onArrOpen" @move-part="onArrMove" />
+                   :clips="store.automationClips"
+                   :selected-clip-id="selClipId"
+                   @pick-track="onArrPick" @open-part="onArrOpen" @move-part="onArrMove"
+                   @select-clip="onClipSelect" @clip-drag-start="onClipDragStart"
+                   @move-clip="onClipMove" @resize-clip="onClipResize" @clip-drag-end="onClipDragEnd"
+                   @clip-menu="onClipMenu" />
       <ul v-if="store.missingAudio.length" class="warn small">
         <li v-for="m in store.missingAudio" :key="m.trackId">
           {{ t('伴奏文件缺失（工程包里没有或解包失败）：') }}{{ m.fileName }}
@@ -3220,6 +3333,15 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
     <div v-show="tab === 'maker'" class="sing-maker" :class="{ 'sing-in': tab === 'maker' }">
       <ViewVoicebank />
     </div>
+
+    <!-- 自动化 clip 右键菜单（FLAD-04 Playlist） -->
+    <div v-if="clipMenu" class="clip-ctx-mask" @click.self="closeClipMenu" @contextmenu.prevent="closeClipMenu">
+      <div class="clip-ctx" :style="{ left: clipMenu.x + 'px', top: clipMenu.y + 'px' }">
+        <button @click="duplicateClip"><Icon name="copy" :size="13" />{{ t('复制自动化') }}</button>
+        <button @click="toggleClipLoop"><Icon name="loop" :size="13" />{{ t('循环') }}</button>
+        <button class="danger" @click="deleteClip"><Icon name="trash" :size="13" />{{ t('删除自动化') }}</button>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -3366,8 +3488,17 @@ const nval = (e, d) => { const v = parseFloat(e && e.target ? e.target.value : e
  */
 .roll-box { flex: 1 1 auto; /* 百分比保底：底部面板再多也挤不扁卷帘（max 同时满足小屏 380px 下限） */ min-height: max(380px, 45%); display: flex; margin: 4px 12px 0; }
 /* ---- 编排时间线（对齐 OpenUTAU 的轨道行 → part 块）---- */
-.arr-head { margin: 6px 12px 0; display: flex; align-items: center; }
+.arr-head { margin: 6px 12px 0; display: flex; align-items: center; gap: var(--sp-2); }
 .arrv { margin: 4px 12px 0; max-height: 46vh; overflow-y: auto; }
+.clip-ctx-mask { position: fixed; inset: 0; z-index: var(--z-ctx); }
+.clip-ctx { position: fixed; min-width: 168px; padding: var(--sp-1); border: 1px solid var(--border);
+            border-radius: var(--r-md); background: var(--surface); box-shadow: var(--shadow-lg);
+            display: flex; flex-direction: column; gap: 2px; }
+.clip-ctx button { display: flex; align-items: center; gap: var(--sp-2); border: 0; border-radius: var(--r-sm);
+                   background: transparent; color: var(--text); padding: var(--sp-2) var(--sp-3);
+                   font-size: var(--fs-sm); text-align: left; cursor: pointer; }
+.clip-ctx button:hover { background: color-mix(in srgb, var(--accent-sapphire) 14%, var(--surface)); }
+.clip-ctx button.danger { color: var(--t-err); }
 .roll-box .edt-roll { flex: 1 1 auto; min-width: 0; margin: 0; }
 /* 分隔条：上下拖动改变音符区高度；双击恢复自动 */
 .roll-resizer { flex: none; height: 10px; margin: 0 12px; display: flex; align-items: center;

@@ -10,6 +10,7 @@
 // 这样能直接断言"两条源拿到了同一个 when"。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { normalizeAutomationClip } from '../src/core/automation_clip.js';
 
 /** 最小 AudioContext 替身：可手动推进 currentTime */
 function makeFakeCtx() {
@@ -351,6 +352,32 @@ test('静音轨不写自动化曲线（省得白算）', async () => {
   t.play();
   assert.equal(ctx._curves.length, 0, '静音轨不该写自动化曲线');
   assert.equal(t.lanes[0].volPoints.length, 2, '但数据要留着，取消静音后立刻能用');
+});
+
+test('★ 只有 automation clip、没有子轨时也要建自动化（FLAD-04）', async () => {
+  const ctx = makeFakeCtx();
+  const t = newTransport(ctx);
+  queue(ctx, 10);
+  const clips = [
+    normalizeAutomationClip({
+      id: 'v', trackId: 't1', parameterId: 'curve.VOL',
+      points: [{ beat: 0, value: -6 }, { beat: 4, value: -6 }],
+      startBeat: 0, endBeat: 4,
+    }),
+    normalizeAutomationClip({
+      id: 'p', trackId: 't1', parameterId: 'curve.PAN',
+      points: [{ beat: 0, value: -1 }, { beat: 4, value: 1 }],
+      startBeat: 0, endBeat: 4,
+    }),
+  ];
+  await t.load([{ label: 'v', bytes: fakeBytes(10), bpm: 120, trackId: 't1', clips }]);
+  t.play();
+  const kinds = ctx._curves.map(c => c.kind);
+  assert.ok(kinds.indexOf('gain') >= 0, 'clip 覆盖应写在总音量增益上');
+  assert.ok(kinds.indexOf('pan') >= 0, 'clip 覆盖应写在声像节点上');
+  const vol = ctx._curves.find(c => c.kind === 'gain');
+  assert.ok(Math.abs(vol.curve[0] - Math.pow(10, -6 / 20)) < 1e-5,
+    `起点应是 clip 的 -6dB 线性值，实际 ${vol.curve[0]}`);
 });
 
 /* ---------------- 循环区间（P1-6） ----------------

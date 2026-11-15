@@ -47,7 +47,7 @@ const DEFAULT_SETTINGS = {
   /* P0-3b：MIDI 键盘录音的输入延迟补偿（ms，正 = 键盘/驱动比实际发声晚）。延迟校准会用中位数写这里。 */
   midiInputOffsetMs: 0,
   /* P0-4 音频导出默认值（导出面板接线后消费；先给默认，避免老设置文件缺键） */
-  'export.audio.format': 'wav24',   // wav16 / wav24 / float32（/ flac 等后续）
+  'export.audio.format': 'wav24',   // wav16 / wav24 / float32 / flac / mp3 / ogg（压缩格式由主进程 ffmpeg 转码）
   'export.audio.dither': true,      // 仅 16bit 生效
   'export.audio.loudness': 'off',   // off / -14 / -16 / -23 LUFS
   data_root: '',  // 数据根目录（模型 / 依赖 / 缓存 / 临时文件的落点）；留空 = 自动（工具目录旁的 FuFumidiData）

@@ -10,6 +10,7 @@ const app = useAppStore();
 const currentSong = computed(() => app.currentSong);
 const toast = (m, t) => app.toast(m, t);
 import { clamp } from '../core/util.js';
+import { squirclePath } from '../core/canvas_shape.js';
 // ★ paintVizBg：与「可视化」页**同一个**背景绘制函数（主题/纯色/图片/透明）
 import { drawVizWaterfallPost } from '../core/viz/index.js';
 import { paintVizBg, drawVizSpectrum, drawVizScope, drawVizChord, rmsAt, smoothEnergy, smoothEnergyDt, activeNotesAt, VIZ_REF_H, VIZ_REF_DPR } from '../core/viz.js';
@@ -670,13 +671,7 @@ function drawVideoFrame(ctx, W, H, tick, s, audioBuf, vf, nowSec) {
 }
 
 function roundRect(ctx, x, y, w, h, r) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
-  ctx.closePath();
+  squirclePath(ctx, x, y, w, h, r);
 }
 function lyricAtTick(s, tick) {
   let hit = '';

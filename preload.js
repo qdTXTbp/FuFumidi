@@ -24,6 +24,8 @@ contextBridge.exposeInMainWorld('fuBridge', {
   },
   // 取「待打开的文件」：消除冷启动时主进程 send 早于渲染进程订阅的竞态
   takePendingOpenFile: () => ipcRenderer.invoke('open-file:take'),
+  // 首屏可交互（启动页据此收尾并展开主窗口）
+  uiReady: () => { try { ipcRenderer.send('app:ui-ready'); } catch (e) { console.warn('[preload] app:ui-ready failed', e); } },
   // 沉浸模式用：窗口真全屏（原生标题栏只此一法可收；退出时传 false 还原）
   setFullScreen: (on) => ipcRenderer.invoke('win:setFullScreen', !!on),
   // 翻唱工作流（一首歌 → 分离 → 变声 → 混音 → 成品）  coverEnv: () => ipcRenderer.invoke('cover:env'),

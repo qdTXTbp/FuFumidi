@@ -28,6 +28,7 @@
  */
 
 import { normalizeSampleNote } from './utau_tools.js';
+import { normalizeAutomationClips } from './automation_clip.js';
 
 /** 清单里的格式标识（拒绝别的格式误当工程打开） */
 export const FORMAT_ID = 'fufumidi-song';
@@ -374,6 +375,11 @@ export function serializeProject(state) {
     sampleNote: normalizeSampleNote(str(s.sampleNote, '')),
     activeTrackId: str(s.activeTrackId),
     tracks,
+    /**
+     * Playlist 一级自动化片段（FLAD-04）。旧工程没有该字段 → 空数组；
+     * 曲线子轨（`tracks[].curves`）仍是原链路，两者互不影响。
+     */
+    automationClips: normalizeAutomationClips(s.automationClips),
     assets: assets.reduce((m, a) => { m[a.id] = { name: a.fileName }; return m; }, {}),
   };
   return { json, assets };
@@ -533,6 +539,8 @@ export function parseProject(json) {
     sampleNote: normalizeSampleNote(str(json.sampleNote, '')),
     activeTrackId: str(json.activeTrackId),
     tracks,
+    // 旧工程没有这个字段 → 空数组；坏 clip 直接丢，不影响工程打开
+    automationClips: normalizeAutomationClips(json.automationClips),
   };
   // 记录的 activeTrackId 必须真的存在，否则 UI 会停在"没选中任何轨"
   if (!tracks.some((t) => t.id === project.activeTrackId)) {

@@ -12,6 +12,7 @@ const path = require('path');
 const crypto = require('crypto');
 const AdmZip = require('adm-zip');
 const { exportDefaultDir } = require('./export-dir');
+const { isCompressedFormat, extFor, encodeAudio } = require('./audio-encode');
 
 const MAX_BYTES = 2 * 1024 * 1024 * 1024;   // 2GB 上限（3 小时 24bit 立体声也够）
 
@@ -86,17 +87,28 @@ function writeExport(o = {}) {
 }
 
 /** 注册 IPC（由 main.js 调用；electron 依赖只在这里出现） */
-function registerExportIpc({ ipcMain, dialog, app, path: nodePath, center } = {}) {
+function registerExportIpc({ ipcMain, dialog, app, path: nodePath, center, runEngineInline, parsePyJson } = {}) {
   if (!ipcMain) return;
   ipcMain.handle('export:audio', async (_e, payload) => {
     const p = payload || {};
     // C2：导出属于“长任务必须登记”的范畴（这里写盘很快，但链路/取消/跳转语义先接上）
     const task = center ? center.register({ kind: 'export', title: '导出音频：' + String(p.name || '未命名') }) : null;
     try {
-      const bytes = p.bytes ? Buffer.from(p.bytes) : Buffer.alloc(0);
+      let bytes = p.bytes ? Buffer.from(p.bytes) : Buffer.alloc(0);
       if (!bytes.length) return { ok: false, error: '没有可导出的音频数据' };
       if (bytes.length > MAX_BYTES) return { ok: false, error: '文件过大（> 2GB）' };
-      const ext = String(p.ext || (p.format === 'float32' ? 'wav' : 'wav')).replace(/^\./, '');
+      const fmt = String(p.format || 'wav24');
+      let ext = String(p.ext || (isCompressedFormat(fmt) ? extFor(fmt) : 'wav')).replace(/^\./, '');
+      // V0.2：压缩格式把 WAV 母版交给包内 ffmpeg 转码，之后仍走同一套原子落盘 + manifest。
+      if (isCompressedFormat(fmt)) {
+        const enc = await encodeAudio({ bytes, format: fmt, runEngineInline, parsePyJson });
+        if (!enc.ok) {
+          if (task) task.fail(enc.error);
+          return { ok: false, error: enc.error };
+        }
+        bytes = enc.bytes;
+        ext = extFor(fmt);
+      }
       let target = p.targetPath ? String(p.targetPath) : '';
       if (!target) {
         const downloads = (app && exportDefaultDir(app)) || process.cwd();

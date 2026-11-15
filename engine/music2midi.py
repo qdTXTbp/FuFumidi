@@ -574,6 +574,13 @@ def cmd_worker():
     import sys as _sys
 
     _patch_tqdm_compat()
+    # 就绪握手：主进程（main/engine_supervisor.js）据此确认 stdin 循环已起来，
+    # 而不是"python 进程存在"就算可用。旧版本没有这行，主进程会在超时后按可用继续。
+    try:
+        _sys.stdout.write('###READY\n')
+        _sys.stdout.flush()
+    except Exception:
+        pass
     for line in _sys.stdin:
         line = line.strip()
         if not line:
