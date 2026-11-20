@@ -69,7 +69,8 @@
     "test:speedtest": "node --test scripts/test-update-speedtest.mjs",
     "test:cancel": "node --test scripts/test-cancel-worker.mjs",
     "push:api": "node scripts/api-push.mjs",
-    "test:zip": "node --test scripts/test-zip-safe.mjs"
+    "test:zip": "node --test scripts/test-zip-safe.mjs",
+    "electron:dev": "npm run build:ui && electron ."
   },
   "dependencies": {
     "adm-zip": "^0.6.0",

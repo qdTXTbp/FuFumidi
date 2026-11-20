@@ -12,7 +12,8 @@
 [ ] 版本号三处一致（根 package.json / frontend/package.json / changelog 条目）
 [ ] 发布说明 scripts/release-notes-v<ver>.md 写好
 [ ] npm run check:version && npm test 通过
-[ ] 提交版本改动
+[ ] npm run electron:dev 冒烟（窗口正常打开、控制台无未捕获异常）
+[ ] 提交版本改动并推送到远端（origin + cnb，当前分支同名）
 [ ] 挪开旧 win-unpacked，跑 build-release.ps1 -Version <ver>
 [ ] 确认 [ok] 更新器已嵌入配置 / [ok] 安装包，安装包 VersionInfo 正确
 [ ] 包内 asar / 引擎 / preload 含本版代码
