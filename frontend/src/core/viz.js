@@ -14,7 +14,7 @@
 // 新渲染架构在 core/viz/ 下：state（数据）→ scene（图元）→ raster（Canvas2D / WebGL2）
 // → post（着色器后处理），唯一入口是 core/viz/index.js 的门面。
 // ============================================================
-import { TRACK_COLORS } from './util.js';
+import { trackColor } from './palette.js';
 import { COLOR_DEFAULTS, COLOR_MODES, COLOR_PRESETS, COLOR_PARAMS } from './viz/state/colors.js';
 import { t } from './i18n.js';
 
@@ -115,7 +115,7 @@ export function buildVizBlocks(song) {
   const items = [];
   let pitchSum = 0, count = 0;
   song.tracks.forEach((tr, ti) => {
-    const color = TRACK_COLORS[(tr.index != null ? tr.index : ti) % TRACK_COLORS.length];
+    const color = trackColor(tr.index != null ? tr.index : ti);
     (tr.notes || []).forEach(n => {
       items.push({ trackIndex: ti, pitch: n.midi, start: song.baseSec(n.start), end: song.baseSec(n.end), color, vel: n.vel });
       pitchSum += n.midi; count++;

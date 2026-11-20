@@ -9,7 +9,8 @@ const app = useAppStore();
 const currentSong = computed(() => app.currentSong);
 const setView = (v) => app.setView(v);
 const toast = (m, t) => app.toast(m, t);
-import { TRACK_COLORS, KEY_NAME, noteName, fmtTime } from '../core/util.js';
+import { KEY_NAME, noteName, fmtTime } from '../core/util.js';
+import { trackColor } from '../core/palette.js';
 import { getPlayer } from '../audio.js';
 import { t } from '../core/i18n.js';
 
@@ -75,7 +76,7 @@ function draw() {
   barChart(byId('azDur'), a.dur, { labels: DUR_LABELS });
   // 音轨概览
   hBarChart(byId('azTracks'), song.tracks.map((tr, i) => ({
-    label: tr.name, val: tr.notes.length, color: TRACK_COLORS[i % TRACK_COLORS.length],
+    label: tr.name, val: tr.notes.length, color: trackColor(i),
   })));
   // 小节密度（可缩放）
   const sigN = a.sig.num || 4, barTicks = song.tpb * sigN;

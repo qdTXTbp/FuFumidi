@@ -1,5 +1,5 @@
 <script setup>
-import { themeColor, VIEW_TRACK_RAMP } from '../core/palette.js';
+import { themeColor, trackColor } from '../core/palette.js';
 // 编辑视图：钢琴卷帘工作台（走带工具栏 + 左侧检查器 + 多车道舞台 + 状态栏）
 import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, onActivated, onDeactivated, nextTick } from 'vue';
 import Icon from '../components/Icon.vue';
@@ -2160,7 +2160,6 @@ onBeforeUnmount(() => {
 // 迷你图是「静态缩略图」：把小节块预渲染到离屏画布并缓存，之后每次只贴一次图。
 // 原实现被无条件放进 rAF 循环，每帧遍历全曲所有音符（大 MIDI 9 万+ 次 fillRect/帧），
 // 且组件被 KeepAlive 保活后离开编辑页仍在跑 —— 这是「整个界面卡」的主因。
-const MINI_C = VIEW_TRACK_RAMP;
 let miniRev = 0;                       // 内容版本：只在真正改动曲目时 +1
 let _miniCache = { key: '', cv: null };
 function drawMini() {
@@ -2181,7 +2180,7 @@ function drawMini() {
     og.setTransform(dpr, 0, 0, dpr, 0, 0);
     const scale = W / s.totalTicks;
     for (const tr of s.tracks) {
-      og.fillStyle = MINI_C[tr.index % MINI_C.length];
+      og.fillStyle = trackColor(tr.index);
       for (const n of tr.notes) {
         const x = n.start * scale, w2 = Math.max(1, (n.end - n.start) * scale);
         og.fillRect(x, 12 + (tr.index % 2) * 8, w2, 4);

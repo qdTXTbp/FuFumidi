@@ -11,7 +11,8 @@ const toast = (m, t) => app.toast(m, t);
 const importFiles = (items) => app.importFiles(items);
 const setView = (v) => app.setView(v);
 import { t } from '../core/i18n.js';
-import { esc, clamp, TRACK_COLORS } from '../core/util.js';
+import { esc, clamp } from '../core/util.js';
+import { trackColor } from '../core/palette.js';
 import { encodeMidi } from '../core/midi.js';
 import { parseMusicXMLToSong } from '../core/musicxml.js';
 import { songToAbc, jianpuData, tabData, detectSf, ABC_KEY_NAMES } from '../core/score.js';
@@ -854,7 +855,7 @@ onBeforeUnmount(() => {
       <div class="score-field score-track">
         <span class="score-label">{{ t('乐谱轨道') }}</span>
         <span class="trk-sel">
-          <span class="trk-dot" :style="{ background: (selTrack ? (TRACK_COLORS[trackSel % TRACK_COLORS.length]) : 'var(--stone)') }"></span>
+          <span class="trk-dot" :style="{ background: (selTrack ? trackColor(trackSel) : 'var(--stone)') }"></span>
           <select class="select-input" :value="trackSel" @change="trackSel = $event.target.value" :disabled="!tracks.length || mode === 'score'" :title="mode === 'score' ? t('总谱模式显示全部声部') : ''">
             <option v-for="(tr, i) in tracks" :key="i" :value="i">{{ tr.name || (t('音轨 ') + (i + 1)) }}</option>
           </select>

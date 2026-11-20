@@ -1,5 +1,5 @@
 <script setup>
-import { themeColor, VIEW_TRACK_RAMP } from '../core/palette.js';
+import { themeColor } from '../core/palette.js';
 import { ref, computed, reactive, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 import Icon from '../components/Icon.vue';
 import { useAppStore } from '../stores/app';
@@ -548,7 +548,6 @@ function detectLiveChord(notes) {
   if (has(3) && has(7)) return { name: NAME[root] + 'm', minor: true };
   return { name: NAME[root] + t('（近似）'), minor: false };
 }
-const TRACK_COLORS = VIEW_TRACK_RAMP;
 function drawVideoFrame(ctx, W, H, tick, s, audioBuf, vf, nowSec) {
   const cvar = (n, fb) => { try { return getComputedStyle(document.documentElement).getPropertyValue(n).trim() || fb; } catch (e) { return fb; } };
   const mode = VE.visual || 'mix';

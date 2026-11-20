@@ -36,7 +36,10 @@ export function removeNotes(tracks, doomed) {
   return n;
 }
 
-// 十色轨色板：与 core/palette.js 的 VIEW_TRACK_RAMP 逐字节相同，改为再导出（单一来源）
+// 十色固定序列（波形 / 视频导出等画布场景用）。
+// ⚠️ **不要用它给轨道上色**：它是 10 色、顺序与主题色板 --track-1..8 不同，
+//    同一轨在卷帘与混音台会变成两种颜色（GitHub issue #39）。
+//    轨道标识色一律用 core/palette.js 的 trackColor()。
 export { VIEW_TRACK_RAMP as TRACK_COLORS } from './palette.js';
 
 /** 文件名清洗：路径非法字符 → 下划线（分轨导出/工程命名用）；清完为空或只剩 `_` 时兜底 */

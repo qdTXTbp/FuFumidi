@@ -3,7 +3,8 @@
 import { defineStore } from 'pinia';
 import { ensureAudio, ensureEngineHealthy } from '../audio';
 import { parseMidi, buildSong } from '../core/midi';
-import { TRACK_COLORS, fmtTime } from '../core/util';
+import { fmtTime } from '../core/util';
+import { trackColor } from '../core/palette';
 import { usePlaylistStore } from './playlist';
 import { bridge } from '../api';
 import { t } from '../core/i18n';
@@ -819,7 +820,7 @@ export const useAppStore = defineStore('app', {
           mute: false,
           solo: false,
           pan: 0,
-          color: TRACK_COLORS[i % TRACK_COLORS.length],
+          color: trackColor(i),
           noteCount: tr.notes.length,
         };
       });

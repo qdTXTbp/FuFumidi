@@ -69,6 +69,20 @@ export function trackPalette() {
   return TRACK_FALLBACK.map((c, i) => cssVar('--track-' + (i + 1), c));
 }
 
+/**
+ * 单条轨道的标识色 —— **全仓库唯一入口**。
+ * 按轨序取 --track-1..8（跟随深浅主题），越界按 8 取模回绕（负数也回绕）。
+ *
+ * 为什么不能直接用 TRACK_COLORS / VIEW_TRACK_RAMP：那是 10 色固定序列，顺序与 --track-*
+ * 完全不同，同一条轨在卷帘（读主题）与混音台 / 分析页（读 10 色序列）会得到两种颜色
+ * —— GitHub issue #39 的根因（drum 轨 index 4：红 vs 天蓝；Voice index 3：土黄 vs 紫）。
+ * 凡「这条轨是什么颜色」一律走这里；10 色序列只留给波形/视频导出这类固定画布场景。
+ */
+export function trackColor(i) {
+  const n = ((Math.trunc(Number(i) || 0) % 8) + 8) % 8;
+  return themeColor('--track-' + (n + 1), TRACK_FALLBACK[n]);
+}
+
 /** 元素数据色（7 档，读 --data-1..7） */
 export function dataPalette() {
   return DATA_FALLBACK.map((c, i) => cssVar('--data-' + (i + 1), c));

@@ -2,7 +2,8 @@
 import { reactive, computed } from 'vue';
 import { ensureAudio } from './audio.js';
 import { parseMidi, buildSong } from './core/midi.js';
-import { TRACK_COLORS, fmtTime } from './core/util.js';
+import { fmtTime } from './core/util.js';
+import { trackColor } from './core/palette.js';
 import { t } from './core/i18n.js';
 
 export const VIEWS = [
@@ -461,7 +462,7 @@ export async function selectSong(id) {
     mute: false,
     solo: false,
     pan: 0,
-    color: TRACK_COLORS[i % TRACK_COLORS.length],
+    color: trackColor(i),
     noteCount: tr.notes.length,
   }));
 }
