@@ -1,0 +1,27 @@
+{
+  "format": "fufumidi-hotpatch/v1",
+  "id": "2026-11-13-01",
+  "notes": "修限定乐器：人声不再被整曲硬约束挡掉；手动限定留空与文案一致；预分析日志写明未锁定乐器",
+  "target": {
+    "min": "6.5.0",
+    "max": "6.6.99"
+  },
+  "package": {
+    "name": "hotpatch-2026-11-13-01.zip",
+    "size": 17212,
+    "sha256": "a736b1ec34616666e4e38c1be7dabe60feee578570831ba403ffb3968379486c"
+  },
+  "files": [
+    {
+      "path": "resources/app.asar.unpacked/engine/engine_muscriptor.py",
+      "size": 27118,
+      "sha256": "3ae501145ff9ad5f5e478fc12bddbb65832810323cb8d913d826f98f2b4f905b"
+    },
+    {
+      "path": "resources/app.asar.unpacked/engine/instrument_probe.py",
+      "size": 13423,
+      "sha256": "0ce8ce8e50ac5bf18ef0c5ed216bced0cd2ef1d43779a66b721c886384b8d06f"
+    }
+  ],
+  "sig": "3q0zpY1zVEiGOH8cV7r8M6Bop12EvgUMSDNF6G83c49wE/LoMo2B8hf5hive0ZDJFl/f4mJ2gqkcsfDzBAvRBQ=="
+}
