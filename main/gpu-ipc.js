@@ -11,6 +11,8 @@ const DS = require('./download-source');
 // ★ 统一走 fast-download：多源测速 + Range 分段（8 段 × 4 并发）+ 断点续传 + 慢源自动轮换。
 //   原先这里是内联的 `net.fetch` 单连接流，分卷之间还串行，实测合计只有 3.2 Mbps。
 const createFastDownload = require('./fast-download');
+// ROCm 架构覆盖表：安装后校验失败时给出「这颗卡的 gfx 在不在包里」的可操作原因
+const rocmArch = require('./gpu-arch');
 
 /** 从 GitHub Release 资产地址里取出 tag：.../releases/download/<tag>/<file> */
 function ghReleaseTagOf(url) {
@@ -461,13 +463,87 @@ function registerGpuIpc({
     return { ok: false, error: String((r.out || r.error || '验证输出解析失败')).slice(-300) };
   }
 
+  /** ROCm 安装后自检：取真实设备名 / gfx / arch_list，再真跑一次 matmul 对拍。
+   *
+   *  为什么不能只看 `torch.version.hip`：那只证明「装的是 ROCm 版 torch」，
+   *  不证明「这颗卡的 kernel 在该包里」。ROCm on Windows 的 SDK 轮子**按架构发**，
+   *  当前 7.2 包只含 7 个 gfx（见 main/gpu-arch.js）；RX 6000/5000 与老核显不在其中，
+   *  这种机器上 is_available() 一样为真，但一跑就报 "no kernel image"。
+   *
+   *  做法与 XPU 一致：真算一遍 256×256 矩阵乘并与 CPU 对拍 —— 安装时就暴露，
+   *  而不是等用户转录到一半才异步炸。架构表只用于失败时解释原因（算子才是事实）。
+   */
+  async function verifyRocmBackend() {
+    const code = [
+      "import json",
+      "try:",
+      "    import torch",
+      "    ok = bool(getattr(torch.version, 'hip', None))",
+      "    if not ok:",
+      "        print('###BACKEND ' + json.dumps({'ok': False, 'error': 'backend unavailable'})); raise SystemExit",
+      "    info = {'ok': True, 'torch': torch.__version__, 'hip': str(getattr(torch.version, 'hip', '') or '')}",
+      "    try: info['name'] = torch.cuda.get_device_name(0)",
+      "    except Exception: info['name'] = 'AMD ROCm GPU'",
+      "    try:",
+      "        _p = torch.cuda.get_device_properties(0)",
+      "        info['gfx'] = str(getattr(_p, 'gcnArchName', '') or '')",
+      "        _mem = getattr(_p, 'total_memory', None)",
+      "        info['total_memory_mb'] = int(_mem / (1024 * 1024)) if _mem else None",
+      "    except Exception as e:",
+      "        info['gfx'] = ''",
+      "        info['gfx_error'] = str(e)[:120]",
+      "    try: info['arch_list'] = [str(x) for x in torch.cuda.get_arch_list()]",
+      "    except Exception: info['arch_list'] = []",
+      "    try:",
+      "        torch.manual_seed(0)",
+      "        a = torch.randn(256, 256)",
+      "        b = torch.randn(256, 256)",
+      "        ref = a @ b",
+      "        got = (a.to('cuda') @ b.to('cuda')).to('cpu')",
+      "        torch.cuda.synchronize()",
+      "        diff = float((got - ref).abs().max())",
+      "        info['compute_max_diff'] = diff",
+      "        info['compute_ok'] = bool(diff < 1e-2)",
+      "        if not info['compute_ok']:",
+      "            info['ok'] = False",
+      "            info['arch_unsupported'] = True",
+      "            info['error'] = 'ROCm 能跑但结果与 CPU 不一致，这颗卡的 kernel 可能不匹配'",
+      "    except Exception as e:",
+      "        info['ok'] = False",
+      "        info['compute_ok'] = False",
+      "        info['arch_unsupported'] = True",
+      "        info['error'] = 'ROCm 上跑不动矩阵乘（这颗卡的 kernel 多半不在当前 ROCm 包里）：' + str(e)[:200]",
+      "    print('###BACKEND ' + json.dumps(info))",
+      "except Exception as e:",
+      "    print('###BACKEND ' + json.dumps({'ok': False, 'error': str(e)}))",
+    ].join(String.fromCharCode(10));
+    const r = await runEngineInline(code);
+    const m = (r.out || '').match(/###BACKEND\s+(\{.*\})/);
+    let d = null;
+    if (m) { try { d = JSON.parse(m[1]); } catch (e) { try { require('./log').write('WARN', 'optional failure', String((e && e.stack) || e)); } catch (_) { /* log failure ignored */ } } }
+    if (!d) return { ok: false, error: String((r.out || r.error || '验证输出解析失败')).slice(-300) };
+    const g = rocmArch.normalizeGfx(d.gfx);
+    if (g) d.gfx = g;
+    const sup = rocmArch.rocmGfxSupported(g);
+    if (sup !== null) d.gfx_supported = sup;
+    if (d.ok === false && d.arch_unsupported) {
+      // 失败时把「架构在不在包里」拼到错误前面，用户才知道该换卡还是换包
+      d.error = rocmArch.rocmGfxHint(g) + '｜' + (d.error || '');
+    } else if (sup === false) {
+      // 算子居然过了 → kernel 其实在，架构表可能滞后；放行但留痕，提醒更新表
+      try { require('./log').write('WARN', 'gpu', 'ROCm 架构不在覆盖表但算子通过：' + g + '（表可能滞后，更新 main/gpu-arch.js）'); } catch (_) { /* log failure ignored */ }
+    }
+    return d;
+  }
+
   // 增强包安装后的可用性自检：确保 torch 真的认到对应后端
   //   cuda → torch.cuda.is_available()（Blackwell 需 cu128）
-  //   rocm → torch.version.hip 非空
+  //   rocm → verifyRocmBackend（hip 非空 + 真实 matmul 对拍 + gfx 覆盖提示）
+  //   xpu  → verifyXpuBackend（XPU 没有 sm 算力模型，同样按真算对拍）
   async function verifyTorchBackend(kind) {
     const isCuda = kind === 'cuda';
-    // XPU 的自检逻辑与 CUDA/ROCm 差别大（没有 sm 算力模型，改用真算一遍对拍），单独一条。
     if (kind === 'xpu') return verifyXpuBackend();
+    if (kind === 'rocm') return verifyRocmBackend();
     const code = [
       "import json",
       "try:",

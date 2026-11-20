@@ -103,7 +103,7 @@
 | 0.1 | 在途改动固化（**2026-11-15 已完成，本地提交未 push**） | 6.6.3 与 6.7.0-beta.1 连同 V0.2/V0.3 收为一个本地提交（两组改动在 `main.js` / `preload.js` 等文件上按 hunk 重叠，拆分会产生不可单独构建的中间提交） | 门禁全绿；**安装版冒烟未做**，留 0.4。**排除**：含明文凭据的 `scripts/publish-*.js`、`release-*` 构建目录、`engine/._pt_*` 残留删除，详见 `docs/plans/2026-11-15-v0.1-commit-and-security.md` |
 | 0.2 | 口径校正（**2026-11-15 已完成**） | 用户拍板「都要」：补齐 FLAC / MP3 / OGG 编码 **且** 对齐全仓文案。新增 `main/audio-encode.js`，主进程用包内 ffmpeg 从 24-bit WAV 母版转码 | 结果见 `docs/test-reports/2026-11-15-v0.2-audio-formats.md`：真实转码三种格式成功、9 项门禁全绿、README 中英文 4 处与 settings 注释已对齐；官网无格式列表、changelog 属历史不回写 |
 | 0.3 | 争议项实测留证（**2026-11-15 已完成**） | 新增 `frontend/tests/baseline-probe.test.js` 11 条 | 结果见 `docs/test-reports/2026-11-15-v0-baseline-probe.md`：探针 11/11、`npm run test:ui` 646/646。**F-05 / F-06 已修；F-07 仅 ABC 路径已修，MusicXML / Verovio 待 UI 实测；L5 需按「内置合成器按轨 / SF2 按通道」两条路径拆开**。已回填 `completion-matrix.md` 第四节 |
-| 0.4 | 发布链路复核 | `release/update-manifest.json` 签名、`build-release.ps1`、CNB / GitHub 双端资产 | 按长期笔记第 5 节手动重签 Ed25519 清单；双端 8/8 sha256 一致 |
+| 0.4 | 发布链路复核 | `release/update-manifest.json` 签名、`build-release.ps1`、CNB / GitHub 双端资产 | 按长期笔记第 5 节手动重签 Ed25519 清单；双端 8/8 sha256 一致。**2026-11-20 判定**：issue #39 的修复全在 `renderer/dist/**`（asar 内），`docs/HOTPATCH.md` §1/§12 明确「asar 内文件不可热补丁」，故**不为它单独发全包**，随下一个常规版本交付；热补丁通道本身已验证可用（CNB `2026-11-13-01`，GitHub raw 200），但现有补丁 `max=6.6.99` 覆盖不到 6.7 客户端 |
 
 **退出条件**：工作区干净、文档与代码一致、门禁绿、在途两版已发布或明确并入下一版。
 
