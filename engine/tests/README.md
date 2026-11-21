@@ -18,11 +18,17 @@
 
 ## 运行方式
 
-先装开发期依赖（仅测试用，不进打包）：
+先装测试依赖（仅测试用，不进打包）：
 
 ```bash
-python -m pip install -r requirements-dev.txt
+# basic-pitch 必须单独 --no-deps（它的依赖里钉了 tensorflow<2.15.1，而 TF 没有 cp312 wheel；
+# 本应用走 ONNX 后端，出厂运行时也不带 TF）
+python -m pip install --no-deps "basic-pitch>=0.4.0"
+python -m pip install -r requirements-ci.txt
 ```
+
+> `requirements-ci.txt` 是 CI 与本地共用的测试依赖清单；`requirements-dev.txt` 只剩静态检查
+> 工具（ruff / mypy / coverage）。两处都要装时先装 ci 再装 dev。
 
 在 engine 目录下运行：
 

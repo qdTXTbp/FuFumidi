@@ -1,0 +1,49 @@
+# CI 专用：engine/tests 的依赖（GitHub Actions 的 pytest job）
+#
+# 为什么不直接装 requirements-bundle.txt：
+#   1) 清单里的 basic-pitch 声明 `tensorflow<2.15.1`，而 TF 没有 cp312 的 wheel，
+#      runner 上 python 3.12 会让整个解析失败（Could not find a version that
+#      satisfies the requirement tensorflow<2.15.1,>=2.4.1）。
+#      本应用走 ONNX 后端，出厂运行时同样不带 TF（见 scripts/bundle-python.js 的
+#      TF_STACK：装完立刻卸掉），所以这里也不装 TF。
+#   2) bundle 里 pymss 依赖的 ncls 需要本地编译，Windows runner 上不保证能出 wheel。
+#
+# 这里的包是**按测试的实际 import 反推**出来的，不是照抄 bundle：
+#   - yaml / numpy / torch / mido：collect 阶段直接 import
+#   - onnxruntime / librosa / mir-eval / resampy / scikit-learn：basic_pitch 顶层与
+#     inference 模块的导入链需要（缺 onnxruntime 时 basic_pitch 会抛
+#     NameError: _default_model_type，很容易误判成引擎 bug）
+#   - pretty_midi / pypinyin：muscriptor 音频输入、汉字音素化用例
+#   - muscriptor==0.3.0：对齐出厂运行时版本（0.4.0 的参数契约不同，会红）
+#
+# 新增测试若 import 了新库，**必须**同步这里，否则 CI 会在 collect 阶段报缺模块。
+# 安装方式（basic-pitch 必须单独 --no-deps，见文件头第 1 条）：
+#   python -m pip install --no-deps "basic-pitch>=0.4.0"
+#   python -m pip install -r engine/requirements-ci.txt
+
+# ---- 测试框架 ----
+pytest
+pytest-cov
+hypothesis
+
+# ---- collect 阶段直接依赖 ----
+pyyaml
+numpy==1.26.4
+torch
+mido
+
+# ---- basic-pitch 导入链（走 ONNX 后端）----
+onnxruntime>=1.16
+librosa>=0.10.0
+mir-eval>=0.6
+resampy<0.4.3
+scikit-learn
+soundfile>=0.12.0
+
+# ---- 引擎侧用例需要 ----
+pretty_midi>=0.2.10
+pypinyin>=0.51
+pillow
+
+# ---- 与出厂运行时保持一致 ----
+muscriptor==0.3.0
