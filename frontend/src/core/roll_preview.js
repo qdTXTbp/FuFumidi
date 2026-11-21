@@ -28,23 +28,57 @@ export const KEY_COUNT = 128;
 export const TAIL_PAD = 100;
 
 /**
- * 把曲目拍平成音符列表 [{start,end,midi,vel,track}]。
+ * tick → 秒 的换算器。
+ * ★ 2026-11-21 修正：真实曲目的 `notes[].start/end` 是 **tick**，不是秒
+ *   （core/midi.js 解析出来就是 tick；播放侧另走 TimeAxis）。
+ *   曲目对象自带 `baseSec(tick)`（变速地图展开成秒，见 core/viz/scene/compile.js 的用法），
+ *   没有时退回「按 tpb + initialBpm 匀速」的近似。
+ */
+export function secMapper(song) {
+  if (song && typeof song.baseSec === 'function') return (tick) => song.baseSec(tick);
+  const tpb = Number(song && song.tpb) || 480;
+  const bpm = Number(song && song.initialBpm) || 120;
+  return (tick) => (Number(tick) / tpb) * (60 / bpm);
+}
+
+/**
+ * 曲目的轨列表（供「选哪些轨」的多选使用）。
+ * 空轨也列出来但 `count=0`，默认不选 —— 用户能看见它存在，又不会被空轨干扰。
+ */
+export function collectTracks(song) {
+  const tracks = song && Array.isArray(song.tracks) ? song.tracks : [];
+  return tracks.map((tr, i) => ({
+    index: i,
+    name: (tr && tr.name) ? String(tr.name) : '',
+    count: tr && Array.isArray(tr.notes) ? tr.notes.length : 0,
+  }));
+}
+
+/**
+ * 把曲目拍平成音符列表 [{start,end,midi,vel,track}]，时间统一为**秒**。
+ * @param song   曲目文档（currentSong.song）
+ * @param picked 选中的轨号集合（Set/数组）；为空表示全部
  * 跳过残缺音符（历史工程里偶有 end/midi 为空），一个坏音符不该毁掉整张卷帘。
  */
-export function collectNotes(song) {
+export function collectNotes(song, picked) {
   const out = [];
   const tracks = song && Array.isArray(song.tracks) ? song.tracks : [];
+  const toSec = secMapper(song);
   tracks.forEach((tr, ti) => {
+    // picked=null/undefined 表示"全选"；空集合表示"一轨都没选"，不能当成全选
+    if (picked && !picked.has(ti)) return;
     const list = tr && Array.isArray(tr.notes) ? tr.notes : [];
     for (const n of list) {
       if (!n) continue;
-      const start = Number(n.start);
-      const end = Number(n.end);
+      const startTick = Number(n.start);
+      const endTick = Number(n.end);
       const midi = Number(n.midi);
-      if (!Number.isFinite(start) || !Number.isFinite(end) || !Number.isFinite(midi)) continue;
+      if (!Number.isFinite(startTick) || !Number.isFinite(endTick) || !Number.isFinite(midi)) continue;
+      const start = toSec(startTick);
+      const end = Math.max(toSec(endTick), start);
       out.push({
         start,
-        end: Math.max(end, start),
+        end,
         midi,
         vel: Number.isFinite(Number(n.vel)) ? Number(n.vel) : 0.8,
         track: ti,

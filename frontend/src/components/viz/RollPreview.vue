@@ -15,9 +15,10 @@ import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useAppStore } from '../../stores/app';
 import { t } from '../../core/i18n.js';
 import {
-  ROLL_LIMITS, collectNotes, durationOf, rollWidth, rollHeight,
+  ROLL_LIMITS, collectNotes, collectTracks, durationOf, rollWidth, rollHeight,
   noteRect, isNoteActive, followScroll, centerScrollTop, tempoFactorOf,
 } from '../../core/roll_preview.js';
+import { trackColor } from '../../core/palette.js';
 
 const props = defineProps({ page: { type: Boolean, default: false } });
 const app = useAppStore();
@@ -33,7 +34,31 @@ const wrapEl = ref(null);
 const playheadEl = ref(null);
 
 /* ---------------- 数据 ---------------- */
-const notes = computed(() => collectNotes(app.currentSong));
+// ★ currentSong 是**曲库条目**，音符在 item.song.tracks[].notes（tick 域）。
+//   2026-11-21 修复：之前直接读 currentSong.tracks，真实曲目一律空白。
+const songDoc = computed(() => (app.currentSong && app.currentSong.song) || null);
+const allTracks = computed(() => collectTracks(songDoc.value));
+/** 选中的轨号集合：空轨不默认选，避免整页空着还要用户自己猜 */
+const picked = ref(new Set());
+watch(allTracks, (list) => {
+  const next = new Set();
+  for (const tr of list) if (tr.count > 0) next.add(tr.index);
+  picked.value = next;
+}, { immediate: true });
+
+const notes = computed(() => collectNotes(songDoc.value, picked.value));
+
+function toggleTrack(i) {
+  const next = new Set(picked.value);
+  if (next.has(i)) next.delete(i); else next.add(i);
+  picked.value = next;
+}
+function pickAll() {
+  const next = new Set();
+  for (const tr of allTracks.value) if (tr.count > 0) next.add(tr.index);
+  picked.value = next;
+}
+
 const originalBpm = computed(() => {
   const v = Number(app.currentSong && app.currentSong.initialBpm);
   return v > 0 ? v : 120; // 与参考稿 `tempos[0]?.bpm || 120` 一致
@@ -245,14 +270,28 @@ onBeforeUnmount(stopLoop);
       <button class="chip-btn" :disabled="!notes.length" @click="replay">{{ t('重新播放') }}</button>
     </div>
 
+    <!-- 多轨曲目：让用户挑哪几条轨参与（默认全选有音符的轨） -->
+    <div v-if="allTracks.length > 1" class="roll-tracks">
+      <span class="muted small">{{ t('音轨') }}（{{ picked.size }}/{{ allTracks.length }}）</span>
+      <button v-for="tr in allTracks" :key="tr.index" class="chip-btn"
+              :class="{ active: picked.has(tr.index) }" :disabled="!tr.count"
+              :title="tr.count ? '' : t('这条轨没有音符')"
+              @click="toggleTrack(tr.index)">
+        <span class="trk-dot" :style="{ background: trackColor(tr.index) }"></span>
+        {{ tr.name || (t('轨') + ' ' + (tr.index + 1)) }}
+        <span class="trk-n">{{ tr.count }}</span>
+      </button>
+      <button v-if="picked.size < allTracks.length" class="chip-btn" @click="pickAll">{{ t('全选') }}</button>
+    </div>
+
     <div ref="wrapEl" class="roll-wrap">
       <div class="roll-inner" :style="{ width: totalWidth + 'px', height: contentH + 'px' }">
         <div ref="playheadEl" class="roll-playhead"></div>
         <div v-for="(it, i) in layout" :key="i" class="roll-note" :style="it.style"></div>
       </div>
       <div v-if="!notes.length" class="roll-empty" role="status">
-        <b>{{ t('还没有可画成卷帘的音符') }}</b>
-        <span>{{ t('载入一首 MIDI 曲目后，这里会按时间轴铺开每条轨的音符。') }}</span>
+        <b>{{ songDoc ? t('没有可显示的音符') : t('还没有可画成卷帘的音符') }}</b>
+        <span>{{ songDoc ? t('这条曲目没有音符，或者你把所有音轨都取消了勾选。') : t('载入一首 MIDI 曲目后，这里会按时间轴铺开每条轨的音符。') }}</span>
       </div>
     </div>
   </div>
@@ -284,6 +323,24 @@ onBeforeUnmount(stopLoop);
 }
 .roll-bar input[type='range'] { width: 96px; }
 .roll-gap { width: 8px; }
+
+/* 多轨选择条：一行排不下就换行，和参数条用同一条分隔线 */
+.roll-tracks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) 0;
+  border-top: 1px solid var(--hairline);
+}
+.trk-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--r-pill);
+  margin-right: 4px;
+}
+.trk-n { font-size: var(--fs-xs); color: var(--text3); margin-left: 4px; }
 
 /* 卷帘本体：参考稿是 overflow:auto + cursor:grab 的滚动容器 */
 .roll-wrap {

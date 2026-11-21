@@ -6925,6 +6925,9 @@ export const I18N_MAP = {
   '重新播放': 'Replay',
   '还没有可画成卷帘的音符': 'No notes to draw yet',
   '载入一首 MIDI 曲目后，这里会按时间轴铺开每条轨的音符。': 'Load a MIDI song and every track will be laid out along the timeline here.',
+  '这条轨没有音符': 'This track has no notes',
+  '没有可显示的音符': 'No notes to show',
+  '这条曲目没有音符，或者你把所有音轨都取消了勾选。': 'This song has no notes, or you unchecked every track.',
 };
 
 /* 语言状态（响应式：切语言后 t() 返回值变化，Vue 模板自动重渲染） */
