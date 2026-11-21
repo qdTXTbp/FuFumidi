@@ -28,6 +28,10 @@ const FILES = [
   'FuFumidi-' + VER + '-win-x64-unpacked.zip',
 ];
 
+// 只传部分文件名时只传这些（大资产走 cnb-upload.py，避免 curl PUT 被重置）
+const ONLY = process.argv.slice(2).filter((a) => !a.startsWith('-') && FILES.includes(a));
+const LIST = ONLY.length ? ONLY : FILES;
+
 function curlString(args) {
   return String(execFileSync('curl.exe', ['-sS', '--ssl-no-revoke', ...args], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }) || '').trim();
 }
@@ -91,7 +95,7 @@ async function fillAssets(tag, label, body) {
     console.log('created id=' + rel.id);
   }
   let uploaded = 0;
-  for (const f of FILES) {
+  for (const f of LIST) {
     const local = path.join(DIR, f);
     if (!fs.existsSync(local)) throw new Error('缺文件: ' + local);
     const t0 = Date.now();
@@ -105,7 +109,7 @@ async function fillAssets(tag, label, body) {
 }
 
 (async () => {
-  const missing = FILES.filter((f) => !fs.existsSync(path.join(DIR, f)));
+  const missing = LIST.filter((f) => !fs.existsSync(path.join(DIR, f)));
   if (missing.length) { console.error('缺文件:', missing.join(', ')); process.exit(1); }
   const notes = fs.readFileSync(NOTES, 'utf8');
 
