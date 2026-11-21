@@ -6920,6 +6920,7 @@ export const I18N_MAP = {
   'BPM（可选）': 'BPM (optional)',
   '默认用曲目 BPM': 'Defaults to the song BPM',
   '应用BPM': 'Apply BPM',
+  '按这个 BPM 改变播放速度（不只是预览）': 'Change the playback speed to this BPM (not just the preview)',
   '曲目 BPM': 'Song BPM',
   '重置': 'Reset',
   '重新播放': 'Replay',

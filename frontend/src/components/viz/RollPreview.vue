@@ -15,10 +15,11 @@ import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useAppStore } from '../../stores/app';
 import { t } from '../../core/i18n.js';
 import {
-  ROLL_LIMITS, collectNotes, collectTracks, durationOf, rollWidth, rollHeight,
+  ROLL_LIMITS, collectNotes, collectTracks, rollWidth, rollHeight,
   noteRect, isNoteActive, followScroll, centerScrollTop, tempoFactorOf,
 } from '../../core/roll_preview.js';
 import { trackColor } from '../../core/palette.js';
+import { ensureAudio } from '../../audio.js';
 
 const props = defineProps({ page: { type: Boolean, default: false } });
 const app = useAppStore();
@@ -63,8 +64,6 @@ const originalBpm = computed(() => {
   const v = Number(app.currentSong && app.currentSong.initialBpm);
   return v > 0 ? v : 120; // 与参考稿 `tempos[0]?.bpm || 120` 一致
 });
-const tempoFactor = computed(() => tempoFactorOf(originalBpm.value, customBpm.value));
-const totalDuration = computed(() => durationOf(notes.value));
 const totalWidth = computed(() => rollWidth(notes.value, pxPerSec.value));
 const contentH = computed(() => rollHeight(rowPx.value));
 
@@ -74,15 +73,30 @@ const layout = computed(() => notes.value.map((n) => {
   return { n, style: `left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px` };
 }));
 
-/* ---------------- 走带（参考稿的四个按钮） ---------------- */
-const hasStarted = ref(false);
-const paused = ref(false);
-const playbackTime = ref(0);
+/* ---------------- 走带：直接驱动播放器 ----------------
+   ★ 2026-11-21 修：原先是参考稿那套「自己的时钟」，只滚画面不发声。
+     现在时间一律读 app.curSec，按钮调 togglePlay / stopPlay / seekSec，
+     画面与声音天然同步，也顺带享受播放器的「跳空白」与引擎自愈。 */
+const isPlaying = computed(() => !!app.playing);
 
-let animStart = 0;
+/** 当前播放头（秒）。
+    播放中直接问播放器：store 的 curSec 是 30fps 节流写的（见 app.ts startTickLoop 的注释，
+    "逐帧平滑动画的视图各自有独立绘制循环直接读 player"），拿它画会产生台阶感。
+    暂停/seek 时 player 不变，用 store 里的值（seekSec 会写它）。 */
+function currentSec() {
+  if (app.playing) {
+    try {
+      const { player } = ensureAudio();
+      if (player) return Number(player.currentSec()) || 0;
+    } catch (e) { /* 引擎没起来时退回 store */ }
+  }
+  return Number(app.curSec) || 0;
+}
+
 let raf = 0;
-let ended = false;
-let els = []; // [{ el, n, on }] —— 逐帧直接改 class，不走 Vue 响应式
+let dirty = true;
+let lastSec = -1;
+let els = []; // [{ el, n, on }] —— 逐帧只改 class，不走 Vue 响应式
 
 function rebuildEls() {
   els = [];
@@ -105,101 +119,92 @@ function setPlayhead(sec) {
   if (playheadEl.value) playheadEl.value.style.transform = `translateX(${sec * pxPerSec.value}px)`;
 }
 
-function tick(ts) {
-  if (paused.value) return;
-  if (!animStart) animStart = ts;
-  const now = (ts - animStart) / 1000 * tempoFactor.value; // 秒（曲目时间）
-  playbackTime.value = now;
-  setPlayhead(now);
-
-  const wrap = wrapEl.value;
-  if (wrap) wrap.scrollLeft = followScroll(now * pxPerSec.value, wrap.clientWidth, totalWidth.value);
-
+/** 把「发声窗口内」的音符点亮；暂停时也停在正确位置 */
+function paintActive(sec) {
   for (const it of els) {
-    const on = isNoteActive(now, it.n, minHighlight.value);
+    const on = isNoteActive(sec, it.n, minHighlight.value);
     if (on !== it.on) { it.on = on; it.el.classList.toggle('active', on); }
-  }
-
-  if (now < totalDuration.value) {
-    raf = requestAnimationFrame(tick);
-  } else if (!ended) {
-    ended = true;
-    paused.value = true; // 停在末尾，按钮回到「暂停/继续」的初始语义
   }
 }
 
-function stopLoop() {
-  if (raf) { cancelAnimationFrame(raf); raf = 0; }
+function tick() {
+  raf = requestAnimationFrame(tick);
+  const wrap = wrapEl.value;
+  if (!wrap) return;
+
+  const sec = currentSec();
+  if (isPlaying.value) {
+    // 播放中：每帧把播放头保持在视口中间（两端夹住），和参考稿一致
+    const tgt = followScroll(sec * pxPerSec.value, wrap.clientWidth, totalWidth.value);
+    if (Math.abs(wrap.scrollLeft - tgt) > 1) wrap.scrollLeft = tgt;
+    dirty = true;
+  }
+  if (sec !== lastSec) { lastSec = sec; dirty = true; }
+  if (!dirty) return;
+  dirty = false;
+  setPlayhead(sec);
+  paintActive(sec);
 }
 
 function start() {
-  if (!notes.value.length || hasStarted.value) return;
-  hasStarted.value = true;
-  paused.value = false;
-  ended = false;
-  animStart = 0;
-  playbackTime.value = 0;
-  setPlayhead(0);
-  stopLoop();
-  raf = requestAnimationFrame(tick);
+  if (!notes.value.length || isPlaying.value) return;
+  seekTo(0);
+  if (wrapEl.value) wrapEl.value.scrollLeft = 0;
+  dirty = true;
+  app.togglePlay();
 }
 
-function togglePause() {
-  if (!hasStarted.value) return;
-  paused.value = !paused.value;
-  if (paused.value) stopLoop();
-  else {
-    // 从暂停点续跑：把起算点回拨已播放的时长（参考稿同写法）
-    animStart = performance.now() - playbackTime.value / tempoFactor.value * 1000;
-    stopLoop();
-    raf = requestAnimationFrame(tick);
-  }
+function togglePlayPause() {
+  if (!app.currentSong) return;
+  app.togglePlay();
+}
+
+/** 恢复播放倍率：BPM 覆盖改的是全局播放速度，离开本页 / 重置时要还回去 */
+function restoreTempo() {
+  try { if (typeof app.setTempo === 'function') app.setTempo(1); } catch (e) { /* 引擎未就绪 */ }
+}
+
+/** 跳转到指定秒：优先走播放器（会同步引擎），引擎没起来时至少把 store 与画面归位，
+    否则「重置」在引擎异常的环境里会留下一个不动的旧播放头。 */
+function seekTo(sec) {
+  try { app.seekSec(sec); return; } catch (e) { /* 引擎未就绪，走兜底 */ }
+  try { app.curSec = sec; app.progress = 0; } catch (e) { /* store 不可写时彻底放弃 */ }
 }
 
 function reset() {
-  stopLoop();
-  hasStarted.value = false;
-  paused.value = false;
-  ended = false;
-  animStart = 0;
-  playbackTime.value = 0;
+  try { app.stopPlay(); } catch (e) { /* 没有引擎时忽略 */ }
+  restoreTempo();
+  seekTo(0);
   bpmInput.value = '';
   customBpm.value = 0;
   pxPerSec.value = ROLL_LIMITS.pxPerSec.def;
   rowPx.value = ROLL_LIMITS.rowPx.def;
   minHighlight.value = ROLL_LIMITS.minHighlight.def;
   clearActive();
+  lastSec = -1;
   setPlayhead(0);
+  dirty = true;
   if (wrapEl.value) { wrapEl.value.scrollLeft = 0; centerVertical(); }
 }
 
 function replay() {
   if (!notes.value.length) return;
-  stopLoop();
-  hasStarted.value = true;
-  paused.value = false;
-  ended = false;
-  animStart = 0;
-  playbackTime.value = 0;
+  seekTo(0);
+  if (wrapEl.value) wrapEl.value.scrollLeft = 0;
   clearActive();
+  lastSec = -1;
   setPlayhead(0);
-  raf = requestAnimationFrame(tick);
+  dirty = true;
+  if (!isPlaying.value) app.togglePlay();
 }
 
 function applyBpm() {
   const v = parseFloat(bpmInput.value);
   if (!Number.isFinite(v) || v <= 0) return;
   customBpm.value = v;
-  // 参考稿在 buildVisualizer() 里重建并复位；这里同样从 0 开始，避免倍率切换时跳动
-  stopLoop();
-  hasStarted.value = false;
-  paused.value = false;
-  ended = false;
-  animStart = 0;
-  playbackTime.value = 0;
-  clearActive();
-  setPlayhead(0);
-  if (wrapEl.value) wrapEl.value.scrollLeft = 0;
+  // 现在声音是真的：BPM 覆盖直接改播放速度，画面与声音对齐
+  try { app.setTempo(Math.max(0.25, Math.min(4, tempoFactorOf(originalBpm.value, v)))); } catch (e) { /* 引擎未就绪 */ }
+  dirty = true;
 }
 
 /* ---------------- 位置与尺寸变化 ---------------- */
@@ -217,19 +222,30 @@ watch(layout, async () => {
 });
 
 watch(() => (app.currentSong && app.currentSong.id), async () => {
+  restoreTempo();       // 换曲目后别把上一首的倍率带过去
+  bpmInput.value = '';
+  customBpm.value = 0;
   await nextTick();
   rebuildEls();
   if (wrapEl.value) wrapEl.value.scrollLeft = 0;
   centerVertical();
+  clearActive();
+  lastSec = -1;
+  dirty = true;
 });
 
 onMounted(async () => {
   await nextTick();
   rebuildEls();
   centerVertical();
+  // ★ 逐帧循环必须在这里起：播放头 / 自动跟随 / 高亮都靠它
+  raf = requestAnimationFrame(tick);
 });
 
-onBeforeUnmount(stopLoop);
+onBeforeUnmount(() => {
+  if (raf) cancelAnimationFrame(raf);
+  restoreTempo();
+});
 </script>
 
 <template>
@@ -246,7 +262,7 @@ onBeforeUnmount(stopLoop);
       <label class="roll-lbl" for="rollBpm">{{ t('BPM（可选）') }}</label>
       <input id="rollBpm" v-model="bpmInput" class="roll-num" type="number" min="20" max="400"
              :placeholder="t('默认用曲目 BPM')" @keydown.enter="applyBpm" />
-      <button class="chip-btn" @click="applyBpm">{{ t('应用BPM') }}</button>
+      <button class="chip-btn" :title="t('按这个 BPM 改变播放速度（不只是预览）')" @click="applyBpm">{{ t('应用BPM') }}</button>
 
       <span class="roll-gap"></span>
       <label class="roll-lbl" for="rollPx">{{ t('横向缩放') }}（px/s）</label>
@@ -264,8 +280,8 @@ onBeforeUnmount(stopLoop);
              :min="ROLL_LIMITS.minHighlight.min" :max="ROLL_LIMITS.minHighlight.max" :step="ROLL_LIMITS.minHighlight.step" />
 
       <span class="roll-gap"></span>
-      <button class="chip-btn" :disabled="!notes.length || hasStarted" @click="start">{{ t('开始') }}</button>
-      <button class="chip-btn" :disabled="!hasStarted" @click="togglePause">{{ paused ? t('继续') : t('暂停') }}</button>
+      <button class="chip-btn" :disabled="!notes.length || isPlaying" @click="start">{{ t('开始') }}</button>
+      <button class="chip-btn" :disabled="!app.currentSong" @click="togglePlayPause">{{ isPlaying ? t('暂停') : t('继续') }}</button>
       <button class="chip-btn" @click="reset">{{ t('重置') }}</button>
       <button class="chip-btn" :disabled="!notes.length" @click="replay">{{ t('重新播放') }}</button>
     </div>
