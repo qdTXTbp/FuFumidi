@@ -6911,6 +6911,20 @@ export const I18N_MAP = {
   '按播放头或网格切开音符，切段首尾相接、总时值不变': 'Split notes at the playhead or grid; segments stay contiguous and total duration is unchanged',
   '切点': 'Cut at',
   '播放头': 'Playhead',
+  // ---- 音乐 · 卷帘（2026-11-21，参照 CodePen《midi可视化》）----
+  '卷帘': 'Piano roll',
+  '卷帘回放': 'Piano roll preview',
+  '横向缩放': 'Horizontal zoom',
+  '纵向间距': 'Row spacing',
+  '最短高亮时间': 'Min highlight duration',
+  'BPM（可选）': 'BPM (optional)',
+  '默认用曲目 BPM': 'Defaults to the song BPM',
+  '应用BPM': 'Apply BPM',
+  '曲目 BPM': 'Song BPM',
+  '重置': 'Reset',
+  '重新播放': 'Replay',
+  '还没有可画成卷帘的音符': 'No notes to draw yet',
+  '载入一首 MIDI 曲目后，这里会按时间轴铺开每条轨的音符。': 'Load a MIDI song and every track will be laid out along the timeline here.',
 };
 
 /* 语言状态（响应式：切语言后 t() 返回值变化，Vue 模板自动重渲染） */

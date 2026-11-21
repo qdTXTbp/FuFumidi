@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router';
 import Icon from '../components/Icon.vue';
 import ViewPlay from './ViewPlay.vue';
 import ViewViz from './ViewViz.vue';
+import ViewRoll from './ViewRoll.vue';
 import ViewScore from './ViewScore.vue';
 import { t } from '../core/i18n.js';
 const route = useRoute();
@@ -13,9 +14,12 @@ if (['edit', 'lyrics'].includes(String(route.query.tab || ''))) router.replace({
 const tabs = [
   { id: 'play', label: t('演奏'), ic: 'play2' },
   { id: 'viz', label: t('可视化'), ic: 'viz' },
+  // 卷帘：独立板块（2026-11-21）。和「可视化」那种瀑布流是两种读法：
+  // 这里是横轴时间 / 纵轴音高的静态卷帘 + 播放头，适合核对"哪一拍在哪个音"。
+  { id: 'roll', label: t('卷帘'), ic: 'cclane' },
   { id: 'score', label: t('乐谱'), ic: 'score' },
 ];
-const comps = { play: ViewPlay, viz: ViewViz, score: ViewScore };
+const comps = { play: ViewPlay, viz: ViewViz, roll: ViewRoll, score: ViewScore };
 const validTab = (id) => tabs.some(x => x.id === id);
 const tab = ref(validTab(String(route.query.tab || '')) ? String(route.query.tab) : tabs[0].id);
 const cur = computed(() => comps[tab.value]);
