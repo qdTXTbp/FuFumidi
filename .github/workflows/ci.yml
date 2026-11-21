@@ -73,6 +73,12 @@ jobs:
     # 6.7.1：改为 requirements-ci.txt（原先直接装 requirements-bundle.txt，在 python 3.12 上
     #   因 basic-pitch 声明 tensorflow<2.15.1（无 cp312 wheel）**解析即失败**，这个 job 从建起就没绿过）。
     runs-on: windows-latest
+    env:
+      # 应用启动引擎时一直带着这两个变量（main/diffsinger.js / models.js / omr.js），
+      # 但测试里是直接 spawn python，不设的话 runner 的 stdout 是 cp1252，
+      # 引擎打印中文 ###RESULT 会抛 UnicodeEncodeError（本机 cp936 侥幸不报）。
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: 'utf-8'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
