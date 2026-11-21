@@ -303,12 +303,19 @@ onBeforeUnmount(stopLoop);
 
 .roll-inner { position: relative; }
 
+/* 未播放：压到 30% 不透明度，只是"底图"；播放中：实色 + 一点辉光，
+   一眼能看出这一拍是哪些音在响（参考稿是灰→黑，这里把两端拉得更开）。 */
 .roll-note {
   position: absolute;
   background: var(--text3);
-  transition: background-color 0.3s;
+  opacity: 0.3;
+  transition: background-color 0.3s, opacity 0.3s;
 }
-.roll-note.active { background: var(--text); }
+.roll-note.active {
+  background: var(--text);
+  opacity: 1;
+  box-shadow: 0 0 6px color-mix(in srgb, var(--text) 55%, transparent);
+}
 
 .roll-playhead {
   position: absolute;
