@@ -3,7 +3,7 @@ import { themeColor } from '../core/palette.js';
 import { ref, computed, reactive, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 import Icon from '../components/Icon.vue';
 import { useAppStore } from '../stores/app';
-import { useVizBgStore, BG_MODES } from '../stores/vizbg';
+import { useVizBgStore } from '../stores/vizbg';
 import { t } from '../core/i18n.js';
 
 const app = useAppStore();
@@ -468,7 +468,7 @@ async function processVstQueue() {
 /* ==================== 视频 / 可视化导出 ==================== */
 const VE = reactive({
   format: 'mp4', template: 'landscape', res: '1280x720', fps: 24, quality: 'medium',
-  dur: 30, durMode: 'full', durCustom: 30, visual: 'mix', track: 'all',
+  dur: 30, durMode: 'full', durCustom: 30, visual: 'waterfall', track: 'all',
   bitrate: 8, showProgress: true, showChord: true, showTimecode: false,
   // ★ 背景不在 VE 里：它跟「可视化」页共用 stores/vizbg（同一份 + 同一绘制函数）。
   //   以前这里是 bgColor/bgImage 一套私有设置，导出画面跟用户看到的瀑布流对不上。
@@ -479,9 +479,16 @@ const VE = reactive({
 //   任何一边改动，两边的预览与成片立刻一致。
 const vizBg = useVizBgStore();
 const bg = vizBg.bg;
+let vizReady = false;
+async function initVizBg() {
+  if (vizReady) return;
+  vizReady = true;
+  await vizBg.init(false);
+  vizBg.setWallActive(vizBg.bg.mode === 'wallpaper');
+  nextTick(drawVideoPreview);
+}
+
 /** 动态壁纸：与「可视化」页**共用同一份设置** —— 这里挑的壁纸就是导出的背景（同一绘制函数） */
-function pickBgWall() { app.ui.wallpaperTarget = 'viz'; app.ui.wallpaperOpen = true; }
-function clearBgWall() { vizBg.clearWall(); }
 const veResCustom = ref(false);
 const vePreviewEl = ref(null);
 function previewWH() {
@@ -512,11 +519,16 @@ function drawVideoPreview() {
   catch (e) { console.warn('[video] 预览绘制失败：', e); }
 }
 watch(() => [VE.template, bg.mode, bg.color, bg.blur, bg.dim, bg.wallPath, VE.visual, VE.showProgress, VE.showChord, VE.showTimecode, VE.showLyrics, VE.showWatermark, VE.res, VE.fps, VE.quality, VE.track], () => nextTick(drawVideoPreview), { deep: true });
+// 曲目是异步切换的：挂载时可能还没选曲，选曲后必须重绘，否则画布永远停在默认 300×150。
+watch(() => song.value && song.value.id, () => {
+  nextTick(drawVideoPreview);
+  if (song.value) void initVizBg();
+});
 onMounted(() => {
   nextTick(drawVideoPreview);
   // 图片/壁纸解码是异步的：读完再重绘一次，否则首帧拿到的是 null（画成主题底）；
   // 动态壁纸还要**开播** —— 导出页也得出帧，成片里的背景才会动。
-  void vizBg.init().then(() => { vizBg.setWallActive(bg.mode === 'wallpaper'); nextTick(drawVideoPreview); });
+  if (song.value) void initVizBg();
 });
 // 离开导出页就暂停壁纸解码（回来时 onMounted 会再开）
 onBeforeUnmount(() => vizBg.setWallActive(false));
@@ -556,7 +568,7 @@ function drawVideoFrame(ctx, W, H, tick, s, audioBuf, vf, nowSec) {
   //   用同一个 paintVizBg 铺**整帧**：仪表盘模板下面还有卡片区，瀑布只盖上半块。
   //   ★ 模糊半径按「物理像素 / 实时 dpr」等比换算：模糊是设备像素量，实时画布是 934×534@2.5，
   //   照抄 13px 在 4K 帧上会清晰得多 —— 于是「导出比实时更清楚」也是不同一幅画。
-  const bgOpts = vizBg.drawOpts();
+  const bgOpts = vizBg.drawOpts(true);
   const bgScale = drawVideoFrame._bgScale;
   if (bgScale > 0 && bgOpts && typeof bgOpts.blur === 'number' && bgOpts.blur > 0) bgOpts.blur = bgOpts.blur * bgScale;
   paintVizBg(ctx, W, H, bgOpts);
@@ -598,8 +610,11 @@ function drawVideoFrame(ctx, W, H, tick, s, audioBuf, vf, nowSec) {
     ssaa: vizBg.ssaa,   // 导出超采样（对标 Pianola 的 supersampling）：离线渲染不抢实时预算
   };
   const drawPanelBg = (x, y, w2, h2, title, sub, dot) => {
+    ctx.save();
+    ctx.globalAlpha = 0.72;
     ctx.fillStyle = cvar('--surface', '#101826');
     ctx.beginPath(); roundRect(ctx, x, y, w2, h2, 12); ctx.fill();
+    ctx.restore();
     ctx.strokeStyle = cvar('--hairline', 'rgba(255,255,255,.08)'); ctx.lineWidth = 1; ctx.stroke();
     ctx.fillStyle = cvar('--ink', '#e8eef7'); ctx.font = '600 12px "Segoe UI", "Microsoft YaHei", sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     ctx.fillText(title, x + 14, y + 15);
@@ -617,9 +632,13 @@ function drawVideoFrame(ctx, W, H, tick, s, audioBuf, vf, nowSec) {
     //   导出原来直接铺满整帧 ⇒ 对比度、层次、边缘观感都不同。这里把同一层卡片画出来，
     //   并把绘制原点平移到卡片内（否则内容还是从 0,0 起画，会被裁掉顶部）。
     const cardR = 12, cx0 = pad, cy0 = pad, cw0 = W - pad * 2, ch0 = rollH - pad;
+    // 外观页壁纸已经铺满整帧；仪表盘卡片不要再用不透明底色把它整块盖住，
+    // 否则预览/成片看起来仍然“没有壁纸”。保留一层半透明底保证音符对比度。
     ctx.save();
+    ctx.globalAlpha = 0.62;
     ctx.fillStyle = cvar('--canvas', '#0b1220');
     ctx.beginPath(); roundRect(ctx, cx0, cy0, cw0, ch0, cardR); ctx.fill();
+    ctx.restore();
     ctx.strokeStyle = cvar('--hairline', 'rgba(255,255,255,.08)'); ctx.lineWidth = 1;
     ctx.beginPath(); roundRect(ctx, cx0, cy0, cw0, ch0, cardR); ctx.stroke();
     ctx.beginPath(); roundRect(ctx, cx0, cy0, cw0, ch0, cardR); ctx.clip();
@@ -819,7 +838,7 @@ async function renderVideo() {
     drawVideoFrame._state = null;
     // 预热背景位图缓存：底图（模糊 + cover 裁切）在第一帧之前先烘一次。
     try {
-      const b0 = vizBg.drawOpts();
+      const b0 = vizBg.drawOpts(true);
       if (b0 && typeof b0.blur === 'number' && b0.blur > 0) b0.blur = b0.blur * (ds / VIZ_REF_DPR);
       ctx.save(); ctx.scale(ds, ds);
       paintVizBg(ctx, W / ds, VIZ_REF_H, b0);
@@ -1123,7 +1142,7 @@ async function renderVideo() {
 <div class="field-row">
           <label>{{ t('可视化模板') }}</label>
           <select class="select-input" v-model="VE.visual">
-            <option value="mix">{{ t('仪表盘') }}</option><option value="waterfall">{{ t('瀑布流') }}</option>
+            <option value="waterfall">{{ t('瀑布流') }}</option>
           </select>
         </div>
         <div class="field-row">
@@ -1169,44 +1188,6 @@ async function renderVideo() {
           <div class="fr-inline">
             <button class="btn sm" @click="vePickWatermark">{{ VE.watermark ? t('更换') : t('选择') }}</button>
             <NumSlider v-model="VE.watermarkOpacity" :min="0" :max="100" style="flex:1 1 80px;min-width:0" />
-          </div>
-        </div>
-        <!-- ★ 背景跟「可视化」页共用一份（stores/vizbg）：这里改，瀑布流那边立刻变；
-              反之亦然。导出前先在可视化页把背景调好，这里就是所见即所得。
-              内容比其他格子多（模式 chip + 换图 + 两条滑杆 + 说明），所以整行铺满、内部横向排。 -->
-        <div class="field-row is-wide">
-          <label>{{ t('背景') }}</label>
-          <div class="ve-bg-inline">
-            <div class="ve-bg-modes">
-              <button v-for="m in BG_MODES" :key="m.k" class="chip-btn" :class="{ active: bg.mode === m.k }"
-                      :title="m.k === 'transparent' ? t('真·透明：导出的画面可当叠加层') : ''"
-                      @click="vizBg.setMode(m.k)">{{ t(m.label) }}</button>
-              <input v-if="bg.mode === 'solid'" type="color" :value="bg.color"
-                     @input="vizBg.setColor($event.target.value)"
-                     style="width:38px;height:24px;padding:0;border:1px solid var(--hairline);border-radius:var(--r-sm);background:none;cursor:pointer" />
-              <button v-if="bg.mode === 'image'" class="btn sm" @click="vizBg.pickImage()">
-                <Icon name="folder" :size="12" />{{ bg.path ? t('更换') : t('选择') }}</button>
-              <!-- 动态壁纸：走应用壁纸库，落点是瀑布流背景（与「可视化」页同一份设置） -->
-              <button v-if="bg.mode === 'wallpaper'" class="btn sm" @click="pickBgWall">
-                <Icon name="folder" :size="12" />{{ bg.wallPath ? t('更换') : t('选择') }}</button>
-              <button v-if="bg.mode === 'wallpaper' && bg.wallPath" class="btn sm ghost"
-                      :title="t('关掉动态壁纸，退回主题底')" @click="clearBgWall">✕</button>
-              <span v-if="bg.mode === 'wallpaper'" class="muted small" :title="bg.wallPath || ''">{{ bg.wallPath ? (vizBg.wallName || t('动态壁纸')) : t('还没挑壁纸') }}</span>
-            </div>
-            <div v-if="bg.mode === 'image' || bg.mode === 'theme' || bg.mode === 'wallpaper'" class="ve-bg-sliders">
-              <span class="muted small">{{ t('模糊') }}</span>
-              <NumSlider :model-value="bg.blur" @update:model-value="v => { vizBg.setBlur(v) }" :min="0" :max="40" :step="1" :input-width="68" />
-              <span class="muted small">{{ t('暗化') }}</span>
-              <NumSlider :model-value="Math.round(bg.dim * 100)" @update:model-value="v => { vizBg.setDim((+v) / 100) }" :min="0" :max="80" :step="5" :input-width="68" />
-            </div>
-            <span class="muted small">{{ t('与「可视化」页共用同一套设置') }}</span>
-            <!-- 导出超采样：离线渲染不抢实时预算，2× 能把发光边缘与细线拉干净（对标 Pianola） -->
-            <span class="muted small" style="margin-left:8px">{{ t('超采样') }}</span>
-            <button v-for="k in [1, 1.5, 2]" :key="k" class="chip-btn"
-                    :class="{ active: Math.abs(vizBg.ssaa - k) < 1e-6 }"
-                    :title="t('导出时按该倍率渲染再缩小，边缘更干净（更慢）')"
-                    @click="vizBg.setSsaa(k)">{{ k }}×</button>
-            <span v-if="bg.mode === 'transparent'" class="muted small">{{ t('透明档：MP4 没有透明通道，导出后是黑底（可作叠加层的相加/滤色素材）') }}</span>
           </div>
         </div>
       </div>

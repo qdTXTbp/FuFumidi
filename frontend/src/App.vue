@@ -25,6 +25,7 @@ import { ref, computed, reactive } from 'vue';
 import { useAppStore, VIEWS, viewParentOf } from './stores/app';
 import { usePlaylistStore } from './stores/playlist';
 import { useSettingsStore } from './stores/settings';
+import { useVizBgStore } from './stores/vizbg';
 import { setLang, t, browserLang } from './core/i18n.js';
 import { applyDisplayPrefs as applyDisplayPrefsShared, loadDisplayPrefs } from './core/display.js';
 import { applyMaterial } from './core/material.js';
@@ -41,6 +42,7 @@ const state = app;
 const playlistStore = usePlaylistStore();
 const tabsStore = useTabsStore();
 const settingsStore = useSettingsStore();
+const vizBg = useVizBgStore();
 const wallpaperPromptOpen = ref(false);
 const route = useRoute();
 const router = useRouter();
@@ -186,6 +188,7 @@ async function loadWallpaper() {
     wpBlur.value = Number.isFinite(Number(s.wallpaper_blur)) ? Number(s.wallpaper_blur) : 0;
   applyMaterial(s.ui_material);
   applyWeSettings(s);
+  void vizBg.syncFromAppWallpaper();
   } catch (e) {}
 }
 watch(() => settingsStore.settings, () => {
@@ -198,6 +201,7 @@ watch(() => settingsStore.settings, () => {
     wpBlur.value = Number.isFinite(Number(s.wallpaper_blur)) ? Number(s.wallpaper_blur) : 0;
   applyMaterial(s.ui_material);
   applyWeSettings(s);
+  void vizBg.syncFromAppWallpaper();
   // 播放偏好（跳过空白 / 步长 / 长按倍数）：设置页一改就同步到播放器
   applyPlaybackSettings(s);
   app.applyPlaybackPrefs();

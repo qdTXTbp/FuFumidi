@@ -125,17 +125,20 @@ function serveFile(req, res, file) {
     const st = fs.statSync(file);
     if (!st.isFile()) return send(res, 404, 'not found');
     const type = contentType(file), range = req.headers.range;
+    // 导出侧把 WE 工程视频/预览图直接 drawImage 到 canvas：跨源资源必须带 CORS，
+    // 否则 canvas 被污染，视频导出取帧会抛 SecurityError。
+    const cors = { 'Access-Control-Allow-Origin': '*', 'Cross-Origin-Resource-Policy': 'cross-origin' };
     if (range) {
       const m = /bytes=(\d*)-(\d*)/.exec(range);
       let start = m && m[1] ? parseInt(m[1], 10) : 0;
       let end = m && m[2] ? parseInt(m[2], 10) : st.size - 1;
-      if (start >= st.size) return send(res, 416, '', { 'Content-Range': 'bytes */' + st.size });
+      if (start >= st.size) return send(res, 416, '', Object.assign({ 'Content-Range': 'bytes */' + st.size }, cors));
       end = Math.min(end, st.size - 1);
-      res.writeHead(206, { 'Content-Type': type, 'Content-Length': end - start + 1, 'Content-Range': 'bytes ' + start + '-' + end + '/' + st.size, 'Accept-Ranges': 'bytes', 'Cache-Control': 'no-cache' });
+      res.writeHead(206, Object.assign({ 'Content-Type': type, 'Content-Length': end - start + 1, 'Content-Range': 'bytes ' + start + '-' + end + '/' + st.size, 'Accept-Ranges': 'bytes', 'Cache-Control': 'no-cache' }, cors));
       fs.createReadStream(file, { start, end }).pipe(res);
       return;
     }
-    res.writeHead(200, { 'Content-Type': type, 'Content-Length': st.size, 'Accept-Ranges': 'bytes', 'Cache-Control': 'no-cache' });
+    res.writeHead(200, Object.assign({ 'Content-Type': type, 'Content-Length': st.size, 'Accept-Ranges': 'bytes', 'Cache-Control': 'no-cache' }, cors));
     fs.createReadStream(file).pipe(res);
   } catch (e) { send(res, 404, 'not found'); }
 }

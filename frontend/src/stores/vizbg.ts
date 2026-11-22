@@ -11,6 +11,7 @@ import { reactive, ref } from 'vue';
 import { defineStore } from 'pinia';
 import { t } from '../core/i18n.js';
 import { useAppStore } from './app';
+import { useSettingsStore } from './settings';
 // ★ 视效开关的**单一来源**是 core/viz.js 的 FX_DEFAULTS —— store 只负责持久化与转交，
 //   不在两边各写一份默认值（写两份必然漂移：viz.js 加了新档、store 的默认还停在旧形状）。
 import { FX_DEFAULTS, FX_PARAMS, FX_COLORBY } from '../core/viz.js';
@@ -24,7 +25,7 @@ export const BG_KEY = 'fufumidi.viz.bg';
 export const BG_VER = 2;
 /* ★ 2026-10-17 加了 wallPath（动态壁纸）：它是**纯新增字段**，老记录没有它就落到默认 ''，
    因此**不动 BG_VER** —— 一动 BG_VER，老用户存的图片/纯色/模糊/暗化会被整条丢掉重来。 */
-export const BG_DEFAULTS = { v: BG_VER, mode: 'transparent', color: '#0b1020', blur: 12, dim: 0.35, path: '', wallPath: '', weId: '', weTitle: '', weUrl: '', fx: { ...FX_DEFAULTS } };   // ui-tokens-allow: color 是持久化的用户默认值，不是样式
+export const BG_DEFAULTS = { v: BG_VER, mode: 'transparent', color: '#0b1020', blur: 12, dim: 0.35, path: '', wallPath: '', weId: '', weTitle: '', weUrl: '', source: '', fx: { ...FX_DEFAULTS } };   // ui-tokens-allow: color 是持久化的用户默认值，不是样式
 
 /* 瀑布流视效开关（2026-10 升级）。顺序即界面顺序；每项都能单独关掉回到旧观感。 */
 /* 用户自定义主题（D8：命名交给用户）—— 与内置主题分开存，卸载/升级不丢 */
@@ -49,13 +50,23 @@ export const BG_MODES = [
   { k: 'transparent', label: '透明' },
 ];
 
+function cleanText(v: unknown) {
+  return String(v == null ? '' : v).replace(/[\u0000-\u001F\u007F-\u009F]/g, '').trim();
+}
+
 function read() {
   try {
-    const s = JSON.parse(localStorage.getItem(BG_KEY) || 'null');
+    const raw = localStorage.getItem(BG_KEY) || 'null';
+    let s: any;
+    try { s = JSON.parse(raw); } catch (e) {
+      // 旧版把 Wallpaper Engine 标题里的控制字节原样写进了 JSON；直接 parse 会整条失败，
+      // 用户看到的后果就是"背景设置没保存、重开变透明"。先去掉 C0/C1 控制字节再解析。
+      s = JSON.parse(raw.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, ''));
+    }
     if (s && typeof s === 'object' && s.v === BG_VER) {
       // fx 要**逐键**合并：整体覆盖会把后来新增的档位丢成 undefined（viz.js 那边再补默认，
       // 于是界面显示"开"、实际却是默认值，用户改了不生效）
-      return { ...BG_DEFAULTS, ...s, v: BG_VER, path: s.path || '', wallPath: s.wallPath || '', weUrl: '', fx: { ...FX_DEFAULTS, ...(s.fx || {}) } };
+      return { ...BG_DEFAULTS, ...s, weTitle: cleanText(s.weTitle), v: BG_VER, path: s.path || '', wallPath: s.wallPath || '', weUrl: '', fx: { ...FX_DEFAULTS, ...(s.fx || {}) } };
     }
   } catch (e) { /* 存储坏了就用默认值 */ }
   return { ...BG_DEFAULTS };
@@ -92,6 +103,7 @@ function baseName(p: string) {
 
 export const useVizBgStore = defineStore('vizbg', () => {
   const app = useAppStore();
+  const settingsStore = useSettingsStore();
   const bg = reactive(read());
   // ★ 解码后的图片**不进响应式**：HTMLImageElement 被 Proxy 包住后 drawImage 会抛
   //   （Illegal invocation），所以它住在闭包里，只通过 imageEl()/drawOpts() 取。
@@ -107,14 +119,25 @@ export const useVizBgStore = defineStore('vizbg', () => {
   const wallName = ref('');
   const weName = ref('');
   let wallVideo: HTMLVideoElement | null = null;
+  let weVideo: HTMLVideoElement | null = null;
+  let weImg: HTMLImageElement | null = null;
+  let weLoading: Promise<boolean> | null = null;
   let wallTimer = 0, wallLast = -1, wallStall = 0;
 
   function save() {
-    try { localStorage.setItem(BG_KEY, JSON.stringify({ ...bg, v: BG_VER })); } catch (e) { /* 隐私模式忽略 */ }
+    try { localStorage.setItem(BG_KEY, JSON.stringify({ ...bg, weTitle: cleanText(bg.weTitle), v: BG_VER })); } catch (e) { /* 隐私模式忽略 */ }
   }
   function videoReady() { return !!(wallVideo && wallVideo.readyState >= 2 && wallVideo.videoWidth > 0); }
   /** 交给绘制函数的背景参数（含已解码的图片 / 已就绪的视频帧源） */
-  function drawOpts() {
+  function drawOpts(forExport = false) {
+    // 导出/预览没有 iframe 层：Wallpaper Engine 场景必须换成可直接 drawImage 的
+    // 视频（video 工程）或预览图（scene/web 工程），否则整块背景会被当成透明。
+    if (forExport && bg.mode === 'we') {
+      if (weVideo && weVideo.readyState >= 2 && weVideo.videoWidth > 0) {
+        return { ...bg, mode: 'wallpaper', video: weVideo, image: null };
+      }
+      if (weImg && weImg.width > 0) return { ...bg, mode: 'image', image: weImg, video: null };
+    }
     return {
       // ★ 背景设置必须完整透传：paintVizBg 需要 image / color / blur / dim，
       //   只传 mode/video 会让图片壁纸退回主题渐变、模糊暗化全部丢失。
@@ -127,6 +150,69 @@ export const useVizBgStore = defineStore('vizbg', () => {
     };
   }
   function imageEl() { return image; }
+
+  /** Wallpaper Engine 工程 → 可直接给 canvas 的媒体（video 工程用视频，其它用预览图） */
+  function weSourceParts() {
+    try {
+      const u = new URL(bg.weUrl);
+      const id = u.searchParams.get('id') || bg.weId;
+      const file = u.searchParams.get('file') || '';
+      if (u.searchParams.get('type') === 'video' && file) {
+        const base = u.pathname.replace(/\/render\/?$/, '') + '/files/' + encodeURIComponent(id) + '/';
+        return { video: u.origin + base + file, image: u.searchParams.get('preview') || '' };
+      }
+      return { video: '', image: u.searchParams.get('preview') || '' };
+    } catch (e) { return { video: '', image: '' }; }
+  }
+
+  function waitWeVideo(v: HTMLVideoElement): Promise<boolean> {
+    return new Promise((res) => {
+      if (v.readyState >= 2 && v.videoWidth > 0) return res(true);
+      let done = false;
+      const finish = (ok: boolean) => { if (done) return; done = true; clearTimeout(timer); res(ok); };
+      const timer = setTimeout(() => finish(v.readyState >= 2 && v.videoWidth > 0), 8000);
+      v.addEventListener('loadeddata', () => finish(true), { once: true });
+      v.addEventListener('error', () => finish(false), { once: true });
+      v.play().catch(() => {});
+    });
+  }
+
+  async function ensureWeMedia(): Promise<boolean> {
+    if (bg.mode !== 'we' || !bg.weUrl) return false;
+    if (weLoading) return weLoading;
+    weLoading = (async () => {
+      const src = weSourceParts();
+      if (src.video) {
+        if (!weVideo) {
+          const v = document.createElement('video');
+          v.muted = true; v.loop = true; v.playsInline = true; v.preload = 'auto';
+          v.crossOrigin = 'anonymous';
+          v.setAttribute('aria-hidden', 'true');
+          v.style.cssText = 'position:fixed;left:0;top:0;width:2px;height:2px;opacity:0.01;pointer-events:none;z-index:-1';
+          document.body.appendChild(v);
+          weVideo = v;
+        }
+        if (weVideo.dataset.src !== src.video) {
+          weVideo.dataset.src = src.video;
+          weVideo.src = src.video;
+          weVideo.load();
+        }
+        weVideo.play().catch(() => {});
+        return await waitWeVideo(weVideo);
+      }
+      if (src.image) {
+        if (!weImg || weImg.src !== src.image) {
+          const im = new Image();
+          im.crossOrigin = 'anonymous';
+          weImg = im;
+          await new Promise<void>((res) => { im.onload = () => res(); im.onerror = () => res(); im.src = src.image; });
+        }
+        return !!(weImg && weImg.width > 0);
+      }
+      return false;
+    })().finally(() => { weLoading = null; });
+    return weLoading;
+  }
 
   /** 造/换动态壁纸解码器：一个 muted + loop 的 <video>，只作为"当前帧"的来源 */
   async function refreshWe(): Promise<boolean> {
@@ -141,10 +227,11 @@ export const useVizBgStore = defineStore('vizbg', () => {
   async function setWe(id: string, title?: string): Promise<boolean> {
     const sid = String(id || '').trim();
     if (!sid) return false;
-    bg.weId = sid; bg.weTitle = String(title || '');
+    bg.weId = sid; bg.weTitle = cleanText(title);
     const ok = await refreshWe();
     if (!ok) { app.toast(t('Wallpaper Engine 背景加载失败'), 'error'); return false; }
-    bg.mode = 'we'; save();
+    bg.mode = 'we'; bg.source = 'user'; save();
+    void ensureWeMedia();
     app.toast(t('已应用到音符瀑布背景'), 'ok');
     return true;
   }
@@ -215,6 +302,7 @@ export const useVizBgStore = defineStore('vizbg', () => {
   async function setImagePath(p: string) {
     bg.path = String(p || '').trim();
     bg.mode = 'image';
+    bg.source = 'user';
     save();
     if (!bg.path) { image = null; return false; }
     return await ensureImage();
@@ -224,6 +312,7 @@ export const useVizBgStore = defineStore('vizbg', () => {
   async function setWall(p: string) {
     bg.wallPath = String(p || '').trim();
     bg.mode = 'wallpaper';
+    bg.source = 'user';
     wallName.value = baseName(bg.wallPath);
     save();
     if (!bg.wallPath) { wallReady.value = false; return false; }
@@ -240,6 +329,7 @@ export const useVizBgStore = defineStore('vizbg', () => {
       wallVideo.dataset.src = '';
     }
     if (bg.mode === 'wallpaper') bg.mode = 'theme';
+    bg.source = 'user';
     save();
   }
 
@@ -330,6 +420,7 @@ export const useVizBgStore = defineStore('vizbg', () => {
   function setMode(m: string) {
     if (m === 'image' && !bg.path) { void pickImage(); return; }
     bg.mode = m;
+    bg.source = 'user';
     save();
     if (m === 'image' && bg.path && !image) void ensureImage();
     // 动态壁纸档：有路径就当场解码开播；切走别的档就暂停（别在看不见的地方烧解码）
@@ -364,10 +455,63 @@ export const useVizBgStore = defineStore('vizbg', () => {
     const p = await b.pickFile({ filters: [{ name: t('图片'), extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif'] }] });
     if (!p) return;
     if (!(await loadFromPath(p))) { app.toast(t('读取图片失败'), 'error'); return; }
-    bg.path = p; bg.mode = 'image'; save();
+    bg.path = p; bg.mode = 'image'; bg.source = 'user'; save();
   }
+  /** 应用整窗壁纸 → 音符瀑布/视频导出背景的同步。
+   *  只在用户没有显式选过可视化背景（source !== 'user' 且仍是默认透明档）时生效，
+   *  避免覆盖用户在「可视化」页或导出页自己挑的背景。 */
+  async function syncFromAppWallpaper(force = false): Promise<boolean> {
+    try {
+      await settingsStore.load();
+      const st: any = settingsStore.settings || {};
+      const path = String(st.custom_wallpaper || '').trim();
+      const enabled = !!st.wallpaper_enabled;
+      // 用户显式选过背景：不抢；应用壁纸被关掉且当前来源是 app：恢复透明。
+      if (!force && bg.source === 'user') return false;
+      if (!enabled) {
+        if (force || bg.source === 'app') { bg.mode = 'transparent'; bg.path = ''; bg.wallPath = ''; bg.source = ''; save(); }
+        return false;
+      }
+      if (!force && bg.source !== 'app' && (bg.mode !== 'transparent' || bg.path || bg.wallPath)) return false;
+      const kind = String(st.wallpaper_kind || '') || (/\.(mp4|webm|mov)(\?.*)?$/i.test(path) ? 'video' : 'image');
+      bg.source = 'app';
+      // 外观页也可以选 Wallpaper Engine；转换页不再有自己的背景设置，直接复用外观页来源。
+      if (st.wallpaper_provider === 'wallpaper-engine' && st.wallpaper_we_id) {
+        bg.mode = 'we';
+        bg.weId = String(st.wallpaper_we_id);
+        bg.weTitle = cleanText(st.wallpaper_we_title || st.wallpaper_we_id);
+        bg.path = ''; bg.wallPath = '';
+        const okWe = await refreshWe();
+        if (okWe) await ensureWeMedia();
+        save();
+        return okWe;
+      }
+      if (kind === 'video') {
+        bg.mode = 'wallpaper';
+        bg.wallPath = path;
+        bg.path = '';
+        wallName.value = baseName(path);
+      } else {
+        bg.mode = 'image';
+        bg.path = path;
+        bg.wallPath = '';
+        image = null;
+      }
+      save();
+      if (bg.mode === 'wallpaper') await ensureWall();
+      else if (bg.mode === 'image') await ensureImage();
+      return true;
+    } catch (e) { return false; }
+  }
+
   /** 启动时把上次选的图/动态壁纸读回来（路径有效才用；没了就退回主题，不留「假档位」） */
-  async function init() {
+  async function init(useAppWallpaper = true) {
+    if (useAppWallpaper) await syncFromAppWallpaper();
+    if (bg.mode === 'we' && bg.weId) {
+      const ok = await refreshWe();
+      if (ok) await ensureWeMedia();
+      else { bg.mode = 'theme'; bg.weUrl = ''; save(); }
+    }
     // 老格式（没有 v）的数据一律丢弃并把新默认写回去 —— 否则那条陈旧记录会一直躺在 localStorage 里
     try {
       const raw = JSON.parse(localStorage.getItem(BG_KEY) || 'null');
@@ -397,5 +541,5 @@ export const useVizBgStore = defineStore('vizbg', () => {
            save, drawOpts, fxOpts, setFx, setFxAny, resetFx, imageEl,
            wallReady, wallActive, wallName, setWall, setImagePath, clearWall, setWallActive, wallFileUrl,
            weName, setWe, refreshWe,
-           setMode, setColor, setBlur, setDim, ensureImage, pickImage, init };
+           setMode, setColor, setBlur, setDim, ensureImage, pickImage, init, syncFromAppWallpaper };
 });

@@ -12,7 +12,8 @@
 
 import { reactive } from 'vue';
 import { zhToHant } from './zhHant.js';
-import { I18N_JA } from './i18n_ja.js';
+let I18N_JA = {};
+let jaLoad = null;
 
 export const I18N_MAP = {
   '探测段长': "Probe segment length",
@@ -6932,9 +6933,18 @@ export const I18N_MAP = {
 };
 
 /* 语言状态（响应式：切语言后 t() 返回值变化，Vue 模板自动重渲染） */
-const langState = reactive({ lang: 'zh' }); // 'zh' | 'zh-Hant' | 'en' | 'ja'
+const langState = reactive({ lang: 'zh', rev: 0 }); // 'zh' | 'zh-Hant' | 'en' | 'ja'
 
-export function setLang(v) { langState.lang = normLang(v); }
+export function setLang(v) {
+  const lang = normLang(v);
+  langState.lang = lang;
+  if (lang === 'ja' && !Object.keys(I18N_JA).length && !jaLoad) {
+    jaLoad = import('./i18n_ja.js').then((m) => {
+      I18N_JA = m.I18N_JA || {};
+      langState.rev++;
+    }).catch(() => {}).finally(() => { jaLoad = null; });
+  }
+}
 export function getLang() { return langState.lang; }
 export function isEn() { return langState.lang === 'en'; }
 export function isHant() { return langState.lang === 'zh-Hant'; }
@@ -6959,6 +6969,7 @@ export function browserLang() {
 }
 
 export function t(str) {
+  void langState.rev;
   if (langState.lang === 'ja') return I18N_JA[str] ?? I18N_MAP[str] ?? str;
   if (langState.lang === 'en') return I18N_MAP[str] ?? str;
   if (langState.lang === 'zh-Hant') return zhToHant(str);

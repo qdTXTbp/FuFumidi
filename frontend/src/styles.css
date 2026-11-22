@@ -1402,20 +1402,22 @@ body[data-density="relaxed"] .card { border-radius: var(--r-lg); }
 
 /* ---------- 视图切换（App.vue Transition） ---------- */
 .view-enter-active, .view-leave-active {
-  transition: opacity var(--motion-slow) var(--ease-out), transform var(--motion-slow) var(--ease-out);
+  /* 路由切换：out-in 会叠加离场+入场；取中间档，既不一闪而过也不拖成两倍等待 */
+  transition: opacity var(--motion-base) var(--ease-out), transform var(--motion-base) var(--ease-out);
   will-change: opacity, transform;
   backface-visibility: hidden;
 }
-.view-enter-from { opacity: 0; transform: translateY(12px) scale(0.995); }
-.view-leave-to { opacity: 0; transform: translateY(-8px) scale(0.995); }
+.view-enter-from { opacity: 0; transform: translateY(6px) scale(0.998); }
+.view-leave-to { opacity: 0; transform: translateY(-4px) scale(0.998); }
 
 /* ---------- 分组页内子页签切换（ViewMusic / ViewViews / ViewTranscode / ViewResources） ---------- */
 .group-tab-enter-active, .group-tab-leave-active {
-  transition: opacity var(--motion-base) var(--ease-out), transform var(--motion-base) var(--ease-out);
+  /* 创作页五个重页面：页签本身要跟手，动效只保留最短反馈 */
+  transition: opacity var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out);
   will-change: opacity, transform;
 }
-.group-tab-enter-from { opacity: 0; transform: translateY(8px); }
-.group-tab-leave-to { opacity: 0; transform: translateY(-4px); }
+.group-tab-enter-from { opacity: 0; transform: translateY(3px); }
+.group-tab-leave-to { opacity: 0; transform: translateY(-2px); }
 
 /* ---------- 按钮 / 可点元素：按下回弹 ---------- */
 .btn:active, .et-btn:active, .icon-btn:active, .chip-btn:active, .tp-btn:active,
