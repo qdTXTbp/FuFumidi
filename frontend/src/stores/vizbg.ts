@@ -116,10 +116,14 @@ export const useVizBgStore = defineStore('vizbg', () => {
   /** 交给绘制函数的背景参数（含已解码的图片 / 已就绪的视频帧源） */
   function drawOpts() {
     return {
+      // ★ 背景设置必须完整透传：paintVizBg 需要 image / color / blur / dim，
+      //   只传 mode/video 会让图片壁纸退回主题渐变、模糊暗化全部丢失。
+      ...bg,
       // mode is normalized below: WE scenes are drawn by the iframe, canvas stays transparent
       // ★ 视频**逐帧都在变**：core/viz.js 的离屏背景位图缓存对它是失效的（那边按 mode 分流）
       mode: bg.mode === 'we' ? 'transparent' : bg.mode,
       video: (bg.mode === 'wallpaper' && videoReady()) ? wallVideo : null,
+      image,
     };
   }
   function imageEl() { return image; }
