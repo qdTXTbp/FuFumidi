@@ -25,7 +25,9 @@ const FILES = [
   'FuFumidi-Setup-' + VER + '.exe.blockmap',
   'FuFumidi.Install.exe',
   'FuFumidi-Setup-' + VER + '.exe',
-  'FuFumidi-' + VER + '-win-x64-unpacked.zip',
+  // ★ 不再上传 unpacked 全量 zip：单版 928MB，而 CNB 组织对象存储有配额（20GB）。
+  //   更新链路只用最新版的 latest.yml / metadata / update-manifest / Install / Setup，
+  //   绿色版 zip 只放 GitHub。2026-11-28 清理旧版资产时定的规则，别再加回来。
 ];
 
 // 只传部分文件名时只传这些（大资产走 cnb-upload.py，避免 curl PUT 被重置）
