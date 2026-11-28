@@ -35,12 +35,16 @@ export function indexSf2Presets(buf) {
 // 该音符最终使用的 (bank, prog)：文件选了库里不存在的库号 → 退回 0 号库。
 // FluidSynth 选不到音色时会沿用上一个音色（整条通道错音），退库比错音更接近
 // 手机端 BASSMIDI 的表现。
+// 同理，prog 本身在库里不存在时（音色包常常只收了一部分 GM 音色）也要退回 0 号钢琴：
+// 否则从那个音符起，整条通道会一直沿用上一个音色 —— 听感就是「卡在一个音色上很久」。
 export function resolveSf2Bank(presets, bank, prog) {
+  const p = Number.isFinite(prog) ? Math.max(0, Math.min(127, Math.round(prog))) : 0;
   const b = bank > 0 ? bank : 0;
-  if (!b) return { bank: 0, prog };
   const known = !!(presets && presets.size);
-  if (!known || !presets.has(b * 128 + prog)) return { bank: 0, prog };
-  return { bank: b, prog };
+  if (!known) return { bank: 0, prog: p };          // 清单没解析出来：不做猜测，保持原行为
+  if (b && presets.has(b * 128 + p)) return { bank: b, prog: p };
+  if (presets.has(p)) return { bank: 0, prog: p };
+  return { bank: 0, prog: 0 };
 }
 
 /* GM 音色库映射（program → 内置合成预设） */
@@ -766,6 +770,17 @@ export class Synth {
     if (ov != null) return resolveSf2Bank(this._sf2Presets, 0, ov);
     return resolveSf2Bank(this._sf2Presets, note.bank || 0, note.prog != null ? note.prog : 0);
   }
+  // 通道类型（旋律 / 鼓组）。`midiSetChannelType` 是**单向**的：设成鼓之后不会自己变回旋律，
+  // 而合成器实例是跨曲目复用的（换曲只 player.load，不重建引擎）。于是上一首在 ch N 上
+  // 打过鼓，下一首同一通道的旋律音符就会继续用鼓组音色发声 —— 听感同样是「卡在一个音色上」。
+  // 这里按音符语义双向同步，正常文件（鼓只在 ch9）不会产生额外调用。
+  _ensureChannelType(ch, isDrum) {
+    if (!this.sf2) return;
+    const want = !!isDrum;
+    if (!!this._sf2DrumCh[ch] === want) return;
+    try { this.sf2.midiSetChannelType(ch, want); } catch (e) {}
+    this._sf2DrumCh[ch] = want;
+  }
   // 音序器路径：CC0（库号）先于 programchange，二者同一 tick（音序器对同一时刻按写入顺序分发）
   _seqApplyProgram(ch, note, tick) {
     if (!this.sf2Seq) return;
@@ -773,6 +788,11 @@ export class Synth {
     if (this._sf2ChBank[ch] !== bank) {
       try { this.sf2Seq.sendEventAt({ type: 'controlchange', channel: ch, control: 0, value: bank }, tick, true); } catch (e) {}
       this._sf2ChBank[ch] = bank;
+      // ★ Bank Select 只改库号，**必须紧跟一次 Program Change 才会真正换预设**
+      //   （MIDI 规范：bank 在下一个 program change 生效）。若只切库、prog 数值没变，
+      //   下面的缓存判断会把 PC 吞掉 → 该通道继续用旧库里的音色，直到出现别的 prog，
+      //   听感就是「卡在一个音色上播放很久」。所以切库后强制让 PC 重发一次。
+      this._sf2ChProg[ch] = undefined;
     }
     if (this._sf2ChProg[ch] !== prog) {
       try { this.sf2Seq.sendEventAt({ type: 'programchange', channel: ch, preset: prog }, tick, true); } catch (e) {}
@@ -915,6 +935,9 @@ export class Synth {
     const a = this.activeNotes;
     if (a.length < this._trimThreshold) return;
     const now = this.ctx.currentTime;
+    // 丢弃之前先给超时条目补 note-off —— 否则一旦从这里删掉，就再也没有记录能提醒我们
+    // 「这条音其实没收到 note-off」，孤儿音会一直响到下一次 panic。
+    try { this.sweepStuckNotes(now); } catch (e) {}
     this.activeNotes = a.filter(x => x.endTime > now);
     // 阈值跟随实际存活量上浮，保证不会每来一个音符就清一次
     this._trimThreshold = Math.max(3000, Math.floor(this.activeNotes.length * 1.25));
@@ -944,8 +967,9 @@ export class Synth {
         if (time < now - (this._sf2LateTol || 0.04)) return;
         const tick = Math.max(this._seqTickFor(now), this._seqTickFor(onTime));
         if (note.isDrum) {
-          if (!this._sf2DrumCh[ch]) { try { this.sf2.midiSetChannelType(ch, true); } catch (e) {} this._sf2DrumCh[ch] = true; }
+          this._ensureChannelType(ch, true);
         } else {
+          this._ensureChannelType(ch, false);
           this._seqApplyProgram(ch, note, tick);
         }
         // 'note' 事件 = noteon + 时值到后自动 noteoff（fluid seqbind 内部调度）
@@ -965,7 +989,7 @@ export class Synth {
       };
       if (delayOn === 0) {
         // onTime 即当前时刻：立即触发（跳转/快速变速后追赶音符）
-        try { if (note.isDrum) this.sf2.midiSetChannelType(ch, true); else this._directApplyProgram(ch, note); this.sf2.midiNoteOn(ch, note.midi, note.vel); } catch (e) {}
+        try { this._ensureChannelType(ch, !!note.isDrum); if (!note.isDrum) this._directApplyProgram(ch, note); this.sf2.midiNoteOn(ch, note.midi, note.vel); } catch (e) {}
         const offTimer = setTimeout(sendOff, Math.max(0, (Math.max(endTime, onTime + 0.06) - onTime) * 1000));
         this.activeNotes.push({ midi: note.midi, trk: note.trk, vel: note.vel, start: onTime, endTime, timer: offTimer, sf2: true, ch });
       } else {
@@ -976,7 +1000,7 @@ export class Synth {
           // 切页时 bumpAhead 临时放宽）的音符跳过本次触发。
           const now = this.ctx.currentTime;
           if (onTime < now - (this._sf2LateTol || 0.04)) return;
-          try { if (note.isDrum) this.sf2.midiSetChannelType(ch, true); else this._directApplyProgram(ch, note); this.sf2.midiNoteOn(ch, note.midi, note.vel); } catch (e) {}
+          try { this._ensureChannelType(ch, !!note.isDrum); if (!note.isDrum) this._directApplyProgram(ch, note); this.sf2.midiNoteOn(ch, note.midi, note.vel); } catch (e) {}
           const offTimer = setTimeout(sendOff, Math.max(0, (Math.max(endTime, onTime + 0.06) - now) * 1000));
           this.activeNotes.push({ midi: note.midi, trk: note.trk, vel: note.vel, start: onTime, endTime, timer: offTimer, sf2: true, ch });
         }, delayOn);
@@ -1001,6 +1025,12 @@ export class Synth {
     if (this.sf2Ready && this.sf2) {
       try {
         this.sf2.midiProgramChange(0, prog);
+        // ★ 试听直接改的是 ch0 的通道音色，绕过了 _sf2ChProg/_sf2ChBank 这套
+        //   「已下发状态」缓存。不在这里作废缓存的话，下一次播放时若 ch0 的音符
+        //   prog 与缓存值相同就不会重发 Program Change，整条通道会一直用试听的
+        //   那个音色（实测表现为「播放时卡在一个音色上很久」）。
+        this._sf2ChProg[0] = undefined;
+        this._sf2ChBank[0] = undefined;
         this.sf2.midiNoteOn(0, midi, vel);
         const timer = setTimeout(() => { try { this.sf2 && this.sf2.midiNoteOff(0, midi); } catch (e) {} }, dur * 1000);
         this.activeNotes.push({ midi, trk: 0, start: t, endTime: t + dur, timer, sf2: true, ch: 0 });
@@ -1055,14 +1085,28 @@ export class Synth {
     const set = new Set(drop);
     this.live = this.live.filter(x => !set.has(x));
   }
-  // 全通道 panic（CC120 + CC123）。两条路径都发，因为两边的 note-off 都不在手里：
+  // 全通道 panic（踏板复位 + CC120 + CC123）。两条路径都发，因为两边的 note-off 都不在手里：
   //   音序器路径：note-off 住在音频线程的调度队列里，清队列时会连它一起清掉；
   //   直连回退路径：note-off 在主线程 setTimeout 里，可能已被 clearTimeout 掉。
   // 只补发「逐个音符的 note-off」不够 —— activeNotes 只记录了发过 note-on 的音，
   // 预排窗口里还没触发的音（可能已经进合成器）不在其中，panic 是唯一兜得住的。
+  //
+  // ★ 必须先复位踏板（CC64 延音 / CC65 滑音 / CC66 持续音）再发 CC123：
+  //   CC123(All Notes Off) 只是让音符进入 release，**踏板按下时 release 会被无限延长**
+  //   （FluidSynth 的 sustain 是通道级状态，不会因为 All Sound Off 自动清除）。
+  //   暂停发生在踏板期间、之后文件里又没有 CC64=0 时，下一批音符就全部挂着不消 ——
+  //   听感正是「某个音一直响不停」。踩踏板是钢琴曲的常态，这条必须显式清。
   _panicAllChannels() {
     const tick = this._seqTickFor(this.ctx.currentTime);
     for (let ch = 0; ch < 16; ch++) {
+      for (const cc of [64, 65, 66]) {
+        if (this.sf2Seq) {
+          try { this.sf2Seq.sendEventAt({ type: 'controlchange', channel: ch, control: cc, value: 0 }, tick, true); } catch (e) {}
+        }
+        if (this.sf2) {
+          try { this.sf2.midiControl(ch, cc, 0); } catch (e) {}
+        }
+      }
       if (this.sf2Seq) {
         try { this.sf2Seq.sendEventAt({ type: 'controlchange', channel: ch, control: 120, value: 0 }, tick, true); } catch (e) {}
         try { this.sf2Seq.sendEventAt({ type: 'controlchange', channel: ch, control: 123, value: 0 }, tick, true); } catch (e) {}
@@ -1072,6 +1116,50 @@ export class Synth {
         try { this.sf2.midiControl(ch, 123, 0); } catch (e) {}
       }
     }
+  }
+  // 音符超时兜底（治「某个音一直响不停」）。
+  //
+  // 音序器里的 note-off 是随 note 事件（带 duration）一起排进音频线程队列的。正常路径
+  // 不会丢，但队列被整体清理（allStop/换音色库）、时钟长时间停走、事件写入失败这几种
+  // 情况下，note-on 已经发声而 note-off 不在了 —— 这条音会一直响到下一次 panic。
+  //
+  // 这里按「已过结束时刻 1.5s，且同通道同音高没有更晚的音在响」判定为孤儿音，
+  // 直接补一发直连 note-off（不必经过音序器，能立刻关掉 voice）。
+  // 由播放器每 25ms 调一次（见 player._sched），成本是一次 O(活跃音符) 扫描。
+  sweepStuckNotes(now) {
+    if (!this.sf2Ready || !this.sf2 || !this._sf2SeqMode) return 0;
+    const a = this.activeNotes;
+    if (!a || !a.length) return 0;
+    const t = Number.isFinite(now) ? now : this.ctx.currentTime;
+    // 宽限 2.5s：正常的 note-off 由音频线程分发，音频设备抖动/时钟追赶都可能让它在
+    // 结束时刻之后几十毫秒才到，太紧会误判。正常结束的音符即使被补一发也无害
+    // （FluidSynth 对不存在的 voice 发 note-off 是 no-op），这里只是兜底。
+    const grace = 2.5;
+    // 先收集每个 (ch,key) 上最晚的结束时刻：同音重复时不能误关还在响的那条
+    const latest = new Map();
+    for (const x of a) {
+      if (!x.sf2 || x.ch == null) continue;
+      const k = (x.ch & 15) * 128 + (x.midi & 127);
+      const v = latest.get(k);
+      if (v == null || x.endTime > v) latest.set(k, x.endTime);
+    }
+    let fixed = 0;
+    for (let i = a.length - 1; i >= 0; i--) {
+      const x = a[i];
+      if (!x.sf2 || x.ch == null) continue;
+      if (!Number.isFinite(x.endTime) || !(x.endTime < t - grace)) continue;
+      const k = (x.ch & 15) * 128 + (x.midi & 127);
+      if ((latest.get(k) || 0) > t - grace) continue;
+      try { this.sf2.midiNoteOff(x.ch, x.midi); } catch (e) {}
+      if (x.timer) { try { clearTimeout(x.timer); } catch (e) {} }
+      a.splice(i, 1);
+      latest.delete(k);
+      fixed++;
+    }
+    // 正常结束的音符也会走到这里（补一发无害），所以默认只写 debug 级，
+    // 需要排查时在控制台开 Verbose 或临时改成 warn。
+    if (fixed) console.debug('[synth] 补发超时 note-off：' + fixed + ' 个');
+    return fixed;
   }
   allStop() {
     const t = this.ctx.currentTime;

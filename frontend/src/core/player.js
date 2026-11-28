@@ -217,6 +217,10 @@ export class Player {
         const list = sustainIntervals.get((n.ch || 0) & 15);
         if (!list) continue;
         for (const iv of list) {
+          // ★ 区间没有抬起（off 仍是 Infinity）= 文件缺陷，**不延长**。
+          //   旧实现会把音符延长到曲尾，等于踏板一响整首都挂着 —— 这才是「某个音一直
+          //   响不停」最直接的来源。真正踩到底的曲子由下面补的 CC64=0 收尾即可。
+          if (iv.off === Infinity) continue;
           if (n.start >= iv.on && n.end < iv.off) {
             n.end = Math.max(n.end, Math.min(iv.off, this.song.totalTicks || iv.off));
             break;
@@ -224,6 +228,18 @@ export class Player {
         }
       }
     }
+    // ★ 文件里「踏板按下但没有抬起」的收尾（大量 MIDI 有这种缺陷）：
+    //   FluidSynth 的 sustain 是通道级状态，CC64≥64 时所有 note-off 只把声部标记为
+    //   sustained、不释放；没有 CC64=0 就一直挂着，声部越积越多、声音永不消失。
+    //   这里对每个通道在曲尾补一条 CC64=0，让收尾一定落到「踏板抬起」而不是靠 panic 兜。
+    //   必须在上面的 sustainIntervals 算完之后补，否则识别不出「哪段没抬起」。
+    const lastSustain = new Map();
+    for (const c of ctl) if (c.kind === 'cc' && c.cc === 64) lastSustain.set(c.ch & 15, c.val);
+    let sustainPatched = false;
+    for (const [ch, val] of lastSustain) {
+      if (val >= 64) { ctl.push({ start: this.song.totalTicks || 0, kind: 'cc', ch, cc: 64, val: 0 }); sustainPatched = true; }
+    }
+    if (sustainPatched) ctl.sort((a, b) => a.start - b.start);
     this.ccursor = 0;
     this._rebuildGaps();
   }
@@ -372,6 +388,10 @@ export class Player {
   progress() { return this.song.totalSec ? this.currentSec() / this.song.totalSec : 0; }
   _sched() {
     if (!this.playing) return;
+    // 孤儿音兜底：音序器里的 note-off 万一没生效（队列被清 / 时钟停走），
+    // 这条音会一直响到下次 panic。每趟（25ms）扫一次「已过结束时刻仍活着的音符」，
+    // 补发直连 note-off。判定与实现见 synth.sweepStuckNotes。
+    if (this.syn && this.syn.sweepStuckNotes) { try { this.syn.sweepStuckNotes(); } catch (e) {} }
     // ★ 跳过空白片段：位置落在"没有音符的空档"里就直接跳到空档末尾（留 lead 余量）。
     //   放在调度最前面 —— 跳完游标已经重排，本趟不能再按旧游标往后排。
     if (this.skipSilence && this.gaps.length) {

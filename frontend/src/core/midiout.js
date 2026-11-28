@@ -31,8 +31,15 @@ export function midiOutOff(ch, key, audioTime, audioNow) {
   const delay = Math.max(0, (audioTime - (audioNow || 0)) * 1000);
   try { midiOut.send([0x80 | (ch & 15), key & 0x7f, 64], performance.now() + delay); } catch (e) {}
 }
-// 暂停/停止时立即关闭所有音符（CC123 All Notes Off）
+// 暂停/停止时立即关闭所有音符。
+// ★ 必须遍历全部 16 个通道：旧实现只发 ch0，多通道 MIDI（钢琴 ch0 / 弦乐 ch1…）
+//   在暂停后其余通道的音符不会收到 All Notes Off —— 外接音源上就是「某个音一直响不停」。
+//   同时复位踏板（CC64/65/66），否则音源内部的 sustain 会把后续音符继续挂住。
 export function midiAllOff() {
   if (!midiOut) return;
-  try { midiOut.send([0xb0, 123, 0]); } catch (e) {}
+  for (let ch = 0; ch < 16; ch++) {
+    for (const cc of [64, 65, 66, 123, 120]) {
+      try { midiOut.send([0xb0 | ch, cc, 0]); } catch (e) {}
+    }
+  }
 }

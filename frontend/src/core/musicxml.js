@@ -54,7 +54,12 @@ export function parseMusicXMLToSong(xmlText, fileName) {
       active.clear();
     }
     notes.sort((a, b) => a.start - b.start);
-    tracks.push({ name, ch: pi % 15, program: 0, notes, events: [], ccs: [] });
+    // ★ 不能写 pi % 15：第 10 个声部（pi=9）会正好拿到 ch 9 —— 那是 MIDI 保留的
+    //   鼓通道，播放侧按 `isDrum: ch === 9` 处理（而 `midiSetChannelType(ch, true)`
+    //   是单向的，通道一旦变鼓就不会自己恢复）。结果是第 10 个声部整轨用鼓组音色发声，
+    //   听感上就是「卡在一个音色上播放很久」。这里跳过 9，把 15 个旋律通道按序分给各声部。
+    const ch = (() => { const c = pi % 15; return c >= 9 ? c + 1 : c; })();
+    tracks.push({ name, ch, program: 0, notes, events: [], ccs: [] });
   });
   if (!tracks.length) throw new Error(t('MusicXML 没有找到声部'));
   tracks[0].events.push({ tick: 0, type: 'tempo', us: Math.round(60000000 / bpm) });

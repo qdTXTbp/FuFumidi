@@ -331,7 +331,16 @@ export function buildFullScore(song, opts) {
   }
   parts.forEach((p, i) => {
     xml += '<score-part id="P' + (i + 1) + '"><part-name>' + escXml(p.tr.name || ('Part ' + (i + 1))) + '</part-name>';
-    if (!o.noMidi) xml += '<midi-instrument id="P' + (i + 1) + '-I1"><midi-channel>' + ((i % 16) + 1) + '</midi-channel><midi-program>' + (p.tr.program != null ? p.tr.program + 1 : 1) + '</midi-program></midi-instrument>';
+    if (!o.noMidi) {
+      // ★ 通道号要与轨道真实的 ch 对齐，且绝不能落到 9（1-based 10）—— 那是 MIDI 的鼓通道。
+      //   旧写法 (i % 16) 让第 10 个声部正好被标成鼓：这份 MusicXML 再导入回来（或进别的
+      //   DAW）时，整轨会按鼓组音色播放，听感就是「卡在一个音色上」。
+      let ch0 = Number.isInteger(p.tr.ch) && p.tr.ch >= 0 && p.tr.ch <= 15 ? p.tr.ch : (() => {
+        const c = i % 15; return c >= 9 ? c + 1 : c;
+      })();
+      if (ch0 === 9) ch0 = 15;
+      xml += '<midi-instrument id="P' + (i + 1) + '-I1"><midi-channel>' + (ch0 + 1) + '</midi-channel><midi-program>' + (p.tr.program != null ? p.tr.program + 1 : 1) + '</midi-program></midi-instrument>';
+    }
     xml += '</score-part>\n';
   });
   if (parts.length > 1) xml += '<part-group type="stop" number="1"/>\n';

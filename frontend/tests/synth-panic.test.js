@@ -41,7 +41,7 @@ function makeSynth({ withSeq = true, withDirect = false } = {}) {
   return s;
 }
 
-test('allStop 清掉音序器队列后必须全通道 panic（CC120 + CC123）', () => {
+test('allStop 清掉音序器队列后必须全通道 panic（踏板复位 + CC120 + CC123）', () => {
   const s = makeSynth({ withSeq: true });
   s.allStop();
   assert.equal(s.sf2Seq.removed, 1, '必须先清掉未分发的调度事件');
@@ -51,7 +51,24 @@ test('allStop 清掉音序器队列后必须全通道 panic（CC120 + CC123）',
       assert.ok(ccs.some((x) => x.ev.control === cc && x.ev.channel === ch), `缺 CC${cc} ch${ch}`);
     }
   }
-  assert.equal(s.sf2Seq.sent.length, 32, '除 panic 外不该多发事件');
+  // ★ 踏板类状态必须一起复位：sustain 是通道级状态，不清就会让下一批音符全部挂着不消
+  for (const cc of [64, 65, 66]) {
+    for (let ch = 0; ch < 16; ch++) {
+      assert.ok(ccs.some((x) => x.ev.control === cc && x.ev.value === 0 && x.ev.channel === ch), `缺踏板复位 CC${cc} ch${ch}`);
+    }
+  }
+  assert.equal(s.sf2Seq.sent.length, 80, '16 通道 × (CC64/65/66 复位 + CC120 + CC123)');
+});
+
+test('踏板复位必须排在 CC123 之前（否则 release 仍会被延音挂住）', () => {
+  const s = makeSynth({ withSeq: true });
+  s.allStop();
+  const first = s.sf2Seq.sent.findIndex((x) => x.ev.control === 123 && x.ev.channel === 0);
+  const lastSustain = s.sf2Seq.sent.map((x, i) => ({ x, i }))
+    .filter((o) => o.x.ev.control === 64 && o.x.ev.channel === 0)
+    .map((o) => o.i)
+    .pop();
+  assert.ok(lastSustain != null && lastSustain < first, 'CC64=0 必须在 CC123 之前发出');
 });
 
 test('直连回退路径同样要 panic（它的 note-off 在主线程定时器里，可能已被清掉）', () => {
@@ -67,4 +84,48 @@ test('panic 排在清理之后，且用「现在」的 tick', () => {
   s.ctx.currentTime = 1.25;
   s.allStop();
   assert.equal(s.sf2Seq.sent[0].tick, 1250, 'tick 必须是当前时刻（锚点漂移不能把 panic 排到过去）');
+});
+
+// ---- 孤儿音（note-off 丢失）兜底 ----
+// 音序器里的 note-off 与 note 事件同批排队，队列被整体清掉 / 时钟停走时它会一起消失，
+// 而 note-on 已经发声 —— 这就是「某个音一直响不停」。sweepStuckNotes 负责补最后一刀。
+function makeSweepSynth() {
+  const s = Object.create(Synth.prototype);
+  s.ctx = { currentTime: 10 };
+  s.sf2Ready = true;
+  s._sf2SeqMode = true;
+  const offs = [];
+  s.sf2 = { midiNoteOff(ch, midi) { offs.push([ch, midi]); } };
+  s.activeNotes = [];
+  return { s, offs };
+}
+
+test('sweepStuckNotes 只补发真正超时、且同音没有后续的音', () => {
+  const { s, offs } = makeSweepSynth();
+  s.activeNotes = [
+    { ch: 0, midi: 60, sf2: true, endTime: 5 },      // 超时 5s，同 key 无后续 → 补
+    { ch: 0, midi: 64, sf2: true, endTime: 5 },      // 超时，但同 key 有更晚的音 → 不补
+    { ch: 0, midi: 64, sf2: true, endTime: 12 },     // 还在响 → 保留
+    { ch: 1, midi: 60, sf2: true, endTime: 8 },      // 只超时 2s（宽限 2.5s）→ 不动
+    { ch: 0, midi: 62, endTime: 1 },                 // 内置合成器的条目（无 sf2 标记）→ 不管
+  ];
+  const n = s.sweepStuckNotes(10);
+  assert.equal(n, 1);
+  assert.deepEqual(offs, [[0, 60]]);
+  assert.equal(s.activeNotes.length, 4, '补过 note-off 的条目要移出活跃表，其余保留');
+});
+
+test('sweepStuckNotes 对非有限 endTime 不误伤（交给 panic 兜底）', () => {
+  const { s, offs } = makeSweepSynth();
+  s.activeNotes = [{ ch: 2, midi: 61, sf2: true, endTime: NaN }];
+  assert.equal(s.sweepStuckNotes(10), 0);
+  assert.equal(offs.length, 0);
+});
+
+test('sweepStuckNotes 只在音序器路径生效（直连回退有 setTimeout 兜底）', () => {
+  const { s, offs } = makeSweepSynth();
+  s._sf2SeqMode = false;
+  s.activeNotes = [{ ch: 0, midi: 60, sf2: true, endTime: 1 }];
+  assert.equal(s.sweepStuckNotes(10), 0);
+  assert.equal(offs.length, 0);
 });

@@ -163,7 +163,9 @@ export async function renderSongWithSf2(song, opts = {}) {
             if (!drumCh.has(e.ch)) { syn.midiSetChannelType(e.ch, true); drumCh.add(e.ch); }
           } else {
             const { bank, prog } = resolveSf2Bank(syn.__presets, e.bank, e.prog);
-            if (chBank[e.ch] !== bank) { syn.midiControl(e.ch, 0, bank); chBank[e.ch] = bank; }
+            // 与实时播放同一规则：切库后必须重发一次 program change，否则 bank 不生效
+            // （CC0 只改库号，下一个 PC 才真正换预设；prog 数值没变时会被缓存判断吞掉）。
+            if (chBank[e.ch] !== bank) { syn.midiControl(e.ch, 0, bank); chBank[e.ch] = bank; chProg[e.ch] = undefined; }
             if (chProg[e.ch] !== prog) { syn.midiProgramChange(e.ch, prog); chProg[e.ch] = prog; }
           }
           syn.midiNoteOn(e.ch, e.key, e.vel);
